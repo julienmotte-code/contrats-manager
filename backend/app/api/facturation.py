@@ -32,7 +32,7 @@ def apercu_facturation(annee: int, famille: Optional[str] = None, db: Session = 
     for p in plans:
         contrat = p.contrat
         regle = get_regle_revision(contrat.famille_contrat or "COSOLUCE")
-        verif = verifier_indices_disponibles(db, contrat.famille_contrat or "COSOLUCE", annee) if annee > annee_courante - 1 else {"ok": True}
+        verif = verifier_indices_disponibles(db, contrat.famille_contrat or "COSOLUCE", annee) if annee > contrat.date_debut.year else {"ok": True}
 
         result.append({
             "plan_id": str(p.id),
@@ -107,8 +107,8 @@ async def calculer_factures(
         plan.montant_annuel_precedent = montant_precedent
         plan.montant_revise_ht = result["montant_revise"]
         plan.taux_revision = result["taux_revision"]
-        if result.get("indice_n1"):
-            plan.indice_calcul_id = result["indice_n1"].id
+        if result.get("indice_new"):
+            plan.indice_calcul_id = result["indice_new"].id
         plan.statut = "CALCULEE"
         db.commit()
 
