@@ -194,13 +194,17 @@ class KarliaService:
             elif tva >= 5: id_vat = "3"
             else: id_vat = "4"
             p = {
-                "description": ligne.get("description", ""),
                 "price_without_tax": ligne.get("unit_price", 0),
                 "quantity": ligne.get("quantity", 1),
                 "id_vat": id_vat,
             }
             if ligne.get("id_product"):
+                # Si id_product présent, Karlia affiche le nom de l'article du catalogue.
+                # Ne pas envoyer description pour éviter le doublon d'intitulé.
                 p["id_product"] = ligne["id_product"]
+            else:
+                # Sans id_product, on envoie la description en fallback
+                p["description"] = ligne.get("description", "")
             products_list.append(p)
 
         payload = {
