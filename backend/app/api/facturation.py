@@ -9,7 +9,7 @@ from app.services.revision_service import (
     calculer_revision, verifier_indices_disponibles, get_regle_revision, FAMILLES_CONTRAT
 )
 from datetime import date
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Optional, List
 import uuid
 
@@ -156,15 +156,45 @@ async def lancer_facturation(
 
         contrat = plan.contrat
         montant_ht = float(plan.montant_revise_ht or plan.montant_ht_prevu or contrat.montant_annuel_ht)
-        article_principal = next((a for a in contrat.articles if a.rang == 0), None)
+        # Construire une ligne par article avec prix révisé proportionnel au taux
+        taux_revision = Decimal(str(plan.taux_revision or "1.0"))
+        articles_contrat = sorted(contrat.articles, key=lambda a: a.rang)
 
-        lignes = [{
-            "id_product": article_principal.article_karlia_id if article_principal else None,
-            "description": article_principal.designation if article_principal else contrat.numero_contrat,
-            "unit_price": montant_ht,
-            "quantity": 1,
-            "vat_rate": float(article_principal.taux_tva) if article_principal else 20.0,
-        }]
+        if not articles_contrat:
+            # Fallback sécurité : aucun article, ligne unique avec montant total
+            lignes = [{
+                "id_product": None,
+                "description": contrat.numero_contrat,
+                "unit_price": montant_ht,
+                "quantity": 1,
+                "vat_rate": 20.0,
+            }]
+        else:
+            lignes = []
+            total_lignes = Decimal("0")
+            montant_ht_decimal = Decimal(str(montant_ht))
+            for article in articles_contrat:
+                prix_base = Decimal(str(article.prix_unitaire_ht or 0))
+                qte = Decimal(str(article.quantite or 1))
+                prix_revise = (prix_base * taux_revision).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+                total_lignes += prix_revise * qte
+                lignes.append({
+                    "id_product": article.article_karlia_id,
+                    "description": article.designation,
+                    "unit_price": float(prix_revise),
+                    "quantity": float(qte),
+                    "vat_rate": float(article.taux_tva),
+                })
+            # Ajustement d'arrondi sur la dernière ligne pour coller au total HT exact
+            ecart = montant_ht_decimal - total_lignes
+            if ecart != Decimal("0"):
+                last = lignes[-1]
+                last_qte = Decimal(str(last["quantity"]))
+                last["unit_price"] = float(
+                    (Decimal(str(last["unit_price"])) + ecart / last_qte).quantize(
+                        Decimal("0.01"), rounding=ROUND_HALF_UP
+                    )
+                )
 
         factures_a_emettre.append({
             "plan_id": plan_id,
