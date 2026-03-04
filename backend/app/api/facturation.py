@@ -99,6 +99,15 @@ async def calculer_factures(
             resultats.append({"plan_id": plan_id, "ok": True, "montant_revise": float(montant_revise), "message": "Première année — pas de révision"})
             continue
 
+        # ── GARDE PRÉ-CALCUL ──────────────────────────────────
+        from app.services.validation_service import valider_pre_calcul
+        garde = valider_pre_calcul(db, plan, nouveau_montant)
+        if not garde["ok"]:
+            messages_erreur = [a["message"] for a in garde["alertes"] if a["niveau"] == "ERREUR"]
+            resultats.append({"plan_id": plan_id, "ok": False, "message": " | ".join(messages_erreur), "alertes": garde["alertes"]})
+            continue
+        # ── FIN GARDE ─────────────────────────────────────────
+
         result = calculer_revision(db, famille, annee, montant_precedent, nouveau_montant)
         if not result["ok"]:
             resultats.append({"plan_id": plan_id, "ok": False, "message": result["message"]})
@@ -180,10 +189,20 @@ async def lancer_facturation(
             continue
         if r["succes"]:
             plan.statut = "EMISE"
-            plan.facture_karlia_id = r.get("karlia_doc_id")
+            plan.facture_karlia_id = str(r.get("karlia_doc_id")) if r.get("karlia_doc_id") else None
             plan.facture_karlia_ref = r.get("karlia_doc_ref")
-            # Mettre à jour montant_annuel_precedent pour l'année suivante
             plan.montant_annuel_precedent = plan.montant_revise_ht or plan.montant_ht_prevu
+            db.commit()
+            db.refresh(plan)
+            # ── GARDE POST-ÉMISSION ───────────────────────────
+            from app.services.validation_service import valider_post_emission
+            import logging as _logging
+            verif_post = valider_post_emission(plan, r)
+            if not verif_post["ok"]:
+                _log = _logging.getLogger(__name__)
+                for alerte in [a for a in verif_post["alertes"] if a["niveau"] == "ERREUR"]:
+                    _log.error(f"[POST-EMISSION] {plan.contrat.numero_contrat} an {plan.annee_facturation} — {alerte['code']}: {alerte['message']}")
+            # ── FIN GARDE ─────────────────────────────────────
             emises += 1
         else:
             plan.statut = "ERREUR"
