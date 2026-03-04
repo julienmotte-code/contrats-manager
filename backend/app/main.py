@@ -42,6 +42,19 @@ app.include_router(audit.router,        prefix="/api/audit",       tags=["Audit"
 
 async def synchro_karlia():
     """Synchronise clients et articles depuis Karlia."""
+    # Recharger la clé API depuis la base avant chaque synchro (utile au démarrage)
+    db_check = SessionLocal()
+    try:
+        param = db_check.query(Parametre).filter(Parametre.cle == "karlia_api_key").first()
+        if param and param.valeur:
+            karlia.api_key = param.valeur
+    finally:
+        db_check.close()
+
+    if not karlia.api_key:
+        print("[SYNCHRO] Clé API Karlia absente — synchronisation ignorée")
+        return
+
     print(f"[SYNCHRO] Démarrage synchro Karlia — {datetime.now().strftime('%d/%m/%Y %H:%M')}")
     db = SessionLocal()
     total_clients = 0
