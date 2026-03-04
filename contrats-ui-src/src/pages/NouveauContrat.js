@@ -145,10 +145,10 @@ export default function NouveauContrat() {
           {nbAnnees && <div className="bg-blue-50 text-blue-800 px-4 py-2 rounded-lg text-sm font-medium">➜ Durée : {nbAnnees} an(s)</div>}
         </div>
         <div className="card space-y-4">
-          <h2 className="font-semibold text-gray-900 text-lg border-b pb-2">④ Montant et indice</h2>
+          <h2 className="font-semibold text-gray-900 text-lg border-b pb-2">④ Montant</h2>
           <div className="grid grid-cols-2 gap-4">
             <div><label className="label">Montant annuel HT *</label><div className="relative"><input className="input pr-8" type="number" step="0.01" min="0" required value={form.montant_annuel_ht} onChange={e => setForm(f => ({ ...f, montant_annuel_ht: e.target.value }))} /><span className="absolute right-3 top-2 text-gray-400 text-sm">€</span></div></div>
-            <div><label className="label">Indice Syntec de référence</label><select className="input" value={form.indice_reference_id} onChange={e => setForm(f => ({ ...f, indice_reference_id: e.target.value }))}><option value="">Sélectionner</option>{indices.map(i => <option key={i.id} value={i.id}>{i.date_publication} — {i.valeur}</option>)}</select></div>
+            
           </div>
           {prorata && prorata.prorate && (
             <div className="bg-orange-50 border border-orange-200 rounded-lg p-4 space-y-3">
