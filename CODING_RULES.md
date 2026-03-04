@@ -119,11 +119,24 @@ print('found:', old in c)
 
 ## 8. REBUILD FRONTEND
 
+### ⚠️ Double localisation des sources React — CRITIQUE
+Les sources React existent à DEUX endroits distincts :
+- `~/contrats-ui/src/` → utilisé pour le build (npm run build)
+- `~/contrats/contrats-ui-src/src/` → versionné dans git
+
+**Toute modification frontend doit être appliquée dans les DEUX dossiers.**
+Le git push depuis `~/contrats/` ne voit que `contrats-ui-src/` — si on ne modifie que `contrats-ui/`, le changement est déployé mais pas versionné.
+
 ### Séquence complète obligatoire
 ```bash
+# 1. Modifier le fichier dans ~/contrats-ui/src/pages/MaPage.js
+# 2. Appliquer la même modification dans ~/contrats/contrats-ui-src/src/pages/MaPage.js
+# 3. Build et déploiement
 cd ~/contrats-ui && npm run build 2>&1 | tail -5
 cp -r ~/contrats-ui/build ~/contrats/contrats-ui/
 cd ~/contrats && docker compose up -d --build frontend 2>&1 | tail -5
+# 4. Git push (depuis ~/contrats uniquement — c'est le seul repo git)
+cd ~/contrats && git add . && git commit -m "message" && git push
 ```
 
 ### Accès
