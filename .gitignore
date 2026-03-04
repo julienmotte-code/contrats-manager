@@ -9,3 +9,5 @@ contrats-ui/node_modules/
 contrats-ui/build/
 *.log
 .pytest_cache/
+contrats-ui-src/node_modules/
+contrats-ui-src/build/
