@@ -79,3 +79,10 @@ Points critiques :
 4. Routes : 3 étapes (fichier + import App.js + Route App.js)
 5. FK base : délier avant suppression
 6. Patches : toujours vérifier `found: True` avant d'appliquer
+
+## Historique corrections
+### Mars 2026 — Correction calcul révision indices Syntec
+- **Bug** : pour facturer l'année N, le code utilisait indice(N-1)/indice(N) au lieu de indice(N-2)/indice(N-1)
+- **Exemple** : pour 2026, on appliquait Août2025/Août2026 → corrigé en Août2024/Août2025
+- **Fichiers modifiés** : `backend/app/services/revision_service.py`, `backend/app/api/facturation.py`
+- **Tag git avant correction** : `v1-stable`

@@ -100,7 +100,8 @@ Docker Compose :
 | Assistance Téléphonique | ASSISTANCE_TEL | Automatique | Syntec Août N/N+1 |
 | Kiwi Backup | KIWI_BACKUP | Aucune | Prix fixe |
 
-**Formule de révision :** `Prix N+1 = Prix N × (Indice N+1 / Indice N)`
+**Formule de révision :** `Prix N = Prix N-1 × (Indice M de N-1 / Indice M de N-2)`
+Exemple 2026 (Syntec Août) : `Prix 2026 = Prix 2025 × (Août 2025 / Août 2024)`
 
 ## Rôles et droits utilisateurs
 | Fonctionnalité | ADMIN | GESTIONNAIRE | CONSULTANT |
