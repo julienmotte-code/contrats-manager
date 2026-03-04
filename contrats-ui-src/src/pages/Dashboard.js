@@ -82,16 +82,7 @@ export default function Dashboard() {
         <KPI label="À renouveler ce mois" value={stats.renouveler} icon="⚠️" color="bg-orange-50" />
       </div>
 
-      {indice && (
-        <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 flex items-center justify-between">
-          <div>
-            <span className="text-blue-800 font-medium">📈 Indice Syntec courant : </span>
-            <span className="text-blue-900 font-bold text-lg">{indice.valeur}</span>
-            <span className="text-blue-600 text-sm ml-2">(publié le {indice.date_publication ? format(new Date(indice.date_publication + "T12:00:00"), 'd MMMM yyyy', { locale: fr }) : ""})</span>
-          </div>
-          <Link to="/indices" className="text-blue-600 hover:text-blue-800 text-sm font-medium">Gérer les indices →</Link>
-        </div>
-      )}
+
 
       <div className="grid grid-cols-2 gap-6">
         <div className="card">
