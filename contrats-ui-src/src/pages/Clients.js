@@ -57,7 +57,7 @@ function FicheClient({ karlia_id, onClose }) {
       .finally(() => setLoading(false));
   }, [karlia_id]);
 
-  const handleContratClick = (id) => { onClose(); navigate(`/contrats/${id}`); };
+  const handleContratClick = (id) => { window.open(`/contrats/${id}`, '_blank'); };
 
   if (loading) return (
     <div className="fixed inset-0 bg-black bg-opacity-40 z-50 flex items-center justify-center">
