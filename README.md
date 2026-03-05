@@ -50,10 +50,13 @@ Docker Compose :
 │       │   ├── produits.py         # Cache articles Karlia
 │       │   ├── parametres.py       # Clé API + config
 │       │   └── documents.py        # Documents générés
+│       ├── scripts/
+│       │   └── gen_modeles.py      # Génère les modèles Word sur la VM
 │       └── services/
 │           ├── karlia_service.py   # Intégration API Karlia
 │           ├── contrat_service.py  # Logique métier contrats
-│           └── revision_service.py # Calcul révision Syntec
+│           ├── revision_service.py # Calcul révision Syntec
+│           └── document_service.py  # Génération contrats Word (publipostage)
 ├── contrats-ui-src/                # Sources React
 │   └── src/
 │       ├── App.js                  # Routes principales
@@ -72,8 +75,13 @@ Docker Compose :
 │       │   └── Layout.js           # Sidebar + navigation (droits)
 │       ├── context/
 │       │   └── AuthContext.js      # Auth JWT + droits utilisateur
+│       ├── scripts/
+│       │   └── gen_modeles.py      # Génère les modèles Word sur la VM
 │       └── services/
 │           └── api.js              # Axios + appels API
+├── storage/
+│   ├── modeles/                    # Modèles Word .docx par famille
+│   └── documents_generes/          # Contrats Word générés (non versionné)
 ├── CODING_RULES.md                 # ⚠️ Lire avant toute modification
 └── PROJECT_CONTEXT.md              # Résumé technique rapide
 ```
@@ -89,6 +97,8 @@ Docker Compose :
 | `client_cache` | Cache clients synchronisé depuis Karlia |
 | `article_cache` | Cache articles/produits synchronisé depuis Karlia |
 | `parametres` | Configuration (clé API Karlia, etc.) |
+| `modeles_documents` | Modèles Word par famille (actif/inactif) |
+| `documents_generes` | Historique des contrats Word générés |
 
 ## Familles de contrats et révision annuelle
 | Famille | Code | Révision | Indice |
@@ -165,7 +175,7 @@ Voir `CODING_RULES.md` pour le détail complet.
 5. FK base : délier toutes les références avant suppression
 6. Patches Python : vérifier `found: True` avant d'appliquer
 
-## État du projet (Mars 2026)
+## État du projet (Mars 2026) — v1.3.1
 ✅ Authentification JWT + gestion utilisateurs avec droits
 ✅ Synchronisation Karlia (clients + articles)
 ✅ CRUD contrats pluriannuels + avenants + prorata
@@ -174,9 +184,18 @@ Voir `CODING_RULES.md` pour le détail complet.
 ✅ Émission factures dans Karlia (statut Envoyée)
 ✅ Gestion indices Syntec Août/Octobre
 ✅ Interface multi-rôles avec menus dynamiques
+✅ Génération contrats Word par publipostage (champs «NomChamp»)
+✅ Interface upload/activation modèles Word dans Paramètres
+✅ Historique documents générés par contrat
+
+## Notes déploiement
+- Les fichiers `storage/documents_generes/` ne devraient pas être versionnés (à ajouter au `.gitignore`)
+- Les modèles `storage/modeles/*.docx` sont versionnés comme référence — régénérables via `backend/scripts/gen_modeles.py`
+- Clé API Karlia active : table `parametres`, clé `karlia_api_key` (jamais dans `.env` en production)
 
 ## Prochaines évolutions prévues
 - [ ] Tests unitaires backend
+- [ ] Compléter les modèles Word manquants (selon documents SGI originaux)
 - [ ] Export PDF des contrats
 - [ ] Tableau de bord avec graphiques
 - [ ] Notifications renouvellements par email
