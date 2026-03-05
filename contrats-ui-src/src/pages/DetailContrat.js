@@ -174,7 +174,7 @@ export default function DetailContrat() {
                   <td className="px-3 py-2 font-medium">{p.numero_facture}</td>
                   <td className="px-3 py-2">{p.annee_facturation}</td>
                   <td className="px-3 py-2">{p.type_facture === 'PRORATE' ? <span className="badge-orange">Prorata</span> : <span className="badge-blue">Annuelle</span>}</td>
-                  <td className="px-3 py-2">{p.date_echeance ? format(new Date(p.date_echeance + 'T12:00:00'), 'dd/MM/yyyy') : '-'}</td>
+                  <td className="px-3 py-2">{p.date_echeance ? p.date_echeance ? format(new Date(p.date_echeance + 'T12:00:00'), 'dd/MM/yyyy') : '-' : '-'}</td>
                   <td className="px-3 py-2 text-right font-medium">{(p.montant_ht_facture || p.montant_ht_prevu)?.toLocaleString('fr-FR', { minimumFractionDigits: 2 })} €</td>
                   <td className="px-3 py-2 text-center">{p.statut === 'EMISE' ? <span className="badge-green">Émise</span> : p.statut === 'ERREUR' ? <span className="badge-red">Erreur</span> : <span className="badge-gray">Planifiée</span>}</td>
                   <td className="px-3 py-2 text-xs text-gray-500">{p.facture_karlia_ref || '-'}</td>
