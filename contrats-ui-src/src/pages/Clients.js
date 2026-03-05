@@ -77,7 +77,7 @@ function FicheClient({ karlia_id, onClose }) {
     </div>
   );
 
-  const { client, contrats_actifs, contrats_termines, stats } = fiche;
+  const { client, contrats_actifs, contrats_termines, factures, stats } = fiche;
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-40 z-50 flex items-start justify-center overflow-y-auto py-8 px-4" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
@@ -153,7 +153,7 @@ function FicheClient({ karlia_id, onClose }) {
 
         <div>
           <div className="border-b flex">
-            {[['actifs', 'Contrats actifs', stats.nb_contrats_actifs], ['termines', 'Historique', stats.nb_contrats_termines]].map(([id, label, count]) => (
+            {[['actifs', 'Contrats actifs', stats.nb_contrats_actifs], ['termines', 'Historique', stats.nb_contrats_termines], ['factures', 'Factures', stats.nb_factures]].map(([id, label, count]) => (
               <button key={id} className={`px-6 py-3 text-sm font-medium border-b-2 transition-colors ${onglet === id ? 'border-blue-600 text-blue-700' : 'border-transparent text-gray-500 hover:text-gray-700'}`} onClick={() => setOnglet(id)}>
                 {label} <span className={`ml-2 px-1.5 py-0.5 rounded-full text-xs ${onglet === id ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-500'}`}>{count}</span>
               </button>
@@ -161,6 +161,33 @@ function FicheClient({ karlia_id, onClose }) {
           </div>
           <div className="overflow-x-auto">
             {(() => {
+              if (onglet === 'factures') {
+                if (!factures || factures.length === 0) return <p className="text-center text-gray-400 py-10 text-sm italic">Aucune facture émise pour ce client</p>;
+                return (
+                  <table className="w-full text-left">
+                    <thead><tr className="border-b bg-gray-50">
+                      {['N° contrat','Année','Échéance','Réf. Karlia','Montant HT'].map(h => (
+                        <th key={h} className={`px-4 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wide${h === 'Montant HT' ? ' text-right' : ''}`}>{h}</th>
+                      ))}
+                    </tr></thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {factures.map(f => (
+                        <tr key={f.id} className="hover:bg-gray-50">
+                          <td className="px-4 py-3 text-sm font-mono text-blue-700">{f.numero_contrat}</td>
+                          <td className="px-4 py-3 text-sm text-gray-700">{f.annee_facturation}</td>
+                          <td className="px-4 py-3 text-sm text-gray-500">{formatDate(f.date_echeance)}</td>
+                          <td className="px-4 py-3 text-sm font-mono text-gray-700">{f.reference_karlia || <span className="text-gray-300 italic font-sans">—</span>}</td>
+                          <td className="px-4 py-3 text-sm text-right font-medium text-gray-800">{formatMontant(f.montant_ht)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    <tfoot><tr className="border-t-2 border-gray-200 bg-gray-50">
+                      <td colSpan={4} className="px-4 py-3 text-sm font-semibold text-gray-600">Total facturé</td>
+                      <td className="px-4 py-3 text-sm font-bold text-blue-700 text-right">{formatMontant(stats.montant_factures_total)}</td>
+                    </tr></tfoot>
+                  </table>
+                );
+              }
               const liste = onglet === 'actifs' ? contrats_actifs : contrats_termines;
               if (liste.length === 0) return <p className="text-center text-gray-400 py-10 text-sm italic">Aucun contrat dans cette catégorie</p>;
               return (

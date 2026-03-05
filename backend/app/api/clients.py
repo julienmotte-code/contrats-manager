@@ -270,14 +270,42 @@ def fiche_client(
     contrats_actifs        = [contrat_to_dict(c) for c in tous_contrats if c.statut not in statuts_termines]
     contrats_termines_list = [contrat_to_dict(c) for c in tous_contrats if c.statut in statuts_termines]
 
+    from app.models.models import PlanFacturation
+    ids_contrats = [c.id for c in tous_contrats]
+    factures = []
+    if ids_contrats:
+        plans = (
+            db.query(PlanFacturation)
+            .filter(
+                PlanFacturation.contrat_id.in_(ids_contrats),
+                PlanFacturation.statut == "EMISE",
+            )
+            .order_by(PlanFacturation.date_echeance.desc())
+            .all()
+        )
+        map_contrats = {c.id: c.numero_contrat for c in tous_contrats}
+        for p in plans:
+            factures.append({
+                "id": str(p.id),
+                "numero_contrat": map_contrats.get(p.contrat_id, ""),
+                "annee_facturation": p.annee_facturation,
+                "date_echeance": p.date_echeance.isoformat() if p.date_echeance else None,
+                "montant_ht": float(p.montant_ht_facture) if p.montant_ht_facture else (float(p.montant_revise_ht) if p.montant_revise_ht else float(p.montant_ht_prevu) if p.montant_ht_prevu else 0),
+                "reference_karlia": p.facture_karlia_ref or "",
+                "statut": p.statut,
+            })
+
     return {
         "client": _client_to_dict(client),
         "contrats_actifs": contrats_actifs,
         "contrats_termines": contrats_termines_list,
+        "factures": factures,
         "stats": {
             "nb_contrats_actifs": len(contrats_actifs),
             "nb_contrats_termines": len(contrats_termines_list),
             "montant_annuel_total": sum(c["montant_annuel_ht"] for c in contrats_actifs),
+            "nb_factures": len(factures),
+            "montant_factures_total": sum(f["montant_ht"] for f in factures),
         },
     }
 
