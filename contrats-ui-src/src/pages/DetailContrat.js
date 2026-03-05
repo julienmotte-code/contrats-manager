@@ -201,7 +201,7 @@ export default function DetailContrat() {
                 <div>
                   <p className="text-sm font-medium text-gray-700">{doc.nom_fichier}</p>
                   <p className="text-xs text-gray-400">
-                    {doc.generated_at ? format(new Date(doc.generated_at + 'T12:00:00'), 'dd/MM/yyyy') : '—'}
+                    {doc.generated_at ? doc.generated_at ? format(new Date(doc.generated_at), 'dd/MM/yyyy') : '—' : '—'}
                     {doc.generated_by ? ` · par ${doc.generated_by}` : ''}
                   </p>
                 </div>
