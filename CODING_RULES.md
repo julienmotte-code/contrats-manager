@@ -161,3 +161,33 @@ cd ~/contrats && git add . && git commit -m "message" && git push
 - [ ] Pas de page blanche (F12 Console)
 - [ ] Les menus s'affichent correctement
 - [ ] L'endpoint modifié répond via curl http://192.168.1.186/api/...
+
+---
+
+## 11. CLÉ API KARLIA — SOURCE UNIQUE DE VÉRITÉ
+
+### Règle absolue
+La clé API Karlia **active** est toujours celle stockée en base, table `parametres`, clé `karlia_api_key`.
+Elle est chargée au démarrage du backend via l'événement `startup` dans `main.py`.
+L'écran Paramètres du module permet de la modifier sans redémarrage.
+
+### `.env` — rôle limité
+- `KARLIA_API_KEY` dans `.env` doit rester **vide** en production
+- Elle ne sert que de fallback si la base est vide au premier démarrage
+- Ne jamais y mettre une clé de production ou de test
+
+### Tests curl depuis la VM
+Ne jamais utiliser `$(grep KARLIA_API_KEY ~/contrats/.env)` pour les tests.
+Toujours récupérer la clé active depuis la base :
+```bash
+KARLIA_KEY=$(docker compose exec backend python3 -c "
+from app.core.database import SessionLocal
+from app.models.models import Parametre
+db = SessionLocal()
+p = db.query(Parametre).filter(Parametre.cle == 'karlia_api_key').first()
+print(p.valeur if p and p.valeur else '')
+")
+```
+
+### Ne jamais hardcoder l'URL Karlia
+`KARLIA_API_URL` est dans `config.py` avec sa valeur par défaut — ne pas la dupliquer ailleurs.
