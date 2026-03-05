@@ -105,15 +105,15 @@ export default function Parametres() {
 
   const activerModele = async (id) => {
     try {
-      await api.patch(\`/api/documents/modeles/${id}/activer\`);
+      await api.patch('/api/documents/modeles/' + id + '/activer');
       toast.success('Modèle activé'); chargerModeles();
     } catch (e) { toast.error('Erreur'); }
   };
 
   const supprimerModele = async (id, nom) => {
-    if (!window.confirm(\`Supprimer le modèle "${nom}" ?\`)) return;
+    if (!window.confirm('Supprimer le modèle ' + nom + ' ?')) return;
     try {
-      await api.delete(\`/api/documents/modeles/${id}\`);
+      await api.delete('/api/documents/modeles/' + id);
       toast.success('Modèle supprimé'); chargerModeles();
     } catch (e) { toast.error('Erreur'); }
   };
