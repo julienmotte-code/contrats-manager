@@ -2,6 +2,8 @@ services:
   db:
     image: postgres:16
     restart: unless-stopped
+    volumes:
+      - ./storage:/app/storage
     environment:
       POSTGRES_DB: contrats
       POSTGRES_USER: contrats
@@ -23,6 +25,10 @@ services:
       db:
         condition: service_healthy
     restart: unless-stopped
+    volumes:
+      - ./storage:/app/storage
+    volumes:
+      - ./storage:/app/storage
 
   frontend:
     build:
@@ -33,6 +39,8 @@ services:
     depends_on:
       - backend
     restart: unless-stopped
+    volumes:
+      - ./storage:/app/storage
 
 volumes:
   postgres_data:
