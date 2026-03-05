@@ -145,7 +145,7 @@ export default function Parametres() {
           </button>
         </div>
         {testResult && (
-          <div className={\`rounded-lg px-4 py-3 text-sm \${testResult.succes ? 'bg-green-50 border border-green-200 text-green-800' : 'bg-red-50 border border-red-200 text-red-800'}\`}>
+          <div className={'rounded-lg px-4 py-3 text-sm ' + (testResult.succes ? 'bg-green-50 border border-green-200 text-green-800' : 'bg-red-50 border border-red-200 text-red-800')}>
             {testResult.succes ? '✅' : '❌'} {typeof testResult.message === 'object' ? JSON.stringify(testResult.message) : testResult.message}
           </div>
         )}
@@ -209,12 +209,12 @@ export default function Parametres() {
                 <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">{type.label}</p>
                 <div className="space-y-2">
                   {type.modeles.map(m => (
-                    <div key={m.id} className={\`flex items-center justify-between p-3 rounded-lg border \${m.actif ? 'bg-green-50 border-green-200' : 'bg-gray-50 border-gray-100'}\`}>
+                    <div key={m.id} className={'flex items-center justify-between p-3 rounded-lg border ' + (m.actif ? 'bg-green-50 border-green-200' : 'bg-gray-50 border-gray-100')}>
                       <div>
                         <p className="text-sm font-medium text-gray-800">{m.nom} <span className="text-xs text-gray-400">v{m.version}</span></p>
                         <p className="text-xs text-gray-400">
                           {m.actif ? '✅ Actif' : '⬜ Inactif'} · uploadé par {m.uploaded_by}
-                          {m.uploaded_at ? \` le \${new Date(m.uploaded_at).toLocaleDateString('fr-FR')}\` : ''}
+                          {m.uploaded_at ? ' le ' + new Date(m.uploaded_at).toLocaleDateString('fr-FR') : ''}
                         </p>
                       </div>
                       <div className="flex gap-2">
