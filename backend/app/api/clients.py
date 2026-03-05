@@ -231,6 +231,57 @@ async def creer_client(
     }
 
 
+@router.get("/{karlia_id}/fiche")
+def fiche_client(
+    karlia_id: str,
+    db: Session = Depends(get_db),
+):
+    """
+    Fiche complete d'un client : coordonnees + contrats actifs + historique termines.
+    """
+    from app.models.models import Contrat
+
+    client = db.query(ClientCache).filter(ClientCache.karlia_id == karlia_id).first()
+    if not client:
+        raise HTTPException(status_code=404, detail="Client introuvable dans le cache local")
+
+    tous_contrats = (
+        db.query(Contrat)
+        .filter(Contrat.client_karlia_id == karlia_id)
+        .order_by(Contrat.date_debut.desc())
+        .all()
+    )
+
+    statuts_termines = {"TERMINE", "RESILIE", "EXPIRE"}
+
+    def contrat_to_dict(c):
+        return {
+            "id": str(c.id),
+            "numero_contrat": c.numero_contrat,
+            "famille_contrat": c.famille_contrat,
+            "statut": c.statut,
+            "date_debut": c.date_debut.isoformat() if c.date_debut else None,
+            "date_fin": c.date_fin.isoformat() if c.date_fin else None,
+            "nombre_annees": c.nombre_annees,
+            "montant_annuel_ht": float(c.montant_annuel_ht) if c.montant_annuel_ht else 0,
+            "notes_internes": c.notes_internes,
+        }
+
+    contrats_actifs        = [contrat_to_dict(c) for c in tous_contrats if c.statut not in statuts_termines]
+    contrats_termines_list = [contrat_to_dict(c) for c in tous_contrats if c.statut in statuts_termines]
+
+    return {
+        "client": _client_to_dict(client),
+        "contrats_actifs": contrats_actifs,
+        "contrats_termines": contrats_termines_list,
+        "stats": {
+            "nb_contrats_actifs": len(contrats_actifs),
+            "nb_contrats_termines": len(contrats_termines_list),
+            "montant_annuel_total": sum(c["montant_annuel_ht"] for c in contrats_actifs),
+        },
+    }
+
+
 @router.get("/{karlia_id}")
 async def obtenir_client(karlia_id: str, db: Session = Depends(get_db)):
     """Retourne le détail d'un client (cache local en priorité)."""

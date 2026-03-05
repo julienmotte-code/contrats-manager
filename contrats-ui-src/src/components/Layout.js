@@ -4,6 +4,7 @@ import { useAuth } from '../context/AuthContext';
 const MENU_COMPLET = [
   { path: '/', label: 'Tableau de bord', icon: '🏠', droit: null },
   { path: '/contrats', label: 'Contrats', icon: '📄', droit: null },
+  { path: '/clients', label: 'Clients', icon: '🏢', droit: null },
   { path: '/contrats/nouveau', label: 'Nouveau contrat', icon: '➕', droit: 'contrats_ecriture' },
   { path: '/renouvellements', label: 'Renouvellements', icon: '🔄', droit: null },
   { path: '/facturation', label: 'Facturation', icon: '💶', droit: 'facturation' },

@@ -13,6 +13,7 @@ import Facturation from './pages/Facturation';
 import Renouvellements from './pages/Renouvellements';
 import Parametres from './pages/Parametres';
 import Utilisateurs from './pages/Utilisateurs';
+import Clients from './pages/Clients';
 import ModifierContrat from './pages/ModifierContrat';
 
 function PrivateRoute({ children }) {
@@ -39,7 +40,8 @@ function AppRoutes() {
       <Route path="/renouvellements" element={<PrivateRoute><Renouvellements /></PrivateRoute>} />
       <Route path="/facturation" element={<PrivateRoute><Facturation /></PrivateRoute>} />
       <Route path="/indices" element={<PrivateRoute><Indices /></PrivateRoute>} />
-      <Route path="/parametres" element={<PrivateRoute><Parametres /></PrivateRoute>} />
+      <Route path="/clients" element={<PrivateRoute><Clients /></PrivateRoute>} />
+              <Route path="/parametres" element={<PrivateRoute><Parametres /></PrivateRoute>} />
       <Route path="/utilisateurs" element={<PrivateRoute><Utilisateurs /></PrivateRoute>} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
