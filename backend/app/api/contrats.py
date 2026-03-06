@@ -450,11 +450,16 @@ def renouveler_contrat(
         ).all()
 
         # 3. Créer le nouveau contrat (copie avec nouvelles dates)
-        nouvelle_date_debut = action.nouvelle_date_debut or date(contrat.date_fin.year + 1, 1, 1)
-        nouvelle_date_fin = action.nouvelle_date_fin or date(
-            nouvelle_date_debut.year + contrat.nombre_annees - 1, 12, 31
-        )
-        nouveau_numero = action.nouveau_numero or f"{contrat.numero_contrat}-R"
+        if not action.nouveau_numero:
+            raise HTTPException(400, "Le numero du nouveau contrat est obligatoire")
+        nouveau_numero = action.nouveau_numero
+        from datetime import timedelta
+        from dateutil.relativedelta import relativedelta as rdelta
+        nouvelle_date_debut = action.nouvelle_date_debut or (contrat.date_fin + timedelta(days=1))
+        if action.nouvelle_date_fin:
+            nouvelle_date_fin = action.nouvelle_date_fin
+        else:
+            nouvelle_date_fin = nouvelle_date_debut + rdelta(years=contrat.nombre_annees) - timedelta(days=1)
 
         prorata = calculer_prorata(nouvelle_date_debut, contrat.montant_annuel_ht)
         nb_annees = calculer_nombre_annees(nouvelle_date_debut, nouvelle_date_fin)

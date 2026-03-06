@@ -59,6 +59,11 @@ export default function DetailContrat() {
   };
 
   const renouveler = async () => {
+    if (typeRenouvellement === 'NOUVEAU_CONTRAT') {
+      setShowRenouveler(false);
+      navigate(`/contrats/tunnel?mode=renouvellement&contrat_id=${id}`);
+      return;
+    }
     setActionLoading(true);
     try {
       const r = await contratsAPI.renouveler(id, { type_renouvellement: typeRenouvellement });

@@ -7,6 +7,7 @@ import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import Contrats from './pages/Contrats';
 import NouveauContrat from './pages/NouveauContrat';
+import TunnelContrat from './pages/TunnelContrat';
 import DetailContrat from './pages/DetailContrat';
 import Indices from './pages/Indices';
 import Facturation from './pages/Facturation';
@@ -35,6 +36,7 @@ function AppRoutes() {
       <Route path="/" element={<PrivateRoute><Dashboard /></PrivateRoute>} />
       <Route path="/contrats" element={<PrivateRoute><Contrats /></PrivateRoute>} />
       <Route path="/contrats/nouveau" element={<PrivateRoute><NouveauContrat /></PrivateRoute>} />
+      <Route path="/contrats/tunnel" element={<PrivateRoute><TunnelContrat /></PrivateRoute>} />
       <Route path="/contrats/:id" element={<PrivateRoute><DetailContrat /></PrivateRoute>} />
       <Route path="/contrats/:id/modifier" element={<PrivateRoute><ModifierContrat /></PrivateRoute>} />
       <Route path="/renouvellements" element={<PrivateRoute><Renouvellements /></PrivateRoute>} />
