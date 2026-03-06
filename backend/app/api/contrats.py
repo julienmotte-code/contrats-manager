@@ -111,6 +111,7 @@ def lister_contrats(
 def contrats_a_renouveler(
     mois: Optional[int] = Query(None, description="Mois (1-12), défaut = mois en cours"),
     annee: Optional[int] = Query(None, description="Année, défaut = année en cours"),
+    famille: Optional[str] = Query(None, description="Famille de contrat (ex: COSOLUCE)"),
     db: Session = Depends(get_db),
 ):
     """Liste les contrats dont la date de fin est dans le mois spécifié."""
@@ -125,11 +126,14 @@ def contrats_a_renouveler(
     else:
         fin_mois = date(annee_cible, mois_cible + 1, 1)
 
-    contrats = db.query(Contrat).filter(
+    q = db.query(Contrat).filter(
         Contrat.statut.in_(["EN_COURS", "A_RENOUVELER"]),
         Contrat.date_fin >= debut_mois,
         Contrat.date_fin < fin_mois,
-    ).order_by(Contrat.date_fin).all()
+    )
+    if famille:
+        q = q.filter(Contrat.famille_contrat == famille.upper())
+    contrats = q.order_by(Contrat.date_fin).all()
 
     return {
         "mois": mois_cible,
