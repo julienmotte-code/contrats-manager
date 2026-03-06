@@ -365,7 +365,15 @@ async def synchroniser_clients(db: Session = Depends(get_db)):
                     for k, v in data.items():
                         setattr(existing, k, v)
                 else:
-                    db.add(ClientCache(**data))
+                    # Vérifier aussi par numero_client pour éviter les doublons
+                    existing_num = db.query(ClientCache).filter(
+                        ClientCache.numero_client == data["numero_client"]
+                    ).first()
+                    if existing_num:
+                        for k, v in data.items():
+                            setattr(existing_num, k, v)
+                    else:
+                        db.add(ClientCache(**data))
                 total_synchro += 1
 
             db.commit()
