@@ -24,7 +24,10 @@ export default function Dashboard() {
   const mois = new Date().getMonth() + 1;
 
   useEffect(() => {
-    api.get('/api/synchro/statut').then(r => setSynchroInfo(r.data)).catch(() => {});
+    // Synchro automatique à l'ouverture + mise à jour du bandeau
+    api.post('/api/synchro/lancer').then(r => setSynchroInfo(r.data)).catch(() => {
+      api.get('/api/synchro/statut').then(r => setSynchroInfo(r.data)).catch(() => {});
+    });
     Promise.all([
       contratsAPI.liste({ statut: 'EN_COURS', limit: 200 }),
       contratsAPI.renouvellements({ mois, annee }),
@@ -58,7 +61,7 @@ export default function Dashboard() {
           <p className="text-gray-500 text-sm mt-1">{format(new Date(), "EEEE d MMMM yyyy", { locale: fr })}</p>
         </div>
         <div className="flex gap-3">
-          <Link to="/contrats/nouveau" className="btn-primary">➕ Nouveau contrat</Link>
+          <Link to="/contrats/tunnel?mode=nouveau" className="btn-primary">➕ Nouveau contrat</Link>
           <Link to="/indices" className="btn-secondary">📈 Saisir un indice</Link>
         </div>
       </div>

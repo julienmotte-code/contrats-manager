@@ -53,7 +53,7 @@ function SelectionClient({ clientSelectionne, setClientSelectionne }) {
     setSearching(true);
     try {
       const r = await clientsAPI.liste({ recherche: q, limit: 10 });
-      setResultats(r.data.clients || []);
+      setResultats(r.data.data || []);
     } catch { toast.error('Erreur recherche client'); }
     finally { setSearching(false); }
   }, []);
@@ -68,7 +68,7 @@ function SelectionClient({ clientSelectionne, setClientSelectionne }) {
       <div className="flex items-center justify-between p-3 bg-blue-50 border border-blue-200 rounded-lg">
         <div>
           <p className="font-medium text-blue-900">{clientSelectionne.nom}</p>
-          <p className="text-xs text-blue-600">{clientSelectionne.numero || clientSelectionne.id_karlia}</p>
+          <p className="text-xs text-blue-600">{clientSelectionne.numero_client || clientSelectionne.karlia_id}</p>
         </div>
         <button onClick={() => setClientSelectionne(null)} className="text-xs text-blue-600 underline">Changer</button>
       </div>
@@ -83,7 +83,7 @@ function SelectionClient({ clientSelectionne, setClientSelectionne }) {
       {resultats.length > 0 && (
         <div className="border border-gray-200 rounded-lg divide-y max-h-48 overflow-y-auto">
           {resultats.map(c => (
-            <button key={c.id_karlia || c.id} onClick={() => { setClientSelectionne(c); setResultats([]); setRecherche(''); }}
+            <button key={c.karlia_id || c.id} onClick={() => { setClientSelectionne(c); setResultats([]); setRecherche(''); }}
               className="w-full text-left px-3 py-2 hover:bg-blue-50 text-sm">
               <span className="font-medium">{c.nom}</span>
               <span className="text-gray-400 ml-2 text-xs">{c.numero || ''}</span>
@@ -295,9 +295,9 @@ export default function TunnelContrat() {
         // Nouveau contrat
         const r = await contratsAPI.creer({
           numero_contrat: form.numero_contrat.trim(),
-          client_karlia_id: String(clientSelectionne.id_karlia || clientSelectionne.id),
+          client_karlia_id: String(clientSelectionne.karlia_id || clientSelectionne.id_karlia),
           client_nom: clientSelectionne.nom,
-          client_numero: clientSelectionne.numero || null,
+          client_numero: clientSelectionne.numero_client || null,
           famille_contrat: form.famille_contrat,
           date_debut: form.date_debut,
           date_fin: form.date_fin,

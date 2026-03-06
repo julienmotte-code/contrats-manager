@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import api, { contratsAPI } from '../services/api';
 import { format } from 'date-fns';
 import toast from 'react-hot-toast';
@@ -15,6 +15,7 @@ export default function Renouvellements() {
   const [filtreFamille, setFiltreFamille] = useState('');
   const [selection, setSelection] = useState(new Set());
   const [actionId, setActionId] = useState(null);
+  const navigate = useNavigate();
   const [typeRenouvellement, setTypeRenouvellement] = useState('SPONTANE');
   const [actionLoading, setActionLoading] = useState(false);
   const [typeRenouvellementLot, setTypeRenouvellementLot] = useState('SPONTANE');
@@ -63,6 +64,11 @@ export default function Renouvellements() {
   };
 
   const traiterRenouvellement = async (id) => {
+    if (typeRenouvellement === 'NOUVEAU_CONTRAT') {
+      setActionId(null);
+      navigate(`/contrats/tunnel?mode=renouvellement&contrat_id=${id}`);
+      return;
+    }
     setActionLoading(true);
     try {
       const r = await contratsAPI.renouveler(id, { type_renouvellement: typeRenouvellement });

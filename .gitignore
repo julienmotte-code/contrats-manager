@@ -11,3 +11,4 @@ contrats-ui/build/
 .pytest_cache/
 contrats-ui-src/node_modules/
 contrats-ui-src/build/
+storage/documents_generes/
