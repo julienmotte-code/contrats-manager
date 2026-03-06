@@ -26,6 +26,7 @@ export const contratsAPI = {
   valider: (id) => api.post(`/api/contrats/${id}/valider`),
   terminer: (id, motif) => api.post(`/api/contrats/${id}/terminer`, null, { params: { motif } }),
   renouveler: (id, data) => api.post(`/api/contrats/${id}/renouveler`, data),
+  renouvelerLot: (data) => api.post('/api/contrats/renouveler-lot', data),
   renouvellements: (params) => api.get('/api/contrats/renouvellements', { params }),
 };
 export const produitsAPI = { liste: (params) => api.get('/api/produits', { params }) };

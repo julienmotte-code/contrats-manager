@@ -562,3 +562,70 @@ def _contrat_to_dict(c: Contrat) -> dict:
         "created_at": c.created_at.isoformat() if c.created_at else None,
         "validated_at": c.validated_at.isoformat() if c.validated_at else None,
     }
+
+
+class RenouvellementLotAction(BaseModel):
+    ids: List[str]
+    type_renouvellement: str  # SPONTANE | FIN
+
+
+@router.post("/renouveler-lot")
+def renouveler_lot(
+    action: RenouvellementLotAction,
+    db: Session = Depends(get_db),
+):
+    """
+    Renouvelle plusieurs contrats d'un coup.
+    Seuls SPONTANE et FIN sont supportés en mode lot.
+    """
+    if action.type_renouvellement not in ("SPONTANE", "FIN"):
+        raise HTTPException(400, "Mode lot : seuls SPONTANE et FIN sont supportés")
+
+    resultats = []
+    erreurs = []
+
+    for contrat_id in action.ids:
+        try:
+            contrat = _get_or_404(contrat_id, db)
+            single_action = RenouvellementAction(
+                type_renouvellement=action.type_renouvellement
+            )
+            # Réutilise la logique existante
+            if action.type_renouvellement == "FIN":
+                contrat.statut = "TERMINE"
+                contrat.date_statut_change = date.today()
+                contrat.motif_fin = "Départ client (traitement en lot)"
+                db.commit()
+                resultats.append({"id": contrat_id, "numero": contrat.numero_contrat, "ok": True})
+
+            elif action.type_renouvellement == "SPONTANE":
+                from dateutil.relativedelta import relativedelta
+                nouvelle_fin = contrat.date_fin + relativedelta(years=1)
+                contrat.date_fin = nouvelle_fin
+                contrat.nombre_annees = calculer_nombre_annees(contrat.date_debut, nouvelle_fin)
+                contrat.statut = "EN_COURS"
+                contrat.date_statut_change = date.today()
+                prochaine_annee = nouvelle_fin.year
+                dernier_num = max((p.numero_facture for p in contrat.plan_facturation), default=0)
+                db.add(PlanFacturation(
+                    contrat_id=contrat.id,
+                    numero_facture=dernier_num + 1,
+                    annee_facturation=prochaine_annee,
+                    date_echeance=date(prochaine_annee, 1, 1),
+                    type_facture="ANNUELLE",
+                    montant_ht_prevu=float(contrat.montant_annuel_ht),
+                    statut="PLANIFIEE",
+                ))
+                db.commit()
+                resultats.append({"id": contrat_id, "numero": contrat.numero_contrat, "ok": True})
+
+        except Exception as e:
+            db.rollback()
+            erreurs.append({"id": contrat_id, "erreur": str(e)})
+
+    return {
+        "traites": len(resultats),
+        "erreurs": len(erreurs),
+        "resultats": resultats,
+        "detail_erreurs": erreurs,
+    }
