@@ -287,3 +287,68 @@ class Parametre(Base):
     valeur     = Column(Text)
     description = Column(Text)
     updated_at  = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# GESTION DES COMMANDES (Devis acceptés Karlia)
+# ══════════════════════════════════════════════════════════════════════════════
+
+class Commande(Base):
+    """Commande issue d'un devis accepté Karlia."""
+    __tablename__ = "commandes"
+
+    id                  = Column(Integer, primary_key=True, index=True)
+    karlia_document_id  = Column(Integer, unique=True, nullable=False)
+    karlia_customer_id  = Column(Integer)
+    reference_devis     = Column(String(100))
+    client_nom          = Column(String(255))
+    client_email        = Column(String(255))
+    client_telephone    = Column(String(50))
+    client_adresse      = Column(Text)
+    client_siret        = Column(String(20))
+    montant_ht          = Column(Numeric(15, 2))
+    montant_tva         = Column(Numeric(15, 2))
+    montant_ttc         = Column(Numeric(15, 2))
+    date_devis          = Column(Date)
+    date_acceptation    = Column(Date)
+    date_import         = Column(DateTime(timezone=True), server_default=func.now())
+    date_validation     = Column(DateTime(timezone=True))
+    statut              = Column(String(50), default='nouvelle')
+    type_traitement     = Column(String(50))
+    necessite_contrat   = Column(Boolean, default=False)
+    date_planifiee      = Column(Date)
+    intervenant_id      = Column(Integer)
+    intervenant_nom     = Column(String(255))
+    notes_planification = Column(Text)
+    contrat_id          = Column(UUID(as_uuid=True), ForeignKey("contrats.id", ondelete="SET NULL"))
+    pdf_devis           = Column(Text)  # Base64 encoded
+    pdf_devis_nom       = Column(String(255))
+    created_at          = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at          = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    created_by          = Column(Integer)
+    updated_by          = Column(Integer)
+
+    lignes  = relationship("CommandeLigne", back_populates="commande", cascade="all, delete-orphan")
+    contrat = relationship("Contrat", foreign_keys=[contrat_id])
+
+
+class CommandeLigne(Base):
+    """Ligne de commande (produit du devis)."""
+    __tablename__ = "commande_lignes"
+
+    id                = Column(Integer, primary_key=True, index=True)
+    commande_id       = Column(Integer, ForeignKey("commandes.id", ondelete="CASCADE"))
+    karlia_product_id = Column(String(50))
+    designation       = Column(String(500))
+    description       = Column(Text)
+    quantite          = Column(Numeric(10, 3), default=1)
+    unite             = Column(String(50))
+    prix_unitaire_ht  = Column(Numeric(15, 2))
+    taux_tva          = Column(Numeric(5, 2))
+    montant_ht        = Column(Numeric(15, 2))
+    montant_tva       = Column(Numeric(15, 2))
+    montant_ttc       = Column(Numeric(15, 2))
+    ordre             = Column(Integer, default=0)
+    created_at        = Column(DateTime(timezone=True), server_default=func.now())
+
+    commande = relationship("Commande", back_populates="lignes")

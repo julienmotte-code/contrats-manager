@@ -6,7 +6,7 @@ const AuthContext = createContext(null);
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [droits, setDroits] = useState({
-    contrats_ecriture: true, facturation: true, indices: true,
+    contrats_ecriture: true, facturation: true, indices: true, commandes: true,
     parametres: true, utilisateurs: true
   });
   const [loading, setLoading] = useState(true);

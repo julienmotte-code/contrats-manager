@@ -16,6 +16,11 @@ import Parametres from './pages/Parametres';
 import Utilisateurs from './pages/Utilisateurs';
 import Clients from './pages/Clients';
 import ModifierContrat from './pages/ModifierContrat';
+import NouvellesCommandes from './pages/NouvellesCommandes';
+import CommandesAPlanifier from './pages/CommandesAPlanifier';
+import CommandesPlanifiees from './pages/CommandesPlanifiees';
+import CommandesATraiter from './pages/CommandesATraiter';
+import ContratsACreer from './pages/ContratsACreer';
 
 function PrivateRoute({ children }) {
   const { user, loading } = useAuth();
@@ -45,6 +50,11 @@ function AppRoutes() {
       <Route path="/clients" element={<PrivateRoute><Clients /></PrivateRoute>} />
               <Route path="/parametres" element={<PrivateRoute><Parametres /></PrivateRoute>} />
       <Route path="/utilisateurs" element={<PrivateRoute><Utilisateurs /></PrivateRoute>} />
+      <Route path="/commandes/nouvelles" element={<PrivateRoute><NouvellesCommandes /></PrivateRoute>} />
+      <Route path="/commandes/a-planifier" element={<PrivateRoute><CommandesAPlanifier /></PrivateRoute>} />
+      <Route path="/commandes/planifiees" element={<PrivateRoute><CommandesPlanifiees /></PrivateRoute>} />
+      <Route path="/commandes/a-traiter" element={<PrivateRoute><CommandesATraiter /></PrivateRoute>} />
+      <Route path="/contrats-a-creer" element={<PrivateRoute><ContratsACreer /></PrivateRoute>} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );
