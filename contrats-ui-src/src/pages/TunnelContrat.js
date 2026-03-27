@@ -5,6 +5,22 @@ import toast from 'react-hot-toast';
 import { format, addDays } from 'date-fns';
 import { fr } from 'date-fns/locale';
 
+function calculerProrata(dateDebut, montantAnnuel, demiMois) {
+  if (!dateDebut || !montantAnnuel) return null;
+  const d = new Date(dateDebut + 'T12:00:00');
+  const jour = d.getDate(); const mois = d.getMonth() + 1;
+  if (mois === 1 && jour === 1 && !demiMois) return { prorate: false, nbMois: 12, montant: montantAnnuel, detail: "Début au 1er janvier — année complète" };
+  let moisDebut, regle;
+  if (jour <= 15) { moisDebut = mois; regle = `Début le ${jour}/${mois} (≤15) : facturation dès ce mois`; }
+  else { moisDebut = mois + 1; regle = `Début le ${jour}/${mois} (>15) : facturation dès le mois suivant`; }
+  const nbMois = 13 - moisDebut;
+  const montantBase = Math.round((montantAnnuel * nbMois / 12) * 100) / 100;
+  const bonusDemiMois = demiMois ? Math.round((montantAnnuel / 24) * 100) / 100 : 0;
+  const montantTotal = Math.round((montantBase + bonusDemiMois) * 100) / 100;
+  const detailDemi = demiMois ? ` + ½ mois (${bonusDemiMois.toLocaleString('fr-FR', { minimumFractionDigits: 2 })} €)` : '';
+  return { prorate: true, nbMois, demiMois, bonusDemiMois, montant: montantTotal, montantBase, detail: regle + detailDemi };
+}
+
 const FAMILLES = [
   { code: 'COSOLUCE', label: 'Cosoluce', description: 'Révision Syntec Août' },
   { code: 'CANTINE', label: 'Cantine de France', description: 'Révision Syntec Octobre' },
@@ -100,7 +116,7 @@ function ArticlesEditor({ articles, setArticles }) {
 
   useEffect(() => {
     produitsAPI.liste({ limit: 200 })
-      .then(r => setCatalogue(r.data.articles || []))
+      .then(r => setCatalogue(r.data.data || []))
       .catch(() => {});
   }, []);
 
@@ -116,10 +132,11 @@ function ArticlesEditor({ articles, setArticles }) {
     prev.filter((_, idx) => idx !== i).map((a, idx) => ({ ...a, rang: idx })));
 
   const selectionnerCatalogue = (i, art) => {
-    update(i, 'designation', art.designation || art.nom || '');
-    update(i, 'article_karlia_id', String(art.id_karlia || art.id || ''));
+    update(i, 'designation', art.designation || '');
+    update(i, 'article_karlia_id', String(art.karlia_id || ''));
     update(i, 'reference', art.reference || '');
-    update(i, 'prix_unitaire_ht', art.prix_ht || art.prix || '');
+    update(i, 'prix_unitaire_ht', art.prix_unitaire_ht || '');
+    update(i, 'taux_tva', art.taux_tva || 20);
   };
 
   return (
@@ -163,11 +180,11 @@ function ArticlesEditor({ articles, setArticles }) {
           </div>
           {catalogue.length > 0 && (
             <select className="input text-xs text-gray-500 mt-2" value=""
-              onChange={e => { const a = catalogue.find(x => String(x.id_karlia || x.id) === e.target.value); if (a) selectionnerCatalogue(i, a); }}>
+              onChange={e => { const a = catalogue.find(x => String(x.karlia_id) === e.target.value); if (a) selectionnerCatalogue(i, a); }}>
               <option value="">— Choisir depuis le catalogue Karlia —</option>
               {catalogue.map(a => (
-                <option key={a.id_karlia || a.id} value={String(a.id_karlia || a.id)}>
-                  {a.designation || a.nom} — {a.prix_ht || a.prix || '?'} €
+                <option key={a.karlia_id} value={String(a.karlia_id)}>
+                  {a.designation} — {a.prix_unitaire_ht || '?'} €
                 </option>
               ))}
             </select>
@@ -187,6 +204,8 @@ export default function TunnelContrat() {
 
   const [etape, setEtape] = useState(0);
   const [loading, setLoading] = useState(false);
+  const [prorata, setProrata] = useState(null);
+  const [demiMois, setDemiMois] = useState(false);
   const [contratParent, setContratParent] = useState(null);
   const [contratCree, setContratCree] = useState(null);
   const [factureCree, setFactureCree] = useState(null);
@@ -205,6 +224,15 @@ export default function TunnelContrat() {
     rang: 0, designation: '', article_karlia_id: null,
     reference: '', prix_unitaire_ht: '', quantite: 1, taux_tva: 20
   }]);
+
+  // Calcul prorata à la volée
+  useEffect(() => {
+    if (form.date_debut && form.montant_annuel_ht) {
+      setProrata(calculerProrata(form.date_debut, parseFloat(form.montant_annuel_ht), demiMois));
+    } else {
+      setProrata(null);
+    }
+  }, [form.date_debut, form.montant_annuel_ht, demiMois]);
 
   // Charger le contrat parent en mode renouvellement
   useEffect(() => {
@@ -251,6 +279,7 @@ export default function TunnelContrat() {
     if (!form.date_debut || !form.date_fin) { toast.error('Les dates sont obligatoires'); return; }
     if (new Date(form.date_debut) >= new Date(form.date_fin)) { toast.error('La date de fin doit être après la date de début'); return; }
     if (!form.montant_annuel_ht || parseFloat(form.montant_annuel_ht) <= 0) { toast.error('Le montant annuel HT est obligatoire'); return; }
+    if (prorata && prorata.prorate && !form.prorate_validated) { toast.error('Veuillez valider le montant proratisé'); return; }
     setEtape(1);
   };
 
@@ -427,6 +456,31 @@ export default function TunnelContrat() {
               <input className="input" type="number" step="0.01" placeholder="Ex: 1500.00"
                 value={form.montant_annuel_ht} onChange={e => setForm(f => ({ ...f, montant_annuel_ht: e.target.value }))} />
             </div>
+            {prorata && prorata.prorate && (
+              <div className="col-span-2">
+                <div className="bg-orange-50 border border-orange-200 rounded-lg p-4 space-y-2">
+                  <p className="text-sm font-semibold text-orange-800">⚠️ Prorata première année</p>
+                  <p className="text-sm text-orange-700">{prorata.detail}</p>
+                  <div className="flex items-center gap-4 text-sm">
+                    <span className="text-orange-800">{prorata.nbMois} mois facturés</span>
+                    <span className="font-bold text-lg text-orange-900">{prorata.montant?.toLocaleString('fr-FR', { minimumFractionDigits: 2 })} € HT</span>
+                  </div>
+                  <label className="flex items-center gap-2 text-sm cursor-pointer text-orange-800">
+                    <input type="checkbox" checked={demiMois} onChange={e => setDemiMois(e.target.checked)} />
+                    <span>Ajouter ½ mois supplémentaire</span>
+                  </label>
+                  <label className="flex items-center gap-2 text-sm cursor-pointer font-medium text-orange-900">
+                    <input type="checkbox" checked={form.prorate_validated} onChange={e => setForm(f => ({ ...f, prorate_validated: e.target.checked }))} />
+                    <span>Je valide ce montant proratisé</span>
+                  </label>
+                </div>
+              </div>
+            )}
+            {prorata && !prorata.prorate && (
+              <div className="col-span-2">
+                <div className="bg-green-50 border border-green-200 rounded-lg px-4 py-2 text-sm text-green-800">✅ {prorata.detail}</div>
+              </div>
+            )}
             <div className="col-span-2">
               <label className="label">Notes internes</label>
               <textarea className="input h-16 resize-none" placeholder="Notes internes optionnelles..."
