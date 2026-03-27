@@ -307,9 +307,10 @@ export default function TunnelContrat() {
           nouvelle_date_fin: form.date_fin,
         });
         contratId = r.data.nouveau_contrat_id;
-        // 2. Mettre à jour les articles et le montant si modifiés
+        // 2. Mettre à jour les articles, le montant et le prorata
         await api.put(`/api/contrats/${contratId}`, {
           montant_annuel_ht: parseFloat(form.montant_annuel_ht),
+          prorate_validated: form.prorate_validated,
           articles: articles.map((a, i) => ({
             rang: i,
             designation: a.designation,
