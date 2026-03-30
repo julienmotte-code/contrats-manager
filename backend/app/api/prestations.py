@@ -368,3 +368,37 @@ async def delete_prestation(
     db.commit()
     
     return {"success": True, "message": "Prestation supprimée"}
+
+
+@router.post("/reattribuer-commande/{commande_id}")
+async def reattribuer_prestations_commande(
+    commande_id: int,
+    formateur_id: int,
+    db: Session = Depends(get_db)
+):
+    """Réattribue toutes les prestations d'une commande à un autre formateur."""
+    commande = db.query(Commande).filter(Commande.id == commande_id).first()
+    if not commande:
+        raise HTTPException(status_code=404, detail="Commande non trouvée")
+    
+    formateur = db.query(Formateur).filter(Formateur.id == formateur_id).first()
+    if not formateur:
+        raise HTTPException(status_code=404, detail="Formateur non trouvé")
+    
+    # Mettre à jour toutes les prestations de cette commande
+    prestations = db.query(Prestation).filter(Prestation.commande_id == commande_id).all()
+    for p in prestations:
+        p.formateur_id = formateur_id
+        p.updated_at = datetime.utcnow()
+    
+    # Mettre à jour la commande
+    commande.formateur_id = formateur_id
+    commande.updated_at = datetime.utcnow()
+    
+    db.commit()
+    
+    return {
+        "success": True,
+        "message": f"{len(prestations)} prestation(s) réattribuée(s) à {formateur.prenom or ''} {formateur.nom}".strip(),
+        "nb_prestations": len(prestations)
+    }

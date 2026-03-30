@@ -81,16 +81,25 @@ export default function CommandesAPlanifier() {
     if (!selectedCommande || !selectedFormateur) return;
     setAttribLoading(true);
     try {
-      // Créer les prestations depuis les lignes de commande
-      await api.post(`/api/prestations/from-commande/${selectedCommande.id}?formateur_id=${selectedFormateur.id}`);
-      
-      // Mettre à jour le statut de la commande
-      await api.put(`/api/commandes/${selectedCommande.id}`, {
-        statut: 'a_planifier',
-        formateur_id: selectedFormateur.id
-      });
+      // Vérifier si des prestations existent déjà (réattribution)
+      const prestRes = await api.get(`/api/prestations?commande_id=${selectedCommande.id}`);
+      const hasExistingPrestations = prestRes.data.prestations?.length > 0;
 
-      setSuccess(`Commande attribuée à ${selectedFormateur.prenom || ''} ${selectedFormateur.nom}`);
+      if (hasExistingPrestations) {
+        // Réattribuer les prestations existantes
+        await api.post(`/api/prestations/reattribuer-commande/${selectedCommande.id}?formateur_id=${selectedFormateur.id}`);
+        setSuccess(`Prestations réattribuées à ${selectedFormateur.prenom || ''} ${selectedFormateur.nom}`);
+      } else {
+        // Créer les prestations depuis les lignes de commande
+        await api.post(`/api/prestations/from-commande/${selectedCommande.id}?formateur_id=${selectedFormateur.id}`);
+        // Mettre à jour le statut de la commande
+        await api.put(`/api/commandes/${selectedCommande.id}`, {
+          statut: 'a_planifier',
+          formateur_id: selectedFormateur.id
+        });
+        setSuccess(`Commande attribuée à ${selectedFormateur.prenom || ''} ${selectedFormateur.nom}`);
+      }
+      
       setAttribOpen(false);
       fetchCommandes();
     } catch (err) {
@@ -176,13 +185,13 @@ export default function CommandesAPlanifier() {
           <TableBody>
             {loading ? (
               <TableRow>
-                <TableCell colSpan={7} align="center" sx={{ py: 4 }}>
+                <TableCell colSpan={8} align="center" sx={{ py: 4 }}>
                   <CircularProgress />
                 </TableCell>
               </TableRow>
             ) : commandes.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={7} align="center" sx={{ py: 4 }}>
+                <TableCell colSpan={8} align="center" sx={{ py: 4 }}>
                   Aucune commande à planifier
                 </TableCell>
               </TableRow>
@@ -204,6 +213,13 @@ export default function CommandesAPlanifier() {
                       color="primary"
                       variant="outlined"
                     />
+                  </TableCell>
+                  <TableCell>
+                    {cmd.formateur_nom ? (
+                      <Chip label={cmd.formateur_nom} size="small" color="success" variant="outlined" />
+                    ) : (
+                      <Chip label="Non attribué" size="small" color="default" variant="outlined" />
+                    )}
                   </TableCell>
                   <TableCell align="right">
                     <Typography fontWeight="medium">{formatMontant(cmd.montant_ttc)}</Typography>
@@ -247,7 +263,7 @@ export default function CommandesAPlanifier() {
       {/* Dialog Attribution Formateur */}
       <Dialog open={attribOpen} onClose={() => setAttribOpen(false)} maxWidth="md" fullWidth>
         <DialogTitle>
-          Attribuer la commande à un formateur
+          {selectedCommande?.formateur_nom ? 'Réattribuer la commande' : 'Attribuer la commande à un formateur'}
         </DialogTitle>
         <DialogContent>
           {selectedCommande && (
@@ -336,8 +352,17 @@ export default function CommandesAPlanifier() {
               />
 
               <Alert severity="info" sx={{ mt: 2 }}>
-                <strong>{getNbPrestations(selectedCommande.lignes)} prestation(s)</strong> seront créées et attribuées au formateur sélectionné.
-                Le formateur pourra ensuite planifier chaque prestation dans son agenda.
+                {selectedCommande.formateur_nom ? (
+                  <>
+                    <strong>Formateur actuel :</strong> {selectedCommande.formateur_nom}<br/>
+                    Les prestations existantes seront réattribuées au nouveau formateur.
+                  </>
+                ) : (
+                  <>
+                    <strong>{getNbPrestations(selectedCommande.lignes)} prestation(s)</strong> seront créées et attribuées au formateur sélectionné.
+                    Le formateur pourra ensuite planifier chaque prestation dans son agenda.
+                  </>
+                )}
               </Alert>
             </Box>
           )}
@@ -350,7 +375,7 @@ export default function CommandesAPlanifier() {
             disabled={!selectedFormateur || attribLoading}
             startIcon={attribLoading ? <CircularProgress size={16} /> : <AssignIcon />}
           >
-            Attribuer et créer les prestations
+            {selectedCommande?.formateur_nom ? 'Réattribuer' : 'Attribuer et créer les prestations'}
           </Button>
         </DialogActions>
       </Dialog>
