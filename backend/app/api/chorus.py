@@ -15,7 +15,7 @@ from app.models.models import (
     FactureKarlia, TransmissionChorus, Parametre, ClientCache
 )
 from app.services.chorus_service import ChorusProService, ChorusError, get_chorus_service_from_params
-from app.services.karlia_service import KarliaService
+from app.services.karlia_service import karlia, KarliaError
 from app.api.auth import get_current_user
 
 logger = logging.getLogger(__name__)
@@ -125,7 +125,7 @@ async def synchroniser_factures_karlia(
     Synchronise les factures depuis Karlia vers la table locale.
     Récupère les factures émises (type 4 = Facture) non encore importées.
     """
-    karlia = KarliaService()
+    # Utiliser l'instance globale karlia
     importees = 0
     mises_a_jour = 0
     erreurs = 0

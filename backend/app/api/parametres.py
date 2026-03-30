@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
+from typing import Dict
 from app.core.database import get_db
 from app.models.models import Parametre, ClientCache, ArticleCache
 from app.services.karlia_service import karlia
@@ -9,8 +10,10 @@ from pydantic import BaseModel
 
 router = APIRouter()
 
+
 class ParamUpdate(BaseModel):
     valeur: str
+
 
 @router.get("/")
 def get_parametres(db: Session = Depends(get_db), current_user: Utilisateur = Depends(get_current_user)):
@@ -24,6 +27,7 @@ def get_parametres(db: Session = Depends(get_db), current_user: Utilisateur = De
     result["derniere_synchro"] = result.get("derniere_synchro", "Jamais")
     result["synchro_stats"] = result.get("synchro_stats", "")
     return result
+
 
 @router.put("/karlia-api-key")
 def update_karlia_api_key(
@@ -42,6 +46,7 @@ def update_karlia_api_key(
     # Mettre à jour le service Karlia en mémoire
     karlia.api_key = body.valeur
     return {"message": "Clé API mise à jour"}
+
 
 @router.post("/tester-connexion")
 async def tester_connexion(
@@ -62,6 +67,7 @@ async def tester_connexion(
     except Exception as e:
         return {"succes": False, "message": str(e)}
 
+
 @router.post("/vider-cache")
 def vider_cache(
     db: Session = Depends(get_db),
@@ -80,3 +86,77 @@ def vider_cache(
             db.delete(p)
     db.commit()
     return {"message": f"Cache vidé — {nb_clients} clients et {nb_articles} articles supprimés"}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# CHORUS PRO
+# ══════════════════════════════════════════════════════════════════════════════
+
+CHORUS_PARAMS = [
+    'chorus_client_id',
+    'chorus_client_secret',
+    'chorus_tech_username',
+    'chorus_tech_password',
+    'chorus_siret_emetteur',
+    'chorus_code_service',
+    'chorus_code_banque',
+    'chorus_mode_qualification',
+]
+
+
+@router.get("/chorus")
+def get_chorus_params(
+    db: Session = Depends(get_db),
+    current_user: Utilisateur = Depends(get_current_user)
+):
+    """Récupère les paramètres Chorus Pro (masque les secrets)."""
+    params = db.query(Parametre).filter(Parametre.cle.in_(CHORUS_PARAMS)).all()
+    result = {}
+    for p in params:
+        # Masquer les secrets
+        if p.cle in ('chorus_client_secret', 'chorus_tech_password'):
+            result[p.cle] = '••••••••' if p.valeur else ''
+        else:
+            result[p.cle] = p.valeur or ''
+    return result
+
+
+@router.put("/chorus")
+def update_chorus_params(
+    data: Dict[str, str],
+    db: Session = Depends(get_db),
+    current_user: Utilisateur = Depends(get_current_user)
+):
+    """Met à jour les paramètres Chorus Pro."""
+    if current_user.role != "ADMIN":
+        raise HTTPException(status_code=403, detail="Réservé aux administrateurs")
+    
+    updated = 0
+    for cle in CHORUS_PARAMS:
+        if cle not in data:
+            continue
+        valeur = data[cle]
+        
+        # Ne pas écraser les secrets si on envoie la valeur masquée
+        if valeur == '••••••••':
+            continue
+            
+        param = db.query(Parametre).filter(Parametre.cle == cle).first()
+        if param:
+            param.valeur = valeur
+        else:
+            descriptions = {
+                'chorus_client_id': 'Client ID OAuth2 PISTE pour Chorus Pro',
+                'chorus_client_secret': 'Client Secret OAuth2 PISTE pour Chorus Pro',
+                'chorus_tech_username': 'Login du compte technique Chorus Pro',
+                'chorus_tech_password': 'Mot de passe du compte technique Chorus Pro',
+                'chorus_siret_emetteur': 'SIRET de la structure émettrice',
+                'chorus_code_service': 'Code service fournisseur (optionnel)',
+                'chorus_code_banque': 'Code coordonnées bancaires fournisseur',
+                'chorus_mode_qualification': 'Utiliser l\'environnement de qualification (sandbox)',
+            }
+            db.add(Parametre(cle=cle, valeur=valeur, description=descriptions.get(cle, '')))
+        updated += 1
+    
+    db.commit()
+    return {"message": f"{updated} paramètre(s) mis à jour"}

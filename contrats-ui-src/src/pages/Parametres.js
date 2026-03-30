@@ -11,6 +11,16 @@ const TYPES_MODELES = [
   { value: 'CONTRAT_KIWI_BACKUP',    label: 'Kiwi Backup' },
 ];
 
+const PARAMS_CHORUS = [
+  { cle: 'chorus_client_id', label: 'Client ID PISTE', type: 'text', placeholder: 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx' },
+  { cle: 'chorus_client_secret', label: 'Client Secret PISTE', type: 'password', placeholder: 'Secret OAuth2' },
+  { cle: 'chorus_tech_username', label: 'Login compte technique', type: 'text', placeholder: 'TECH_1_xxxxx@cpro.fr' },
+  { cle: 'chorus_tech_password', label: 'Mot de passe technique', type: 'password', placeholder: 'Mot de passe' },
+  { cle: 'chorus_siret_emetteur', label: 'SIRET émetteur', type: 'text', placeholder: '12345678901234' },
+  { cle: 'chorus_code_service', label: 'Code service (optionnel)', type: 'text', placeholder: '' },
+  { cle: 'chorus_code_banque', label: 'Code banque (optionnel)', type: 'text', placeholder: '' },
+];
+
 export default function Parametres() {
   const [params, setParams] = useState(null);
   const [nouvelleClé, setNouvelleClé] = useState('');
@@ -28,6 +38,12 @@ export default function Parametres() {
   const [uploadNom, setUploadNom] = useState('');
   const [uploadVersion, setUploadVersion] = useState('1.0');
   const fileRef = useRef(null);
+  // Chorus Pro
+  const [chorusParams, setChorusParams] = useState({});
+  const [chorusSaving, setChorusSaving] = useState(false);
+  const [chorusTesting, setChorusTesting] = useState(false);
+  const [chorusTestResult, setChorusTestResult] = useState(null);
+  const [chorusMode, setChorusMode] = useState('true');
 
   const charger = () => {
     setLoading(true);
@@ -38,7 +54,15 @@ export default function Parametres() {
     api.get('/api/documents/modeles').then(r => setModeles(r.data.data || [])).catch(() => {});
   };
 
-  useEffect(() => { charger(); chargerModeles(); }, []);
+  const chargerChorusParams = () => {
+    api.get('/api/parametres/chorus').then(r => {
+      const data = r.data || {};
+      setChorusParams(data);
+      setChorusMode(data.chorus_mode_qualification || 'true');
+    }).catch(() => {});
+  };
+
+  useEffect(() => { charger(); chargerModeles(); chargerChorusParams(); }, []);
 
   const sauvegarderCle = async () => {
     if (!nouvelleClé) { toast.error('Saisissez une clé API'); return; }
@@ -118,6 +142,36 @@ export default function Parametres() {
     } catch (e) { toast.error('Erreur'); }
   };
 
+  // Chorus Pro
+  const sauvegarderChorus = async () => {
+    setChorusSaving(true);
+    try {
+      const data = { ...chorusParams, chorus_mode_qualification: chorusMode };
+      await api.put('/api/parametres/chorus', data);
+      toast.success('Paramètres Chorus Pro enregistrés');
+      chargerChorusParams();
+    } catch (e) { toast.error(e.response?.data?.detail || 'Erreur'); }
+    finally { setChorusSaving(false); }
+  };
+
+  const testerChorusConnexion = async () => {
+    setChorusTesting(true); setChorusTestResult(null);
+    try {
+      const r = await api.get('/api/chorus/test-connexion');
+      setChorusTestResult(r.data);
+      if (r.data.ok) toast.success('Connexion Chorus Pro OK');
+      else toast.error('Connexion Chorus Pro échouée');
+    } catch (e) { 
+      setChorusTestResult({ ok: false, error: e.response?.data?.detail || 'Erreur' });
+      toast.error(e.response?.data?.detail || 'Erreur test connexion'); 
+    }
+    finally { setChorusTesting(false); }
+  };
+
+  const handleChorusChange = (cle, valeur) => {
+    setChorusParams(prev => ({ ...prev, [cle]: valeur }));
+  };
+
   if (loading) return <div className="flex items-center justify-center h-64 text-gray-400">Chargement...</div>;
 
   const modelesParType = TYPES_MODELES.map(t => ({
@@ -129,7 +183,7 @@ export default function Parametres() {
     <div className="space-y-6 max-w-3xl">
       <div>
         <h1 className="text-2xl font-bold text-gray-900">Paramètres</h1>
-        <p className="text-gray-500 text-sm mt-1">Configuration du module et connexion Karlia</p>
+        <p className="text-gray-500 text-sm mt-1">Configuration du module et connexions API</p>
       </div>
 
       {/* Clé API Karlia */}
@@ -163,6 +217,57 @@ export default function Parametres() {
           </div>
           <button onClick={sauvegarderCle} disabled={saving || !nouvelleClé} className="btn-primary">
             {saving ? 'Enregistrement...' : '💾 Enregistrer la clé'}
+          </button>
+        </div>
+      </div>
+
+      {/* Chorus Pro */}
+      <div className="card space-y-4">
+        <h2 className="font-semibold text-gray-900 border-b pb-2">📤 Chorus Pro (Facturation collectivités)</h2>
+        <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-sm text-blue-800">
+          💡 Pour configurer Chorus Pro : créez un compte sur <a href="https://developer.aife.economie.gouv.fr" target="_blank" rel="noreferrer" className="underline">PISTE</a>, 
+          puis un compte technique sur <a href="https://chorus-pro.gouv.fr" target="_blank" rel="noreferrer" className="underline">Chorus Pro</a>.
+        </div>
+        
+        <div className="space-y-3">
+          {PARAMS_CHORUS.map(p => (
+            <div key={p.cle}>
+              <label className="label">{p.label}</label>
+              <input 
+                className="input font-mono text-sm" 
+                type={p.type}
+                placeholder={p.placeholder}
+                value={chorusParams[p.cle] || ''}
+                onChange={e => handleChorusChange(p.cle, e.target.value)}
+              />
+            </div>
+          ))}
+          
+          <div>
+            <label className="label">Mode</label>
+            <select 
+              className="input" 
+              value={chorusMode} 
+              onChange={e => setChorusMode(e.target.value)}
+            >
+              <option value="true">🧪 Qualification (test)</option>
+              <option value="false">🚀 Production</option>
+            </select>
+          </div>
+        </div>
+
+        {chorusTestResult && (
+          <div className={'rounded-lg px-4 py-3 text-sm ' + (chorusTestResult.ok ? 'bg-green-50 border border-green-200 text-green-800' : 'bg-red-50 border border-red-200 text-red-800')}>
+            {chorusTestResult.ok ? '✅' : '❌'} {chorusTestResult.ok ? `Connexion OK (${chorusTestResult.mode})` : (chorusTestResult.error || 'Erreur de connexion')}
+          </div>
+        )}
+
+        <div className="flex gap-3">
+          <button onClick={sauvegarderChorus} disabled={chorusSaving} className="btn-primary">
+            {chorusSaving ? 'Enregistrement...' : '💾 Enregistrer'}
+          </button>
+          <button onClick={testerChorusConnexion} disabled={chorusTesting} className="btn-secondary">
+            {chorusTesting ? '⏳ Test...' : '🔌 Tester la connexion'}
           </button>
         </div>
       </div>
@@ -262,7 +367,7 @@ export default function Parametres() {
       <div className="card space-y-2">
         <h2 className="font-semibold text-gray-900 border-b pb-2">ℹ️ Informations</h2>
         <div className="text-sm text-gray-600 space-y-1">
-          <div className="flex justify-between"><span>Version du module</span><span className="font-medium">1.3.0</span></div>
+          <div className="flex justify-between"><span>Version du module</span><span className="font-medium">1.4.0</span></div>
           <div className="flex justify-between"><span>Synchro nocturne</span><span className="font-medium">Chaque nuit à 2h00</span></div>
           <div className="flex justify-between"><span>Quota API Karlia</span><span className="font-medium">100 req/min</span></div>
         </div>

@@ -63,7 +63,7 @@ export default function ChorusProPage() {
       if (statutFilter) params.append('statut', statutFilter);
       if (search) params.append('search', search);
 
-      const response = await api.get(`/chorus/factures?${params}`);
+      const response = await api.get(`/api/chorus/factures?${params}`);
       setFactures(response.data);
     } catch (error) {
       console.error('Erreur chargement factures:', error);
@@ -75,7 +75,7 @@ export default function ChorusProPage() {
 
   const chargerStats = useCallback(async () => {
     try {
-      const response = await api.get('/chorus/statistiques');
+      const response = await api.get('/api/chorus/statistiques');
       setStats(response.data);
     } catch (error) {
       console.error('Erreur stats:', error);
@@ -90,7 +90,7 @@ export default function ChorusProPage() {
   const synchroniserKarlia = async () => {
     setSyncing(true);
     try {
-      const response = await api.post('/chorus/synchro-factures');
+      const response = await api.post('/api/chorus/synchro-factures');
       setSnackbar({
         open: true,
         message: response.data.message,
@@ -111,7 +111,7 @@ export default function ChorusProPage() {
 
   const testerConnexion = async () => {
     try {
-      const response = await api.get('/chorus/test-connexion');
+      const response = await api.get('/api/chorus/test-connexion');
       setSnackbar({
         open: true,
         message: response.data.ok ? `Connexion OK (${response.data.mode})` : `Erreur: ${response.data.error}`,
@@ -147,7 +147,7 @@ export default function ChorusProPage() {
 
     setTransmitting(true);
     try {
-      const response = await api.post('/chorus/transmettre', { facture_ids: selected });
+      const response = await api.post('/api/chorus/transmettre', { facture_ids: selected });
       const { transmises, echecs } = response.data;
 
       let message = `${transmises} facture(s) transmise(s)`;
@@ -202,7 +202,7 @@ export default function ChorusProPage() {
   const sauvegarderSiret = async () => {
     try {
       await api.put(
-        `/chorus/factures/${editDialog.facture.id}/siret`,
+        `/api/chorus/factures/${editDialog.facture.id}/siret`,
         null,
         { params: { siret: editDialog.siret, code_service: editDialog.codeService || undefined } }
       );
