@@ -3,7 +3,7 @@ Modèles SQLAlchemy — Tables de la base de données PostgreSQL
 """
 import uuid
 from datetime import datetime, date
-from sqlalchemy import (
+from sqlalchemy import (Time,
     Column, String, Integer, Numeric, Boolean, Date, DateTime,
     Text, ForeignKey, CheckConstraint, UniqueConstraint, JSON
 )
@@ -276,6 +276,7 @@ class Utilisateur(Base):
     role              = Column(String(30), default="UTILISATEUR")
     actif             = Column(Boolean, default=True)
     derniere_connexion = Column(DateTime(timezone=True))
+    formateur_id       = Column(Integer, ForeignKey("formateurs.id"))
     created_at        = Column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -328,9 +329,12 @@ class Commande(Base):
     updated_at          = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
     created_by          = Column(Integer)
     updated_by          = Column(Integer)
+    formateur_id        = Column(Integer, ForeignKey("formateurs.id"))
 
     lignes  = relationship("CommandeLigne", back_populates="commande", cascade="all, delete-orphan")
     contrat = relationship("Contrat", foreign_keys=[contrat_id])
+    formateur = relationship("Formateur", back_populates="commandes")
+    prestations = relationship("Prestation", back_populates="commande", cascade="all, delete-orphan")
 
 
 class CommandeLigne(Base):
@@ -353,3 +357,54 @@ class CommandeLigne(Base):
     created_at        = Column(DateTime(timezone=True), server_default=func.now())
 
     commande = relationship("Commande", back_populates="lignes")
+    prestations = relationship("Prestation", back_populates="commande_ligne")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# GESTION DES FORMATEURS ET PRESTATIONS
+# ══════════════════════════════════════════════════════════════════════════════
+
+class Formateur(Base):
+    """Formateurs pouvant être assignés aux commandes."""
+    __tablename__ = "formateurs"
+    
+    id           = Column(Integer, primary_key=True, index=True)
+    nom          = Column(String(255), nullable=False)
+    prenom       = Column(String(255))
+    email        = Column(String(255), unique=True, nullable=False)
+    email_google = Column(String(255))
+    telephone    = Column(String(50))
+    actif        = Column(Boolean, default=True)
+    couleur      = Column(String(7), default='#3788d8')
+    created_at   = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at   = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    
+    commandes   = relationship("Commande", back_populates="formateur")
+    prestations = relationship("Prestation", back_populates="formateur")
+
+
+class Prestation(Base):
+    """Prestation à planifier (issue d'une ligne de commande)."""
+    __tablename__ = "prestations"
+    
+    id                = Column(Integer, primary_key=True, index=True)
+    commande_id       = Column(Integer, ForeignKey("commandes.id", ondelete="CASCADE"), nullable=False)
+    commande_ligne_id = Column(Integer, ForeignKey("commande_lignes.id", ondelete="SET NULL"))
+    formateur_id      = Column(Integer, ForeignKey("formateurs.id"))
+    designation       = Column(String(500), nullable=False)
+    description       = Column(Text)
+    duree_jours       = Column(Numeric(5, 2), default=1)
+    date_prevue       = Column(Date)
+    date_planifiee    = Column(Date)
+    heure_debut       = Column(Time)
+    heure_fin         = Column(Time)
+    lieu              = Column(String(500))
+    google_event_id   = Column(String(255))
+    statut            = Column(String(50), default='a_planifier')
+    notes             = Column(Text)
+    created_at        = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at        = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    
+    commande       = relationship("Commande", back_populates="prestations")
+    commande_ligne = relationship("CommandeLigne", back_populates="prestations")
+    formateur      = relationship("Formateur", back_populates="prestations")

@@ -9,6 +9,7 @@ const MENU_COMPLET = [
   { path: '/commandes/a-planifier', label: 'À planifier', icon: '📅', droit: 'commandes' },
   { path: '/commandes/planifiees', label: 'Planifiées', icon: '✅', droit: 'commandes' },
   { path: '/commandes/a-traiter', label: 'À traiter', icon: '🛒', droit: 'commandes' },
+  { path: '/mes-prestations', label: 'Mes prestations', icon: '📋', droit: 'commandes' },
   { type: 'separator', label: 'Contrats' },
   { path: '/contrats', label: 'Liste des contrats', icon: '📄', droit: null },
   { path: '/contrats/tunnel?mode=nouveau', label: 'Nouveau contrat', icon: '➕', droit: 'contrats_ecriture' },
@@ -20,6 +21,7 @@ const MENU_COMPLET = [
   { path: '/indices', label: 'Indices Syntec', icon: '📈', droit: 'indices' },
   { type: 'separator', label: 'Administration' },
   { path: '/parametres', label: 'Paramètres', icon: '⚙️', droit: 'parametres' },
+  { path: '/formateurs', label: 'Formateurs', icon: '👨‍🏫', droit: 'utilisateurs' },
   { path: '/utilisateurs', label: 'Utilisateurs', icon: '👥', droit: 'utilisateurs' },
 ];
 

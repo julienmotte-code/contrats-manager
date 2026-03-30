@@ -15,7 +15,7 @@ GET  /api/commandes/{id}/pdf          → Télécharger le PDF du devis
 """
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import or_
 from typing import Optional, List
 from pydantic import BaseModel
@@ -26,7 +26,7 @@ import base64
 import logging
 
 from app.core.database import get_db
-from app.models.models import Commande, CommandeLigne
+from app.models.models import Commande, CommandeLigne, Formateur
 from app.services.karlia_devis_service import karlia_devis_service
 
 logger = logging.getLogger(__name__)
@@ -79,6 +79,9 @@ class CommandeResponse(BaseModel):
     contrat_id: Optional[str] = None
     pdf_disponible: bool = False
     pdf_url: Optional[str] = None
+    nb_lignes: int = 0
+    formateur_id: Optional[int] = None
+    formateur_nom: Optional[str] = None
     pdf_devis_nom: Optional[str] = None
     date_import: Optional[datetime] = None
     date_validation: Optional[datetime] = None
@@ -128,6 +131,10 @@ class CommandePlanification(BaseModel):
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 def _commande_to_response(commande: Commande) -> CommandeResponse:
+    formateur_nom = None
+    if commande.formateur:
+        formateur_nom = f"{commande.formateur.prenom or ''} {commande.formateur.nom}".strip()
+    
     return CommandeResponse(
         id=commande.id,
         karlia_document_id=commande.karlia_document_id,
@@ -153,6 +160,9 @@ def _commande_to_response(commande: Commande) -> CommandeResponse:
         contrat_id=str(commande.contrat_id) if commande.contrat_id else None,
         pdf_disponible=bool(commande.pdf_url or commande.pdf_devis),
         pdf_url=commande.pdf_url,
+        nb_lignes=len(commande.lignes) if commande.lignes else 0,
+        formateur_id=commande.formateur_id,
+        formateur_nom=formateur_nom,
         pdf_devis_nom=commande.pdf_devis_nom,
         date_import=commande.date_import,
         date_validation=commande.date_validation,
@@ -161,7 +171,7 @@ def _commande_to_response(commande: Commande) -> CommandeResponse:
 
 
 def _get_commandes_by_statut(db: Session, statut: str, page: int, page_size: int, search: Optional[str]) -> CommandeListResponse:
-    query = db.query(Commande).filter(Commande.statut == statut)
+    query = db.query(Commande).options(joinedload(Commande.lignes), joinedload(Commande.formateur)).filter(Commande.statut == statut)
     if search:
         query = query.filter(or_(
             Commande.client_nom.ilike(f"%{search}%"),
@@ -288,6 +298,43 @@ async def get_commande(commande_id: int, db: Session = Depends(get_db)):
     if not commande:
         raise HTTPException(status_code=404, detail="Commande non trouvée")
     return _commande_to_response(commande)
+
+
+class CommandeUpdate(BaseModel):
+    statut: Optional[str] = None
+    formateur_id: Optional[int] = None
+    date_planifiee: Optional[date] = None
+    notes_planification: Optional[str] = None
+
+
+@router.put("/{commande_id}", response_model=CommandeResponse)
+async def update_commande(
+    commande_id: int,
+    data: CommandeUpdate,
+    db: Session = Depends(get_db)
+):
+    """Met à jour une commande."""
+    commande = db.query(Commande).options(
+        joinedload(Commande.lignes), 
+        joinedload(Commande.formateur)
+    ).filter(Commande.id == commande_id).first()
+    if not commande:
+        raise HTTPException(status_code=404, detail="Commande non trouvée")
+    
+    if data.statut is not None:
+        commande.statut = data.statut
+    if data.formateur_id is not None:
+        commande.formateur_id = data.formateur_id
+    if data.date_planifiee is not None:
+        commande.date_planifiee = data.date_planifiee
+    if data.notes_planification is not None:
+        commande.notes_planification = data.notes_planification
+    
+    commande.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(commande)
+    return _commande_to_response(commande)
+
 
 
 @router.post("/{commande_id}/valider", response_model=CommandeResponse)
