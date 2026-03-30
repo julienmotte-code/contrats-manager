@@ -9,6 +9,7 @@ const MENU_COMPLET = [
   { path: '/commandes/a-planifier', label: 'À planifier', icon: '📅', droit: 'commandes' },
   { path: '/commandes/planifiees', label: 'Planifiées', icon: '✅', droit: 'commandes' },
   { path: '/commandes/a-traiter', label: 'À traiter', icon: '🛒', droit: 'commandes' },
+  { path: '/mes-prestations', label: 'Mes prestations', icon: '📋', droit: 'commandes' },
   { type: 'separator', label: 'Contrats' },
   { path: '/contrats', label: 'Liste des contrats', icon: '📄', droit: null },
   { path: '/contrats/tunnel?mode=nouveau', label: 'Nouveau contrat', icon: '➕', droit: 'contrats_ecriture' },
@@ -18,8 +19,10 @@ const MENU_COMPLET = [
   { path: '/clients', label: 'Clients', icon: '🏢', droit: null },
   { path: '/facturation', label: 'Facturation', icon: '💶', droit: 'facturation' },
   { path: '/indices', label: 'Indices Syntec', icon: '📈', droit: 'indices' },
+  { path: '/chorus-pro', label: 'Chorus Pro', icon: '📤', droit: 'facturation' },
   { type: 'separator', label: 'Administration' },
   { path: '/parametres', label: 'Paramètres', icon: '⚙️', droit: 'parametres' },
+  { path: '/formateurs', label: 'Formateurs', icon: '👨‍🏫', droit: 'utilisateurs' },
   { path: '/utilisateurs', label: 'Utilisateurs', icon: '👥', droit: 'utilisateurs' },
 ];
 
@@ -49,13 +52,13 @@ export default function Layout({ children }) {
                 </span>
               </div>
             ) : (
-              <Link 
-                key={item.path} 
+              <Link
+                key={item.path}
                 to={item.path}
                 className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors ${
-                  location.pathname === item.path || 
+                  location.pathname === item.path ||
                   (item.path !== '/' && location.pathname.startsWith(item.path.split('?')[0]))
-                    ? 'bg-blue-700 text-white font-medium' 
+                    ? 'bg-blue-700 text-white font-medium'
                     : 'text-blue-200 hover:bg-blue-800 hover:text-white'
                 }`}
               >
@@ -71,8 +74,8 @@ export default function Layout({ children }) {
             <div className="font-medium text-white">{user?.nom_complet}</div>
             <div className="text-xs">{user?.role}</div>
           </div>
-          <button 
-            onClick={logout} 
+          <button
+            onClick={logout}
             className="w-full text-left text-xs text-blue-400 hover:text-white transition-colors"
           >
             🚪 Se déconnecter

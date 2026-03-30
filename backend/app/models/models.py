@@ -7,7 +7,7 @@ from sqlalchemy import (
     Column, String, Integer, Numeric, Boolean, Date, DateTime,
     Text, ForeignKey, CheckConstraint, UniqueConstraint, JSON
 )
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.core.database import Base
@@ -147,6 +147,7 @@ class Contrat(Base):
                                          primaryjoin="Contrat.client_karlia_id == ClientCache.karlia_id")
     indice_reference      = relationship("IndiceRevision", foreign_keys=[indice_reference_id])
     enfants               = relationship("Contrat", foreign_keys=[contrat_parent_id])
+    factures_karlia       = relationship("FactureKarlia", back_populates="contrat")
 
 
 class ContratArticle(Base):
@@ -353,3 +354,79 @@ class CommandeLigne(Base):
     created_at        = Column(DateTime(timezone=True), server_default=func.now())
 
     commande = relationship("Commande", back_populates="lignes")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# GESTION CHORUS PRO
+# ══════════════════════════════════════════════════════════════════════════════
+
+class FactureKarlia(Base):
+    """Cache local des factures Karlia pour transmission Chorus Pro."""
+    __tablename__ = "factures_karlia"
+
+    id                     = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    karlia_document_id     = Column(Integer, unique=True, nullable=False)
+    numero_facture         = Column(String(100), nullable=False)
+    reference              = Column(String(200))
+
+    # Client
+    client_karlia_id       = Column(Integer, nullable=False)
+    client_nom             = Column(String(255))
+    client_siret           = Column(String(14))
+    client_code_service    = Column(String(100))
+
+    # Montants
+    montant_ht             = Column(Numeric(15, 2), nullable=False)
+    montant_tva            = Column(Numeric(15, 2))
+    montant_ttc            = Column(Numeric(15, 2))
+
+    # Dates
+    date_facture           = Column(Date, nullable=False)
+    date_echeance          = Column(Date)
+
+    # Statut Chorus Pro
+    statut_chorus          = Column(String(50), default='NON_TRANSMISE')
+    date_transmission      = Column(DateTime(timezone=True))
+    chorus_numero_flux     = Column(String(100))
+    chorus_statut_technique = Column(String(100))
+    chorus_date_statut     = Column(DateTime(timezone=True))
+    chorus_message_erreur  = Column(Text)
+
+    # Lien contrat
+    contrat_id             = Column(UUID(as_uuid=True), ForeignKey("contrats.id", ondelete="SET NULL"))
+
+    # Métadonnées
+    imported_at            = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at             = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    # Relations
+    contrat                = relationship("Contrat", back_populates="factures_karlia")
+    transmissions          = relationship("TransmissionChorus", back_populates="facture", cascade="all, delete-orphan")
+
+
+class TransmissionChorus(Base):
+    """Journal des transmissions vers Chorus Pro."""
+    __tablename__ = "transmissions_chorus"
+
+    id                = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    facture_id        = Column(UUID(as_uuid=True), ForeignKey("factures_karlia.id", ondelete="CASCADE"), nullable=False)
+
+    # Identifiants Chorus
+    chorus_id_flux    = Column(String(100))
+    chorus_id_facture = Column(String(100))
+
+    # Statut
+    statut            = Column(String(50), nullable=False, default='EN_ATTENTE')
+    code_retour       = Column(String(50))
+    message_retour    = Column(Text)
+
+    # Données
+    payload_json      = Column(JSONB)
+    reponse_json      = Column(JSONB)
+
+    # Métadonnées
+    transmis_par      = Column(String(100))
+    transmis_at       = Column(DateTime(timezone=True), server_default=func.now())
+
+    # Relation
+    facture           = relationship("FactureKarlia", back_populates="transmissions")

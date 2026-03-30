@@ -1,0 +1,373 @@
+"""
+Service d'intégration Chorus Pro via API PISTE
+Gère l'authentification OAuth2 et la soumission de factures
+"""
+import httpx
+import base64
+import logging
+from typing import Optional, Dict, List, Any
+from datetime import datetime, date, timedelta
+from decimal import Decimal
+
+logger = logging.getLogger(__name__)
+
+# URLs des environnements
+PISTE_SANDBOX_OAUTH = "https://sandbox-oauth.aife.economie.gouv.fr/api/oauth/token"
+PISTE_PROD_OAUTH = "https://oauth.aife.economie.gouv.fr/api/oauth/token"
+
+CHORUS_SANDBOX_API = "https://sandbox-api.aife.economie.gouv.fr/cpro/factures/v1"
+CHORUS_PROD_API = "https://api.aife.economie.gouv.fr/cpro/factures/v1"
+
+
+class ChorusError(Exception):
+    """Erreur retournée par l'API Chorus Pro"""
+    def __init__(self, status_code: int, message: str, detail: dict = None):
+        self.status_code = status_code
+        self.message = message
+        self.detail = detail or {}
+        super().__init__(f"Chorus Pro API {status_code}: {message}")
+
+
+class ChorusProService:
+    """
+    Client pour l'API Chorus Pro via PISTE.
+    Utilise OAuth2 pour l'authentification.
+    """
+
+    def __init__(
+        self,
+        client_id: str,
+        client_secret: str,
+        tech_username: str,
+        tech_password: str,
+        siret_emetteur: str,
+        code_service: str = None,
+        code_banque: str = None,
+        mode_qualification: bool = True
+    ):
+        self.client_id = client_id
+        self.client_secret = client_secret
+        self.tech_username = tech_username
+        self.tech_password = tech_password
+        self.siret_emetteur = siret_emetteur
+        self.code_service = code_service
+        self.code_banque = code_banque
+        self.mode_qualification = mode_qualification
+
+        # Sélection des URLs selon l'environnement
+        if mode_qualification:
+            self.oauth_url = PISTE_SANDBOX_OAUTH
+            self.api_url = CHORUS_SANDBOX_API
+        else:
+            self.oauth_url = PISTE_PROD_OAUTH
+            self.api_url = CHORUS_PROD_API
+
+        self._access_token: Optional[str] = None
+        self._token_expires: Optional[datetime] = None
+
+    async def _get_access_token(self) -> str:
+        """Obtient un token OAuth2 via PISTE."""
+        # Vérifier si le token est encore valide
+        if self._access_token and self._token_expires:
+            if datetime.now() < self._token_expires:
+                return self._access_token
+
+        # Credentials en Base64
+        credentials = base64.b64encode(
+            f"{self.tech_username}:{self.tech_password}".encode()
+        ).decode()
+
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                self.oauth_url,
+                data={
+                    "grant_type": "client_credentials",
+                    "scope": "openid",
+                },
+                headers={
+                    "Content-Type": "application/x-www-form-urlencoded",
+                    "Authorization": f"Basic {credentials}",
+                },
+                auth=(self.client_id, self.client_secret)
+            )
+
+            if response.status_code != 200:
+                logger.error(f"Erreur OAuth Chorus: {response.status_code} - {response.text}")
+                raise ChorusError(
+                    response.status_code,
+                    "Échec de l'authentification OAuth",
+                    {"response": response.text}
+                )
+
+            data = response.json()
+            self._access_token = data["access_token"]
+            # Token valide 1 heure, on garde une marge de 5 minutes
+            expires_in = data.get("expires_in", 3600) - 300
+            self._token_expires = datetime.now() + timedelta(seconds=expires_in)
+
+            logger.info("Token OAuth Chorus Pro obtenu avec succès")
+            return self._access_token
+
+    def _client(self) -> httpx.AsyncClient:
+        """Client HTTP configuré."""
+        return httpx.AsyncClient(
+            base_url=self.api_url,
+            timeout=60.0,
+        )
+
+    async def _post(self, endpoint: str, data: dict) -> dict:
+        """Requête POST authentifiée."""
+        token = await self._get_access_token()
+
+        async with self._client() as client:
+            response = await client.post(
+                endpoint,
+                json=data,
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json",
+                    "Accept": "application/json",
+                }
+            )
+
+            if response.status_code == 200:
+                return response.json()
+            else:
+                logger.error(f"Erreur Chorus {endpoint}: {response.status_code} - {response.text}")
+                try:
+                    detail = response.json()
+                except Exception:
+                    detail = {"raw": response.text}
+                raise ChorusError(response.status_code, f"Erreur sur {endpoint}", detail)
+
+    async def _get(self, endpoint: str, params: dict = None) -> dict:
+        """Requête GET authentifiée."""
+        token = await self._get_access_token()
+
+        async with self._client() as client:
+            response = await client.get(
+                endpoint,
+                params=params or {},
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Accept": "application/json",
+                }
+            )
+
+            if response.status_code == 200:
+                return response.json()
+            else:
+                logger.error(f"Erreur Chorus {endpoint}: {response.status_code}")
+                raise ChorusError(response.status_code, f"Erreur sur {endpoint}")
+
+    async def tester_connexion(self) -> dict:
+        """Teste la connexion à Chorus Pro."""
+        try:
+            await self._get_access_token()
+            return {
+                "ok": True,
+                "message": "Connexion OAuth réussie",
+                "mode": "qualification" if self.mode_qualification else "production"
+            }
+        except ChorusError as e:
+            return {"ok": False, "error": str(e), "detail": e.detail}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    async def rechercher_structure_destinataire(self, siret: str) -> dict:
+        """
+        Recherche une structure destinataire par SIRET.
+        Retourne les informations de la structure (id, services, etc.)
+        """
+        data = {
+            "typeIdentifiantStructure": "SIRET",
+            "identifiantStructure": siret,
+            "statutStructure": "ACTIF"
+        }
+        return await self._post("/rechercher/structures", data)
+
+    async def consulter_structure(self, id_structure: int) -> dict:
+        """Consulte les détails d'une structure par son ID Chorus."""
+        return await self._post("/consulter/structure", {"idStructure": id_structure})
+
+    async def rechercher_services_structure(self, id_structure: int) -> dict:
+        """Récupère les services d'une structure (codes services)."""
+        return await self._post("/rechercher/services", {"idStructure": id_structure})
+
+    async def soumettre_facture(
+        self,
+        destinataire_siret: str,
+        destinataire_code_service: str = None,
+        numero_facture: str = "",
+        date_facture: date = None,
+        date_echeance: date = None,
+        montant_ht: Decimal = Decimal("0"),
+        montant_tva: Decimal = Decimal("0"),
+        montant_ttc: Decimal = Decimal("0"),
+        lignes: List[Dict] = None,
+        numero_engagement: str = None,
+        numero_marche: str = None,
+        commentaire: str = None,
+    ) -> dict:
+        """
+        Soumet une facture à Chorus Pro.
+
+        Args:
+            destinataire_siret: SIRET de la collectivité destinataire
+            destinataire_code_service: Code service optionnel
+            numero_facture: Numéro de la facture (généré si vide)
+            date_facture: Date d'émission
+            date_echeance: Date d'échéance
+            montant_ht: Montant HT total
+            montant_tva: Montant TVA total
+            montant_ttc: Montant TTC total
+            lignes: Liste des lignes de facture
+            numero_engagement: Numéro d'engagement juridique (optionnel)
+            numero_marche: Numéro de marché (optionnel)
+            commentaire: Commentaire libre
+
+        Returns:
+            Réponse de l'API avec identifiant de flux
+        """
+        if date_facture is None:
+            date_facture = date.today()
+
+        # Construction du payload selon le format Chorus Pro
+        lignes_poste = []
+        if lignes:
+            for i, ligne in enumerate(lignes, 1):
+                lignes_poste.append({
+                    "lignePosteNumero": i,
+                    "lignePosteReference": ligne.get("reference", f"L{i}"),
+                    "lignePosteDenomination": ligne.get("designation", "Article"),
+                    "lignePosteQuantite": float(ligne.get("quantite", 1)),
+                    "lignePosteUnite": ligne.get("unite", "lot"),
+                    "lignePosteMontantUnitaireHT": float(ligne.get("prix_unitaire_ht", 0)),
+                    "lignePosteMontantRemiseHT": 0,
+                    "lignePosteTauxTva": float(ligne.get("taux_tva", 20)),
+                    "lignePosteTauxTvaManuel": None,
+                })
+        else:
+            # Ligne unique par défaut
+            lignes_poste.append({
+                "lignePosteNumero": 1,
+                "lignePosteReference": "GLOBAL",
+                "lignePosteDenomination": commentaire or "Prestation de service",
+                "lignePosteQuantite": 1,
+                "lignePosteUnite": "lot",
+                "lignePosteMontantUnitaireHT": float(montant_ht),
+                "lignePosteMontantRemiseHT": 0,
+                "lignePosteTauxTva": 20.0,
+                "lignePosteTauxTvaManuel": None,
+            })
+
+        payload = {
+            "modeDepot": "SAISIE_API",
+            "numeroFactureSaisi": numero_facture or None,
+            "destinataire": {
+                "codeDestinataire": destinataire_siret,
+            },
+            "fournisseur": {
+                "typeIdentifiantFournisseur": "SIRET",
+                "identifiantFournisseur": self.siret_emetteur,
+            },
+            "cadreDeFacturation": {
+                "codeCadreFacturation": "A1_FACTURE_FOURNISSEUR",
+                "codeStructureValideur": None,
+            },
+            "references": {
+                "deviseFacture": "EUR",
+                "typeFacture": "FACTURE",
+                "typeTva": "TVA_SUR_DEBIT",
+                "motifExonerationTva": None,
+                "numeroMarche": numero_marche,
+                "numeroEngagement": numero_engagement,
+                "numeroBonCommande": None,
+                "numeroFactureOrigine": None,
+                "modePaiement": "VIREMENT",
+                "dateFacture": date_facture.strftime("%Y-%m-%d"),
+            },
+            "lignePoste": lignes_poste,
+            "ligneRecapitulatifTVA": [
+                {
+                    "ligneRecapTvaTauxManuel": None,
+                    "ligneRecapTvaTaux": 20.0,
+                    "ligneRecapTvaMontantBaseHtParTaux": float(montant_ht),
+                    "ligneRecapTvaMontantTvaParTaux": float(montant_tva),
+                }
+            ],
+            "montantTotal": {
+                "montantHtTotal": float(montant_ht),
+                "montantTvaTotal": float(montant_tva),
+                "montantTtcTotal": float(montant_ttc),
+                "montantRemiseGlobaleTTC": 0,
+                "motifRemiseGlobaleTTC": None,
+                "montantAPayer": float(montant_ttc),
+                "montantAcompte": 0,
+            },
+            "commentaire": commentaire,
+        }
+
+        # Ajouter le code service si fourni
+        if destinataire_code_service:
+            payload["destinataire"]["codeServiceExecutant"] = destinataire_code_service
+
+        # Ajouter le service fournisseur si configuré
+        if self.code_service:
+            payload["fournisseur"]["codeServiceFournisseur"] = self.code_service
+
+        # Ajouter les coordonnées bancaires si configurées
+        if self.code_banque:
+            payload["fournisseur"]["codeCoordonneesBancairesFournisseur"] = self.code_banque
+
+        logger.info(f"Soumission facture Chorus Pro: {numero_facture} → {destinataire_siret}")
+        return await self._post("/soumettre", payload)
+
+    async def consulter_statut_facture(self, id_facture: str) -> dict:
+        """Consulte le statut d'une facture soumise."""
+        return await self._post("/consulter/facture", {"idFacture": id_facture})
+
+    async def rechercher_factures_emises(
+        self,
+        date_debut: date = None,
+        date_fin: date = None,
+        statut: str = None
+    ) -> dict:
+        """Recherche les factures émises."""
+        data = {
+            "typeIdentifiantStructure": "SIRET",
+            "identifiantStructure": self.siret_emetteur,
+        }
+        if date_debut:
+            data["dateDepotDebut"] = date_debut.strftime("%Y-%m-%d")
+        if date_fin:
+            data["dateDepotFin"] = date_fin.strftime("%Y-%m-%d")
+        if statut:
+            data["statutFacture"] = statut
+
+        return await self._post("/rechercher/factures/fournisseur", data)
+
+
+def get_chorus_service_from_params(params: Dict[str, str]) -> Optional[ChorusProService]:
+    """
+    Crée un service Chorus Pro à partir des paramètres en base.
+    Retourne None si la configuration est incomplète.
+    """
+    required = ['chorus_client_id', 'chorus_client_secret',
+                'chorus_tech_username', 'chorus_tech_password', 'chorus_siret_emetteur']
+
+    for key in required:
+        if not params.get(key):
+            logger.warning(f"Paramètre Chorus Pro manquant: {key}")
+            return None
+
+    return ChorusProService(
+        client_id=params['chorus_client_id'],
+        client_secret=params['chorus_client_secret'],
+        tech_username=params['chorus_tech_username'],
+        tech_password=params['chorus_tech_password'],
+        siret_emetteur=params['chorus_siret_emetteur'],
+        code_service=params.get('chorus_code_service'),
+        code_banque=params.get('chorus_code_banque'),
+        mode_qualification=params.get('chorus_mode_qualification', 'true').lower() == 'true'
+    )
