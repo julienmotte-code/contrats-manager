@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from datetime import datetime
-from app.api import clients, produits, contrats, facturation, indices, documents, auth, parametres, utilisateurs, audit, commandes, chorus
+from app.api import clients, produits, contrats, facturation, indices, documents, auth, parametres, utilisateurs, audit, commandes, chorus, formateurs, prestations
 from app.core.config import settings
 from app.core.database import engine, Base, SessionLocal
 from app.services.karlia_service import karlia
@@ -40,6 +40,8 @@ app.include_router(documents.router,    prefix="/api/documents",   tags=["Docume
 app.include_router(parametres.router,   prefix="/api/parametres",  tags=["Paramètres"])
 app.include_router(audit.router,        prefix="/api/audit",       tags=["Audit"])
 app.include_router(commandes.router,    prefix="/api/commandes",   tags=["Commandes"])
+app.include_router(formateurs.router,  prefix="/api/formateurs",  tags=["Formateurs"])
+app.include_router(prestations.router, prefix="/api/prestations", tags=["Prestations"])
 app.include_router(chorus.router,       prefix="/api",             tags=["Chorus Pro"])
 
 async def synchro_karlia():
