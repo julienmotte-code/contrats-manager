@@ -10,7 +10,7 @@ api.interceptors.response.use(r => r, err => {
   return Promise.reject(err);
 });
 export const authAPI = {
-  login: (username, password) => { const form = new URLSearchParams(); form.append('username', username); form.append('password', password); return api.post('/api/auth/token', form, { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }); },
+  login: (username, password) => { const form = new URLSearchParams(); form.append('username', username); form.append('password', password); return api.post('/api/auth/login', form, { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }); },
   me: () => api.get('/api/auth/me'),
 };
 export const clientsAPI = {
