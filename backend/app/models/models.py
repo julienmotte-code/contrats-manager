@@ -323,6 +323,7 @@ class Commande(Base):
     contrat_id          = Column(UUID(as_uuid=True), ForeignKey("contrats.id", ondelete="SET NULL"))
     pdf_devis           = Column(Text)  # Base64 encoded
     pdf_devis_nom       = Column(String(255))
+    pdf_url             = Column(Text)
     created_at          = Column(DateTime(timezone=True), server_default=func.now())
     updated_at          = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
     created_by          = Column(Integer)

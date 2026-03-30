@@ -4,7 +4,7 @@ Service de synchronisation des devis acceptés depuis Karlia.
 import httpx
 import logging
 from datetime import datetime, date
-from typing import Optional, List, Dict, Any, Tuple
+from typing import Optional, List, Dict, Any
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -14,8 +14,7 @@ from app.models.models import Commande, CommandeLigne, Parametre
 logger = logging.getLogger(__name__)
 
 KARLIA_TYPE_DEVIS = 1
-KARLIA_STATUS_DEVIS_ACCEPTE = 3
-KARLIA_STATUS_DEVIS_SIGNE = 4
+KARLIA_STATUS_DEVIS_ACCEPTE = 2
 
 
 class KarliaDevisService:
@@ -60,37 +59,36 @@ class KarliaDevisService:
         devis_acceptes = []
         
         async with httpx.AsyncClient(timeout=30.0) as client:
-            for status in [KARLIA_STATUS_DEVIS_ACCEPTE, KARLIA_STATUS_DEVIS_SIGNE]:
-                page = 1
-                has_more = True
-                while has_more:
-                    params = {
-                        "id_type": KARLIA_TYPE_DEVIS,
-                        "id_status": status,
-                        "page": page,
-                        "per_page": 50
-                    }
-                    if depuis_date:
-                        params["updated_after"] = depuis_date.strftime("%Y-%m-%d")
-                    
-                    try:
-                        response = await client.get(
-                            f"{self.base_url}/documents",
-                            headers=self._get_headers(),
-                            params=params
-                        )
-                        response.raise_for_status()
-                        data = response.json()
-                        documents = data.get("data", data) if isinstance(data, dict) else data
-                        if isinstance(documents, list):
-                            devis_acceptes.extend(documents)
-                            has_more = len(documents) == 50
-                            page += 1
-                        else:
-                            has_more = False
-                    except httpx.HTTPError as e:
-                        logger.error(f"Erreur API Karlia: {e}")
+            page = 1
+            has_more = True
+            while has_more:
+                params = {
+                    "id_type": KARLIA_TYPE_DEVIS,
+                    "id_status": KARLIA_STATUS_DEVIS_ACCEPTE,
+                    "page": page,
+                    "per_page": 50
+                }
+                if depuis_date:
+                    params["updated_after"] = depuis_date.strftime("%Y-%m-%d")
+                
+                try:
+                    response = await client.get(
+                        f"{self.base_url}/documents",
+                        headers=self._get_headers(),
+                        params=params
+                    )
+                    response.raise_for_status()
+                    data = response.json()
+                    documents = data.get("data", data) if isinstance(data, dict) else data
+                    if isinstance(documents, list):
+                        devis_acceptes.extend(documents)
+                        has_more = len(documents) == 50
+                        page += 1
+                    else:
                         has_more = False
+                except httpx.HTTPError as e:
+                    logger.error(f"Erreur API Karlia: {e}")
+                    has_more = False
         
         return devis_acceptes
     
@@ -105,23 +103,6 @@ class KarliaDevisService:
                 return response.json()
             except httpx.HTTPError as e:
                 logger.error(f"Erreur détail devis {document_id}: {e}")
-                return None
-    
-    async def get_devis_pdf(self, document_id: int) -> Optional[Tuple[bytes, str]]:
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            try:
-                response = await client.get(
-                    f"{self.base_url}/documents/{document_id}/download",
-                    headers=self._get_headers()
-                )
-                response.raise_for_status()
-                content_disp = response.headers.get("Content-Disposition", "")
-                filename = f"devis_{document_id}.pdf"
-                if "filename=" in content_disp:
-                    filename = content_disp.split("filename=")[1].strip('"')
-                return (response.content, filename)
-            except httpx.HTTPError as e:
-                logger.error(f"Erreur PDF devis {document_id}: {e}")
                 return None
     
     async def get_customer_detail(self, customer_id: int) -> Optional[Dict[str, Any]]:
@@ -146,21 +127,6 @@ class KarliaDevisService:
             return datetime.strptime(date_str, "%Y-%m-%d").date()
         except ValueError:
             return None
-    
-    def _format_address(self, customer_data: Dict[str, Any]) -> str:
-        parts = []
-        if customer_data.get("address"):
-            parts.append(customer_data["address"])
-        if customer_data.get("address2"):
-            parts.append(customer_data["address2"])
-        city_parts = []
-        if customer_data.get("zip_code"):
-            city_parts.append(customer_data["zip_code"])
-        if customer_data.get("city"):
-            city_parts.append(customer_data["city"])
-        if city_parts:
-            parts.append(" ".join(city_parts))
-        return "\n".join(parts)
     
     def _parse_tva(self, tva_value: Any) -> Optional[float]:
         if tva_value is None:
@@ -189,12 +155,11 @@ class KarliaDevisService:
                     if not karlia_id:
                         continue
                     
-                    existing = db.query(Commande).filter(Commande.karlia_document_id == karlia_id).first()
+                    existing = db.query(Commande).filter(Commande.karlia_document_id == int(karlia_id)).first()
                     
                     if existing:
-                        if existing.statut == 'nouvelle':
-                            await self._update_commande(db, existing, devis_data)
-                            result["devis_mis_a_jour"] += 1
+                        await self._update_commande(db, existing, devis_data)
+                        result["devis_mis_a_jour"] += 1
                     else:
                         await self._create_commande(db, devis_data)
                         result["nouveaux_devis"] += 1
@@ -214,62 +179,76 @@ class KarliaDevisService:
         return result
     
     async def _create_commande(self, db: Session, devis_data: Dict[str, Any]) -> Commande:
+        # Récupérer le détail complet du devis
         devis_detail = await self.get_devis_detail(devis_data["id"])
         if devis_detail:
             devis_data.update(devis_detail)
         
-        customer_id = devis_data.get("id_customer") or devis_data.get("customer_id")
+        customer_id = devis_data.get("id_customer_supplier") or devis_data.get("id_customer")
         client_info = {}
         if customer_id:
             customer_data = await self.get_customer_detail(customer_id)
             if customer_data:
+                adresse = ""
+                address_list = customer_data.get("address_list", [])
+                if address_list:
+                    main_addr = address_list[0]
+                    adresse_parts = []
+                    if main_addr.get("address"):
+                        adresse_parts.append(main_addr["address"])
+                    if main_addr.get("zip_code") or main_addr.get("city"):
+                        adresse_parts.append(f"{main_addr.get('zip_code', '')} {main_addr.get('city', '')}".strip())
+                    adresse = "\n".join(adresse_parts)
+                
                 client_info = {
-                    "client_nom": customer_data.get("name") or customer_data.get("company_name"),
+                    "client_nom": customer_data.get("title") or customer_data.get("name"),
                     "client_email": customer_data.get("email"),
                     "client_telephone": customer_data.get("phone"),
-                    "client_adresse": self._format_address(customer_data),
-                    "client_siret": customer_data.get("siret") or customer_data.get("vat_number")
+                    "client_adresse": adresse,
+                    "client_siret": customer_data.get("siret")
                 }
         
         commande = Commande(
-            karlia_document_id=devis_data["id"],
-            karlia_customer_id=customer_id,
-            reference_devis=devis_data.get("reference") or devis_data.get("number"),
-            client_nom=client_info.get("client_nom") or devis_data.get("customer_name"),
+            karlia_document_id=int(devis_data["id"]),
+            karlia_customer_id=int(customer_id) if customer_id else None,
+            reference_devis=devis_data.get("number"),
+            client_nom=client_info.get("client_nom") or devis_data.get("customer_supplier_title"),
             client_email=client_info.get("client_email"),
             client_telephone=client_info.get("client_telephone"),
             client_adresse=client_info.get("client_adresse"),
             client_siret=client_info.get("client_siret"),
-            montant_ht=devis_data.get("total_without_tax") or devis_data.get("total_ht"),
-            montant_tva=devis_data.get("total_tax") or devis_data.get("total_tva"),
-            montant_ttc=devis_data.get("total_with_tax") or devis_data.get("total_ttc"),
+            montant_ht=devis_data.get("total_without_tax"),
+            montant_tva=float(devis_data.get("total_with_tax", 0)) - float(devis_data.get("total_without_tax", 0)),
+            montant_ttc=devis_data.get("total_with_tax"),
             date_devis=self._parse_karlia_date(devis_data.get("date")),
-            date_acceptation=self._parse_karlia_date(devis_data.get("date_accepted") or devis_data.get("date_signed")),
-            statut="nouvelle"
+            date_acceptation=self._parse_karlia_date(devis_data.get("update_date", "").split(" ")[0] if devis_data.get("update_date") else None),
+            statut="nouvelle",
+            pdf_url=devis_data.get("download_url"),
+            pdf_devis_nom=f"{devis_data.get('number', 'devis')}.pdf"
         )
         
         db.add(commande)
         db.flush()
         
-        products = devis_data.get("products_list") or devis_data.get("lines") or []
+        # Ajouter les lignes de produits
+        products = devis_data.get("products_list") or []
         for idx, product in enumerate(products):
             ligne = CommandeLigne(
                 commande_id=commande.id,
-                karlia_product_id=str(product.get("id_product") or product.get("product_id") or ""),
-                designation=product.get("description") or product.get("name"),
-                description=product.get("long_description"),
+                karlia_product_id=str(product.get("id_product") or ""),
+                designation=product.get("title") or product.get("description"),
+                description=product.get("description"),
                 quantite=product.get("quantity", 1),
                 unite=product.get("unit"),
-                prix_unitaire_ht=product.get("price_without_tax") or product.get("unit_price"),
-                taux_tva=self._parse_tva(product.get("id_vat") or product.get("vat_rate")),
+                prix_unitaire_ht=product.get("price_without_tax"),
+                taux_tva=self._parse_tva(product.get("id_vat")) or float(product.get("vat", 0)),
                 montant_ht=product.get("total_without_tax"),
-                montant_tva=product.get("total_tax"),
-                montant_ttc=product.get("total_with_tax"),
                 ordre=idx
             )
             db.add(ligne)
         
         db.commit()
+        logger.info(f"Commande créée: {commande.reference_devis} avec PDF URL")
         return commande
     
     async def _update_commande(self, db: Session, commande: Commande, devis_data: Dict[str, Any]):
@@ -278,9 +257,14 @@ class KarliaDevisService:
             devis_data.update(devis_detail)
         
         commande.montant_ht = devis_data.get("total_without_tax") or commande.montant_ht
-        commande.montant_tva = devis_data.get("total_tax") or commande.montant_tva
         commande.montant_ttc = devis_data.get("total_with_tax") or commande.montant_ttc
+        commande.montant_tva = float(commande.montant_ttc or 0) - float(commande.montant_ht or 0)
         commande.updated_at = datetime.utcnow()
+        
+        # Mettre à jour l'URL PDF si disponible
+        if devis_data.get("download_url"):
+            commande.pdf_url = devis_data.get("download_url")
+            commande.pdf_devis_nom = f"{devis_data.get('number', 'devis')}.pdf"
         
         db.commit()
 

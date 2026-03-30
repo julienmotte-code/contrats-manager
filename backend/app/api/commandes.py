@@ -78,6 +78,7 @@ class CommandeResponse(BaseModel):
     notes_planification: Optional[str] = None
     contrat_id: Optional[str] = None
     pdf_disponible: bool = False
+    pdf_url: Optional[str] = None
     pdf_devis_nom: Optional[str] = None
     date_import: Optional[datetime] = None
     date_validation: Optional[datetime] = None
@@ -150,7 +151,8 @@ def _commande_to_response(commande: Commande) -> CommandeResponse:
         intervenant_nom=commande.intervenant_nom,
         notes_planification=commande.notes_planification,
         contrat_id=str(commande.contrat_id) if commande.contrat_id else None,
-        pdf_disponible=commande.pdf_devis is not None,
+        pdf_disponible=bool(commande.pdf_url or commande.pdf_devis),
+        pdf_url=commande.pdf_url,
         pdf_devis_nom=commande.pdf_devis_nom,
         date_import=commande.date_import,
         date_validation=commande.date_validation,
@@ -375,18 +377,26 @@ async def lier_contrat_commande(commande_id: int, contrat_id: str, db: Session =
 
 @router.get("/{commande_id}/pdf")
 async def get_commande_pdf(commande_id: int, db: Session = Depends(get_db)):
-    """Télécharge le PDF du devis associé à la commande."""
+    """Redirige vers le PDF du devis sur Karlia."""
+    from fastapi.responses import RedirectResponse
+    
     commande = db.query(Commande).filter(Commande.id == commande_id).first()
     if not commande:
         raise HTTPException(status_code=404, detail="Commande non trouvée")
-    if not commande.pdf_devis:
-        raise HTTPException(status_code=404, detail="PDF non disponible")
+    
+    # Utiliser l'URL directe si disponible
+    if commande.pdf_url:
+        return RedirectResponse(url=commande.pdf_url)
+    
+    raise HTTPException(status_code=404, detail="PDF non disponible")
     
     filename = commande.pdf_devis_nom or f"devis_{commande.reference_devis or commande.id}.pdf"
     
     # Décoder le base64 si nécessaire
     pdf_content = commande.pdf_devis
-    if isinstance(pdf_content, str):
+    if isinstance(pdf_content, bytes):
+        pdf_content = base64.b64decode(pdf_content.decode("utf-8"))
+    elif isinstance(pdf_content, str):
         pdf_content = base64.b64decode(pdf_content)
     
     return StreamingResponse(

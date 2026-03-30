@@ -84,17 +84,8 @@ export default function CommandesATraiter() {
     }
   };
 
-  const handleDownloadPdf = async (commande) => {
-    try {
-      const res = await api.get(`/api/commandes/${commande.id}/pdf`, { responseType: 'blob' });
-      const url = window.URL.createObjectURL(new Blob([res.data]));
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = commande.pdf_devis_nom || `devis_${commande.reference_devis}.pdf`;
-      link.click();
-    } catch (err) {
-      setError('PDF non disponible');
-    }
+  const handleDownloadPdf = (commande) => {
+    window.open(`/api/commandes/${commande.id}/pdf`, '_blank');
   };
 
   const formatDate = (dateStr) => {
