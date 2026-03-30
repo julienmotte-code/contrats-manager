@@ -3,7 +3,8 @@ import {
   Box, Paper, Typography, Table, TableBody, TableCell, TableContainer,
   TableHead, TableRow, Button, IconButton, Chip, TextField,
   Dialog, DialogTitle, DialogContent, DialogActions, CircularProgress,
-  Alert, Tooltip, Card, CardContent, Tabs, Tab, Divider
+  Alert, Tooltip, Card, CardContent, Tabs, Tab, Divider, FormControl,
+  InputLabel, Select, MenuItem
 } from '@mui/material';
 import {
   Event as EventIcon, CheckCircle as DoneIcon, Schedule as ScheduleIcon,
@@ -19,13 +20,14 @@ import api from '../services/api';
 import { useAuth } from '../context/AuthContext';
 
 export default function MesPrestations() {
-  const { user } = useAuth();
+  const { user, droits } = useAuth();
   const [prestations, setPrestations] = useState([]);
   const [stats, setStats] = useState({ a_planifier: 0, planifiees: 0, realisees: 0 });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [success, setSuccess] = useState(null);
   const [tabValue, setTabValue] = useState(0);
+
   const [formateurs, setFormateurs] = useState([]);
   const [selectedFormateur, setSelectedFormateur] = useState(null);
 
@@ -39,22 +41,44 @@ export default function MesPrestations() {
   const [notes, setNotes] = useState('');
   const [planifLoading, setPlanifLoading] = useState(false);
 
-  // Charger les formateurs pour le sélecteur (admin)
+  // Peut voir tous les formateurs ?
+  const canViewAllFormateurs = droits?.toutes_prestations || user?.role === 'ADMIN' || user?.role === 'GESTIONNAIRE';
+
+  // Charger les formateurs pour le sélecteur (admin/gestionnaire uniquement)
   useEffect(() => {
     const fetchFormateurs = async () => {
       try {
-        const res = await api.get('/api/formateurs?actif_only=true');
-        setFormateurs(res.data.formateurs || []);
-        // Par défaut, sélectionner le premier formateur ou celui lié à l'utilisateur
-        if (res.data.formateurs?.length > 0) {
-          setSelectedFormateur(res.data.formateurs[0]);
+        if (canViewAllFormateurs) {
+          const res = await api.get('/api/formateurs?actif_only=true');
+          setFormateurs(res.data.formateurs || []);
+          
+          // Si l'utilisateur a un formateur_id, le sélectionner par défaut
+          if (user?.formateur_id) {
+            const monFormateur = res.data.formateurs.find(f => f.id === user.formateur_id);
+            if (monFormateur) {
+              setSelectedFormateur(monFormateur);
+              return;
+            }
+          }
+          // Sinon premier formateur
+          if (res.data.formateurs?.length > 0) {
+            setSelectedFormateur(res.data.formateurs[0]);
+          }
+        } else if (user?.formateur_id) {
+          // Formateur : charger uniquement ses infos
+          const res = await api.get(`/api/formateurs/${user.formateur_id}`);
+          setFormateurs([res.data]);
+          setSelectedFormateur(res.data);
         }
       } catch (err) {
         console.error('Erreur chargement formateurs:', err);
+        if (!canViewAllFormateurs) {
+          setError('Aucun profil formateur associé à votre compte');
+        }
       }
     };
     fetchFormateurs();
-  }, []);
+  }, [user, canViewAllFormateurs]);
 
   const fetchPrestations = useCallback(async () => {
     if (!selectedFormateur) return;
@@ -98,10 +122,10 @@ export default function MesPrestations() {
         date_planifiee: format(datePlanifiee, 'yyyy-MM-dd'),
         heure_debut: heureDebut ? format(heureDebut, 'HH:mm:ss') : null,
         heure_fin: heureFin ? format(heureFin, 'HH:mm:ss') : null,
-        lieu: lieu || null,
-        notes: notes || null
+        lieu,
+        notes
       });
-      setSuccess('Prestation planifiée avec succès');
+      setSuccess('Prestation planifiée');
       setPlanifOpen(false);
       fetchPrestations();
     } catch (err) {
@@ -111,13 +135,13 @@ export default function MesPrestations() {
     }
   };
 
-  const handleMarquerRealisee = async (prestation) => {
+  const handleRealiser = async (prestationId) => {
     try {
-      await api.post(`/api/prestations/${prestation.id}/realiser`);
+      await api.post(`/api/prestations/${prestationId}/realiser`);
       setSuccess('Prestation marquée comme réalisée');
       fetchPrestations();
     } catch (err) {
-      setError('Erreur lors de la mise à jour');
+      setError(err.response?.data?.detail || 'Erreur');
     }
   };
 
@@ -135,15 +159,6 @@ export default function MesPrestations() {
     return timeStr.substring(0, 5);
   };
 
-  const getFilteredPrestations = () => {
-    switch (tabValue) {
-      case 0: return prestations.filter(p => p.statut === 'a_planifier');
-      case 1: return prestations.filter(p => p.statut === 'planifiee');
-      case 2: return prestations.filter(p => p.statut === 'realisee');
-      default: return prestations;
-    }
-  };
-
   const getStatutChip = (statut) => {
     switch (statut) {
       case 'a_planifier':
@@ -157,6 +172,25 @@ export default function MesPrestations() {
     }
   };
 
+  const filteredPrestations = prestations.filter(p => {
+    if (tabValue === 0) return p.statut === 'a_planifier';
+    if (tabValue === 1) return p.statut === 'planifiee';
+    if (tabValue === 2) return p.statut === 'realisee';
+    return true;
+  });
+
+  // Si pas de formateur_id et rôle FORMATEUR, afficher un message
+  if (user?.role === 'FORMATEUR' && !user?.formateur_id) {
+    return (
+      <Box sx={{ p: 3 }}>
+        <Alert severity="warning">
+          Votre compte n'est pas associé à un profil formateur. 
+          Veuillez contacter un administrateur.
+        </Alert>
+      </Box>
+    );
+  }
+
   return (
     <LocalizationProvider dateAdapter={AdapterDateFns} adapterLocale={fr}>
       <Box sx={{ p: 3 }}>
@@ -164,27 +198,26 @@ export default function MesPrestations() {
           <Typography variant="h4" sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
             <ScheduleIcon color="primary" /> Mes Prestations
           </Typography>
-          
-          {/* Sélecteur de formateur (pour admin/manager) */}
-          {formateurs.length > 1 && (
-            <TextField
-              select
-              size="small"
-              label="Formateur"
-              value={selectedFormateur?.id || ''}
-              onChange={(e) => {
-                const f = formateurs.find(f => f.id === parseInt(e.target.value));
-                setSelectedFormateur(f);
-              }}
-              sx={{ minWidth: 200 }}
-              SelectProps={{ native: true }}
-            >
-              {formateurs.map(f => (
-                <option key={f.id} value={f.id}>
-                  {f.prenom} {f.nom}
-                </option>
-              ))}
-            </TextField>
+
+          {/* Sélecteur formateur - visible uniquement pour admin/gestionnaire */}
+          {canViewAllFormateurs && formateurs.length > 1 && (
+            <FormControl size="small" sx={{ minWidth: 200 }}>
+              <InputLabel>Formateur</InputLabel>
+              <Select
+                value={selectedFormateur?.id || ''}
+                label="Formateur"
+                onChange={(e) => {
+                  const f = formateurs.find(x => x.id === e.target.value);
+                  setSelectedFormateur(f);
+                }}
+              >
+                {formateurs.map(f => (
+                  <MenuItem key={f.id} value={f.id}>
+                    {f.prenom} {f.nom}
+                  </MenuItem>
+                ))}
+              </Select>
+            </FormControl>
           )}
         </Box>
 
@@ -193,22 +226,22 @@ export default function MesPrestations() {
 
         {/* Stats */}
         <Box sx={{ display: 'flex', gap: 2, mb: 3 }}>
-          <Card sx={{ flex: 1, bgcolor: 'warning.light' }}>
+          <Card sx={{ flex: 1 }}>
             <CardContent sx={{ textAlign: 'center', py: 2 }}>
-              <Typography variant="h3">{stats.a_planifier}</Typography>
-              <Typography variant="body2">À planifier</Typography>
+              <Typography variant="h3" color="warning.main">{stats.a_planifier}</Typography>
+              <Typography variant="body2" color="text.secondary">À planifier</Typography>
             </CardContent>
           </Card>
-          <Card sx={{ flex: 1, bgcolor: 'info.light' }}>
+          <Card sx={{ flex: 1 }}>
             <CardContent sx={{ textAlign: 'center', py: 2 }}>
-              <Typography variant="h3">{stats.planifiees}</Typography>
-              <Typography variant="body2">Planifiées</Typography>
+              <Typography variant="h3" color="info.main">{stats.planifiees}</Typography>
+              <Typography variant="body2" color="text.secondary">Planifiées</Typography>
             </CardContent>
           </Card>
-          <Card sx={{ flex: 1, bgcolor: 'success.light' }}>
+          <Card sx={{ flex: 1 }}>
             <CardContent sx={{ textAlign: 'center', py: 2 }}>
-              <Typography variant="h3">{stats.realisees}</Typography>
-              <Typography variant="body2">Réalisées</Typography>
+              <Typography variant="h3" color="success.main">{stats.realisees}</Typography>
+              <Typography variant="body2" color="text.secondary">Réalisées</Typography>
             </CardContent>
           </Card>
         </Box>
@@ -230,8 +263,8 @@ export default function MesPrestations() {
                 <TableCell>Commande</TableCell>
                 <TableCell>Client</TableCell>
                 <TableCell>Désignation</TableCell>
-                <TableCell align="center">Date planifiée</TableCell>
-                <TableCell align="center">Horaires</TableCell>
+                <TableCell align="center">Date</TableCell>
+                <TableCell align="center">Horaire</TableCell>
                 <TableCell>Lieu</TableCell>
                 <TableCell align="center">Actions</TableCell>
               </TableRow>
@@ -243,14 +276,14 @@ export default function MesPrestations() {
                     <CircularProgress />
                   </TableCell>
                 </TableRow>
-              ) : getFilteredPrestations().length === 0 ? (
+              ) : filteredPrestations.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={7} align="center" sx={{ py: 4 }}>
                     Aucune prestation
                   </TableCell>
                 </TableRow>
               ) : (
-                getFilteredPrestations().map((prest) => (
+                filteredPrestations.map((prest) => (
                   <TableRow key={prest.id} hover>
                     <TableCell>
                       <Typography variant="body2" fontWeight="medium">
@@ -260,22 +293,14 @@ export default function MesPrestations() {
                     <TableCell>{prest.client_nom || '-'}</TableCell>
                     <TableCell>
                       <Typography variant="body2">{prest.designation}</Typography>
-                      {prest.description && (
-                        <Typography variant="caption" color="text.secondary">
-                          {prest.description}
+                      {prest.notes && (
+                        <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                          {prest.notes}
                         </Typography>
                       )}
                     </TableCell>
                     <TableCell align="center">
-                      {prest.date_planifiee ? (
-                        <Chip 
-                          icon={<EventIcon sx={{ fontSize: 16 }} />}
-                          label={formatDate(prest.date_planifiee)} 
-                          size="small" 
-                          color="primary"
-                          variant="outlined"
-                        />
-                      ) : '-'}
+                      {prest.date_planifiee ? formatDate(prest.date_planifiee) : '-'}
                     </TableCell>
                     <TableCell align="center">
                       {prest.heure_debut && (
@@ -288,7 +313,7 @@ export default function MesPrestations() {
                     <TableCell>
                       {prest.lieu && (
                         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                          <PlaceIcon sx={{ fontSize: 16 }} color="action" />
+                          <PlaceIcon fontSize="small" color="action" />
                           <Typography variant="body2">{prest.lieu}</Typography>
                         </Box>
                       )}
@@ -309,7 +334,7 @@ export default function MesPrestations() {
                             </IconButton>
                           </Tooltip>
                           <Tooltip title="Marquer réalisée">
-                            <IconButton size="small" color="success" onClick={() => handleMarquerRealisee(prest)}>
+                            <IconButton size="small" color="success" onClick={() => handleRealiser(prest.id)}>
                               <DoneIcon />
                             </IconButton>
                           </Tooltip>
@@ -326,25 +351,28 @@ export default function MesPrestations() {
         {/* Dialog Planification */}
         <Dialog open={planifOpen} onClose={() => setPlanifOpen(false)} maxWidth="sm" fullWidth>
           <DialogTitle>
-            Planifier la prestation
+            {selectedPrestation?.statut === 'a_planifier' ? 'Planifier la prestation' : 'Modifier la planification'}
           </DialogTitle>
           <DialogContent>
             {selectedPrestation && (
-              <Box sx={{ mt: 1 }}>
+              <Box sx={{ mt: 2 }}>
                 <Card variant="outlined" sx={{ mb: 3, bgcolor: 'grey.50' }}>
                   <CardContent>
                     <Typography variant="subtitle1" gutterBottom>
-                      {selectedPrestation.reference_devis} — {selectedPrestation.client_nom}
+                      {selectedPrestation.designation}
                     </Typography>
                     <Typography variant="body2" color="text.secondary">
-                      {selectedPrestation.designation}
+                      Client : {selectedPrestation.client_nom}
+                    </Typography>
+                    <Typography variant="body2" color="text.secondary">
+                      Commande : {selectedPrestation.reference_devis}
                     </Typography>
                   </CardContent>
                 </Card>
 
                 <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                   <DatePicker
-                    label="Date de la prestation *"
+                    label="Date de la prestation"
                     value={datePlanifiee}
                     onChange={setDatePlanifiee}
                     slotProps={{ textField: { fullWidth: true, required: true } }}
@@ -352,13 +380,13 @@ export default function MesPrestations() {
 
                   <Box sx={{ display: 'flex', gap: 2 }}>
                     <TimePicker
-                      label="Heure début"
+                      label="Heure de début"
                       value={heureDebut}
                       onChange={setHeureDebut}
                       slotProps={{ textField: { fullWidth: true } }}
                     />
                     <TimePicker
-                      label="Heure fin"
+                      label="Heure de fin"
                       value={heureFin}
                       onChange={setHeureFin}
                       slotProps={{ textField: { fullWidth: true } }}
@@ -380,6 +408,7 @@ export default function MesPrestations() {
                     fullWidth
                     multiline
                     rows={2}
+                    placeholder="Informations complémentaires..."
                   />
                 </Box>
               </Box>
@@ -387,13 +416,13 @@ export default function MesPrestations() {
           </DialogContent>
           <DialogActions>
             <Button onClick={() => setPlanifOpen(false)}>Annuler</Button>
-            <Button 
-              variant="contained" 
+            <Button
+              variant="contained"
               onClick={handlePlanifier}
               disabled={!datePlanifiee || planifLoading}
               startIcon={planifLoading ? <CircularProgress size={16} /> : <EventIcon />}
             >
-              Planifier
+              {selectedPrestation?.statut === 'a_planifier' ? 'Planifier' : 'Enregistrer'}
             </Button>
           </DialogActions>
         </Dialog>

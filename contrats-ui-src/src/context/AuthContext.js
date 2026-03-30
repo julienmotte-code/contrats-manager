@@ -3,11 +3,37 @@ import { authAPI } from '../services/api';
 
 const AuthContext = createContext(null);
 
+// Droits par défaut selon le rôle
+const getDroitsByRole = (role) => {
+  switch (role) {
+    case 'ADMIN':
+      return {
+        contrats_ecriture: true, facturation: true, indices: true, commandes: true,
+        parametres: true, utilisateurs: true, formateurs: true, toutes_prestations: true
+      };
+    case 'GESTIONNAIRE':
+      return {
+        contrats_ecriture: true, facturation: true, indices: true, commandes: true,
+        parametres: false, utilisateurs: false, formateurs: true, toutes_prestations: true
+      };
+    case 'FORMATEUR':
+      return {
+        contrats_ecriture: false, facturation: false, indices: false, commandes: false,
+        parametres: false, utilisateurs: false, formateurs: false, toutes_prestations: false
+      };
+    default:
+      return {
+        contrats_ecriture: false, facturation: false, indices: false, commandes: false,
+        parametres: false, utilisateurs: false, formateurs: false, toutes_prestations: false
+      };
+  }
+};
+
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [droits, setDroits] = useState({
     contrats_ecriture: true, facturation: true, indices: true, commandes: true,
-    parametres: true, utilisateurs: true
+    parametres: true, utilisateurs: true, formateurs: true, toutes_prestations: true
   });
   const [loading, setLoading] = useState(true);
 
@@ -15,7 +41,10 @@ export function AuthProvider({ children }) {
     const token = localStorage.getItem('token');
     if (token) {
       authAPI.me()
-        .then(r => setUser(r.data))
+        .then(r => {
+          setUser(r.data);
+          setDroits(getDroitsByRole(r.data.role));
+        })
         .catch(() => localStorage.removeItem('token'))
         .finally(() => setLoading(false));
     } else {
@@ -26,7 +55,14 @@ export function AuthProvider({ children }) {
   const login = async (username, password) => {
     const r = await authAPI.login(username, password);
     localStorage.setItem('token', r.data.access_token);
-    setUser({ login: username, nom_complet: r.data.nom_complet, role: r.data.role });
+    const userData = { 
+      login: username, 
+      nom_complet: r.data.nom_complet, 
+      role: r.data.role,
+      formateur_id: r.data.formateur_id
+    };
+    setUser(userData);
+    setDroits(getDroitsByRole(r.data.role));
     return r.data;
   };
 

@@ -6,10 +6,10 @@ const MENU_COMPLET = [
   { path: '/', label: 'Tableau de bord', icon: '🏠', droit: null },
   { type: 'separator', label: 'Commandes' },
   { path: '/commandes/nouvelles', label: 'Nouvelles commandes', icon: '🆕', droit: 'commandes' },
-  { path: '/commandes/a-planifier', label: 'À planifier', icon: '📅', droit: 'commandes' },
+  { path: '/commandes/a-planifier', label: 'À planifier', icon: '📅', droit: 'formateurs' },
   { path: '/commandes/planifiees', label: 'Planifiées', icon: '✅', droit: 'commandes' },
   { path: '/commandes/a-traiter', label: 'À traiter', icon: '🛒', droit: 'commandes' },
-  { path: '/mes-prestations', label: 'Mes prestations', icon: '📋', droit: 'commandes' },
+  { path: '/mes-prestations', label: 'Mes prestations', icon: '📋', droit: null, forFormateur: true },
   { type: 'separator', label: 'Contrats' },
   { path: '/contrats', label: 'Liste des contrats', icon: '📄', droit: null },
   { path: '/contrats/tunnel?mode=nouveau', label: 'Nouveau contrat', icon: '➕', droit: 'contrats_ecriture' },
@@ -26,13 +26,37 @@ const MENU_COMPLET = [
   { path: '/utilisateurs', label: 'Utilisateurs', icon: '👥', droit: 'utilisateurs' },
 ];
 
+// Menu limité pour les formateurs
+const MENU_FORMATEUR = [
+  { path: '/', label: 'Tableau de bord', icon: '🏠', droit: null },
+  { type: 'separator', label: 'Mes activités' },
+  { path: '/mes-prestations', label: 'Mes prestations', icon: '📋', droit: null },
+];
+
 export default function Layout({ children }) {
   const { user, droits, logout } = useAuth();
   const location = useLocation();
 
-  const menu = MENU_COMPLET.filter(item => {
+  // Menu selon le rôle
+  const menuSource = user?.role === 'FORMATEUR' ? MENU_FORMATEUR : MENU_COMPLET;
+
+  const menu = menuSource.filter(item => {
     if (item.type === 'separator') return true;
+    // Masquer "Mes prestations" pour non-formateurs sans formateur_id dans le menu complet
+    if (item.forFormateur && !user?.formateur_id && user?.role !== 'FORMATEUR') return false;
     return !item.droit || (droits && droits[item.droit]);
+  });
+
+  // Supprimer les séparateurs consécutifs ou en fin de liste
+  const cleanMenu = menu.filter((item, idx, arr) => {
+    if (item.type !== 'separator') return true;
+    // Supprimer si c'est le dernier élément
+    if (idx === arr.length - 1) return false;
+    // Supprimer si le suivant est aussi un séparateur
+    if (arr[idx + 1]?.type === 'separator') return false;
+    // Supprimer si c'est le premier élément
+    if (idx === 0) return false;
+    return true;
   });
 
   return (
@@ -44,7 +68,7 @@ export default function Layout({ children }) {
         </div>
 
         <nav className="flex-1 p-4 space-y-1 overflow-y-auto">
-          {menu.map((item, idx) => (
+          {cleanMenu.map((item, idx) => (
             item.type === 'separator' ? (
               <div key={idx} className="pt-4 pb-2 px-3">
                 <span className="text-xs font-semibold text-blue-400 uppercase tracking-wider">
@@ -83,7 +107,7 @@ export default function Layout({ children }) {
         </div>
       </aside>
 
-      <main className="ml-64 flex-1 p-8 min-h-screen">
+      <main className="flex-1 ml-64 p-6">
         {children}
       </main>
     </div>
