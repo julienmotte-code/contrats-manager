@@ -177,6 +177,7 @@ export default function CommandesAPlanifier() {
               <TableCell>Client</TableCell>
               <TableCell>Date acceptation</TableCell>
               <TableCell align="center">Prestations</TableCell>
+              <TableCell>Formateur</TableCell>
               <TableCell align="right">Montant TTC</TableCell>
               <TableCell align="center">PDF</TableCell>
               <TableCell align="center">Actions</TableCell>
