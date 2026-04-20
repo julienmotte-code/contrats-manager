@@ -62,13 +62,22 @@ export default function CommandesTerminees() {
     window.open(`/api/commandes/${commande.id}/pdf`, '_blank');
   };
 
-  const handleMarquerFacturee = async (commande) => {
+  const [facturant, setFacturant] = useState(null);
+
+  const handleFacturer = async (commande) => {
+    if (!commande.karlia_customer_id) {
+      setError('Client Karlia non renseigné - impossible de facturer');
+      return;
+    }
+    setFacturant(commande.id);
     try {
-      await api.put(`/api/commandes/${commande.id}`, { statut: 'facturee' });
-      setSuccess('Commande marquée comme facturée');
+      const res = await api.post(`/api/commandes/${commande.id}/facturer`);
+      setSuccess(res.data.message || 'Facture émise avec succès');
       fetchCommandes();
     } catch (err) {
-      setError('Erreur lors de la mise à jour');
+      setError(err.response?.data?.detail || 'Erreur lors de la facturation');
+    } finally {
+      setFacturant(null);
     }
   };
 
@@ -173,8 +182,8 @@ export default function CommandesTerminees() {
                         <ViewIcon />
                       </IconButton>
                     </Tooltip>
-                    <Tooltip title="Marquer facturée">
-                      <IconButton size="small" color="success" onClick={() => handleMarquerFacturee(cmd)}>
+                    <Tooltip title="Émettre facture Karlia">
+                      <IconButton size="small" color="success" onClick={() => handleFacturer(cmd)} disabled={facturant === cmd.id}>
                         <FactureIcon />
                       </IconButton>
                     </Tooltip>

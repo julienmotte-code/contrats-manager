@@ -26,7 +26,8 @@ import base64
 import logging
 
 from app.core.database import get_db
-from app.models.models import Commande, CommandeLigne, Prestation
+from app.services.karlia_service import karlia
+from app.models.models import Commande, CommandeLigne, Prestation, Contrat
 from app.services.karlia_devis_service import karlia_devis_service
 
 logger = logging.getLogger(__name__)
@@ -389,7 +390,6 @@ async def lier_contrat_commande(commande_id: int, contrat_id: str, db: Session =
     if not commande:
         raise HTTPException(status_code=404, detail="Commande non trouvée")
     
-    from app.models.models import Contrat
     contrat = db.query(Contrat).filter(Contrat.id == contrat_id).first()
     if not contrat:
         raise HTTPException(status_code=404, detail="Contrat non trouvé")
@@ -431,3 +431,63 @@ async def get_commande_pdf(commande_id: int, db: Session = Depends(get_db)):
         media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'}
     )
+
+@router.post("/{commande_id}/facturer")
+async def facturer_commande(
+    commande_id: int,
+    db: Session = Depends(get_db)
+):
+    """Émet une facture Karlia pour une commande terminée."""
+    commande = db.query(Commande).options(
+        joinedload(Commande.lignes)
+    ).filter(Commande.id == commande_id).first()
+    
+    if not commande:
+        raise HTTPException(status_code=404, detail="Commande non trouvée")
+    
+    if commande.statut != "deployee":
+        raise HTTPException(status_code=400, detail="Seules les commandes terminées peuvent être facturées")
+    
+    if not commande.karlia_customer_id:
+        raise HTTPException(status_code=400, detail="Client Karlia non renseigné sur cette commande")
+    
+    # Préparer les lignes pour Karlia
+    lignes_karlia = []
+    for ligne in commande.lignes:
+        lignes_karlia.append({
+            "id_product": ligne.karlia_product_id,
+            "quantity": float(ligne.quantite or 1),
+            "unit_price": float(ligne.prix_unitaire_ht or 0),
+            "vat_rate": float(ligne.taux_tva or 20),
+            "description": ligne.designation or ""
+        })
+    
+    if not lignes_karlia:
+        raise HTTPException(status_code=400, detail="Aucune ligne à facturer")
+    
+    try:
+        # Créer la facture dans Karlia
+        result = await karlia.creer_facture(
+            client_karlia_id=str(commande.karlia_customer_id),
+            lignes=lignes_karlia,
+            reference_contrat=commande.reference_devis or f"CMD-{commande.id}",
+            date_echeance=date.today(),
+            montant_ht=float(commande.montant_ht or 0),
+            description=f"Facturation prestation - {commande.reference_devis}"
+        )
+        
+        # Mettre à jour la commande
+        commande.statut = "facturee"
+        commande.facture_karlia_id = str(result.get("id", ""))
+        commande.facture_karlia_ref = result.get("reference", "")
+        commande.updated_at = datetime.utcnow()
+        db.commit()
+        
+        return {
+            "success": True,
+            "message": f"Facture {result.get('reference', '')} émise avec succès",
+            "karlia_doc_id": result.get("id"),
+            "karlia_doc_ref": result.get("reference")
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erreur Karlia: {str(e)}")

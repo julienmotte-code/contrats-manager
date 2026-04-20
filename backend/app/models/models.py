@@ -331,6 +331,8 @@ class Commande(Base):
     created_by          = Column(Integer)
     updated_by          = Column(Integer)
     formateur_id        = Column(Integer, ForeignKey("formateurs.id"))
+    facture_karlia_id   = Column(String(50))
+    facture_karlia_ref  = Column(String(50))
 
     lignes  = relationship("CommandeLigne", back_populates="commande", cascade="all, delete-orphan")
     contrat = relationship("Contrat", foreign_keys=[contrat_id])
