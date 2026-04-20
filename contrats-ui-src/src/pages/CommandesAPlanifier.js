@@ -208,7 +208,8 @@ export default function CommandesAPlanifier() {
                   <TableCell align="center">
                     <Chip 
                       icon={<PrestationIcon sx={{ fontSize: 16 }} />}
-                      label={`${cmd.nb_lignes || '?'} prestation(s)`} 
+                      label={`${cmd.nb_prestations || 0} prestation(s)`}
+                      color={cmd.nb_prestations_attribuees === cmd.nb_prestations && cmd.nb_prestations > 0 ? "success" : cmd.nb_prestations_attribuees > 0 ? "warning" : "default"} 
                       size="small" 
                       color="primary"
                       variant="outlined"
@@ -359,7 +360,7 @@ export default function CommandesAPlanifier() {
                   </>
                 ) : (
                   <>
-                    <strong>{getNbPrestations(selectedCommande.lignes)} prestation(s)</strong> seront créées et attribuées au formateur sélectionné.
+                    <strong>{selectedCommande.nb_prestations || getNbPrestations(selectedCommande.lignes)} prestation(s)</strong> seront attribuées au formateur sélectionné.
                     Le formateur pourra ensuite planifier chaque prestation dans son agenda.
                   </>
                 )}

@@ -15,7 +15,7 @@ GET  /api/commandes/{id}/pdf          → Télécharger le PDF du devis
 """
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import or_
 from typing import Optional, List
 from pydantic import BaseModel
@@ -26,7 +26,7 @@ import base64
 import logging
 
 from app.core.database import get_db
-from app.models.models import Commande, CommandeLigne
+from app.models.models import Commande, CommandeLigne, Prestation
 from app.services.karlia_devis_service import karlia_devis_service
 
 logger = logging.getLogger(__name__)
@@ -80,6 +80,9 @@ class CommandeResponse(BaseModel):
     pdf_disponible: bool = False
     pdf_url: Optional[str] = None
     pdf_devis_nom: Optional[str] = None
+    nb_prestations: int = 0
+    nb_prestations_attribuees: int = 0
+    nb_prestations_planifiees: int = 0
     date_import: Optional[datetime] = None
     date_validation: Optional[datetime] = None
     lignes: List[CommandeLigneResponse] = []
@@ -128,6 +131,12 @@ class CommandePlanification(BaseModel):
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 def _commande_to_response(commande: Commande) -> CommandeResponse:
+    # Compter les prestations
+    prestations = commande.prestations if hasattr(commande, 'prestations') and commande.prestations else []
+    nb_prestations = len(prestations)
+    nb_attribuees = sum(1 for p in prestations if p.formateur_id is not None)
+    nb_planifiees = sum(1 for p in prestations if p.statut == 'planifiee' or p.statut == 'realisee')
+    
     return CommandeResponse(
         id=commande.id,
         karlia_document_id=commande.karlia_document_id,
@@ -154,6 +163,9 @@ def _commande_to_response(commande: Commande) -> CommandeResponse:
         pdf_disponible=bool(commande.pdf_url or commande.pdf_devis),
         pdf_url=commande.pdf_url,
         pdf_devis_nom=commande.pdf_devis_nom,
+        nb_prestations=nb_prestations,
+        nb_prestations_attribuees=nb_attribuees,
+        nb_prestations_planifiees=nb_planifiees,
         date_import=commande.date_import,
         date_validation=commande.date_validation,
         lignes=[CommandeLigneResponse.model_validate(l) for l in commande.lignes]
@@ -161,7 +173,7 @@ def _commande_to_response(commande: Commande) -> CommandeResponse:
 
 
 def _get_commandes_by_statut(db: Session, statut: str, page: int, page_size: int, search: Optional[str]) -> CommandeListResponse:
-    query = db.query(Commande).filter(Commande.statut == statut)
+    query = db.query(Commande).options(joinedload(Commande.lignes), joinedload(Commande.prestations), joinedload(Commande.formateur)).filter(Commande.statut == statut)
     if search:
         query = query.filter(or_(
             Commande.client_nom.ilike(f"%{search}%"),
