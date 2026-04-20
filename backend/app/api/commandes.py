@@ -83,6 +83,8 @@ class CommandeResponse(BaseModel):
     nb_prestations: int = 0
     nb_prestations_attribuees: int = 0
     nb_prestations_planifiees: int = 0
+    formateur_id: Optional[int] = None
+    formateur_nom: Optional[str] = None
     date_import: Optional[datetime] = None
     date_validation: Optional[datetime] = None
     lignes: List[CommandeLigneResponse] = []
@@ -166,6 +168,8 @@ def _commande_to_response(commande: Commande) -> CommandeResponse:
         nb_prestations=nb_prestations,
         nb_prestations_attribuees=nb_attribuees,
         nb_prestations_planifiees=nb_planifiees,
+        formateur_id=commande.formateur_id,
+        formateur_nom=f"{commande.formateur.prenom or ''} {commande.formateur.nom}".strip() if commande.formateur else None,
         date_import=commande.date_import,
         date_validation=commande.date_validation,
         lignes=[CommandeLigneResponse.model_validate(l) for l in commande.lignes]
