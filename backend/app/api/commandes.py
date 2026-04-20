@@ -257,6 +257,17 @@ async def get_commandes_planifiees(
     return _get_commandes_by_statut(db, "planifiee", page, page_size, search)
 
 
+@router.get("/terminees", response_model=CommandeListResponse)
+async def get_commandes_terminees(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    search: Optional[str] = None,
+    db: Session = Depends(get_db)
+):
+    """Liste des commandes terminées (prestations réalisées, à facturer)."""
+    return _get_commandes_by_statut(db, "deployee", page, page_size, search)
+
+
 @router.get("/a-commander", response_model=CommandeListResponse)
 async def get_commandes_a_commander(
     page: int = Query(1, ge=1),
