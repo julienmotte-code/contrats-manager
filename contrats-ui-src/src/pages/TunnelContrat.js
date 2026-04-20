@@ -149,6 +149,17 @@ function ArticlesEditor({ articles, setArticles }) {
             </span>
             {i > 0 && <button onClick={() => remove(i)} className="text-red-500 text-xs">✕ Supprimer</button>}
           </div>
+                    {catalogue.length > 0 && (
+            <select className="input text-sm mb-2 font-medium border-blue-300 bg-white" value={art.article_karlia_id || ''}
+              onChange={e => { const a = catalogue.find(x => String(x.karlia_id) === e.target.value); if (a) selectionnerCatalogue(i, a); }}>
+              <option value="">📦 Choisir un article depuis Karlia...</option>
+              {catalogue.map(a => (
+                <option key={a.karlia_id} value={String(a.karlia_id)}>
+                  {a.designation} — {a.prix_unitaire_ht || '?'} € HT
+                </option>
+              ))}
+            </select>
+          )}
           <div className="grid grid-cols-2 gap-2">
             <div className="col-span-2">
               <input className="input text-sm" placeholder="Désignation *" value={art.designation}
@@ -156,7 +167,8 @@ function ArticlesEditor({ articles, setArticles }) {
             </div>
             <div>
               <input className="input text-sm" placeholder="ID Karlia *" value={art.article_karlia_id || ''}
-                onChange={e => update(i, 'article_karlia_id', e.target.value)} />
+                onChange={e => update(i, 'article_karlia_id', e.target.value)} readOnly 
+                title="Sélectionnez depuis le catalogue ci-dessus" />
             </div>
             <div>
               <input className="input text-sm" placeholder="Référence" value={art.reference || ''}
@@ -178,17 +190,6 @@ function ArticlesEditor({ articles, setArticles }) {
               </select>
             </div>
           </div>
-          {catalogue.length > 0 && (
-            <select className="input text-xs text-gray-500 mt-2" value=""
-              onChange={e => { const a = catalogue.find(x => String(x.karlia_id) === e.target.value); if (a) selectionnerCatalogue(i, a); }}>
-              <option value="">— Choisir depuis le catalogue Karlia —</option>
-              {catalogue.map(a => (
-                <option key={a.karlia_id} value={String(a.karlia_id)}>
-                  {a.designation} — {a.prix_unitaire_ht || '?'} €
-                </option>
-              ))}
-            </select>
-          )}
         </div>
       ))}
       <button onClick={addArticle} className="btn-secondary text-sm w-full">+ Ajouter un article</button>
