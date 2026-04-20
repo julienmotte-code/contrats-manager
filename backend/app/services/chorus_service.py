@@ -12,11 +12,11 @@ from decimal import Decimal
 logger = logging.getLogger(__name__)
 
 # URLs des environnements
-PISTE_SANDBOX_OAUTH = "https://sandbox-oauth.aife.economie.gouv.fr/api/oauth/token"
-PISTE_PROD_OAUTH = "https://oauth.aife.economie.gouv.fr/api/oauth/token"
+PISTE_SANDBOX_OAUTH = "https://sandbox-oauth.piste.gouv.fr/api/oauth/token"
+PISTE_PROD_OAUTH = "https://oauth.piste.gouv.fr/api/oauth/token"
 
-CHORUS_SANDBOX_API = "https://sandbox-api.aife.economie.gouv.fr/cpro/factures/v1"
-CHORUS_PROD_API = "https://api.aife.economie.gouv.fr/cpro/factures/v1"
+CHORUS_SANDBOX_API = "https://sandbox-api.piste.gouv.fr/cpro/factures/v1"
+CHORUS_PROD_API = "https://api.piste.gouv.fr/cpro/factures/v1"
 
 
 class ChorusError(Exception):
