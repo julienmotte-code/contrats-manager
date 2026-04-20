@@ -365,10 +365,12 @@ async def synchroniser_clients(db: Session = Depends(get_db)):
                     for k, v in data.items():
                         setattr(existing, k, v)
                 else:
-                    # Vérifier aussi par numero_client pour éviter les doublons
-                    existing_num = db.query(ClientCache).filter(
-                        ClientCache.numero_client == data["numero_client"]
-                    ).first()
+                    # Vérifier aussi par numero_client pour éviter les doublons (seulement si non vide)
+                    existing_num = None
+                    if data["numero_client"]:
+                        existing_num = db.query(ClientCache).filter(
+                            ClientCache.numero_client == data["numero_client"]
+                        ).first()
                     if existing_num:
                         for k, v in data.items():
                             setattr(existing_num, k, v)
