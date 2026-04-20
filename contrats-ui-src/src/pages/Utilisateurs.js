@@ -4,18 +4,23 @@ import toast from 'react-hot-toast';
 
 const ROLES = [
   { value: 'ADMIN', label: 'Administrateur', color: 'bg-red-100 text-red-800', description: 'Accès total + gestion utilisateurs' },
-  { value: 'GESTIONNAIRE', label: 'Gestionnaire', color: 'bg-blue-100 text-blue-800', description: 'Contrats + facturation + indices' },
+  { value: 'GESTIONNAIRE', label: 'Gestionnaire', color: 'bg-blue-100 text-blue-800', description: 'Contrats + facturation + commandes' },
+  { value: 'FORMATEUR', label: 'Formateur', color: 'bg-green-100 text-green-800', description: 'Accès limité à ses prestations' },
   { value: 'CONSULTANT', label: 'Consultant', color: 'bg-gray-100 text-gray-700', description: 'Lecture seule' },
 ];
 
-const roleInfo = (role) => ROLES.find(r => r.value === role) || ROLES[2];
+const roleInfo = (role) => ROLES.find(r => r.value === role) || ROLES[3];
 
 export default function Utilisateurs() {
   const [users, setUsers] = useState([]);
+  const [formateurs, setFormateurs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [editUser, setEditUser] = useState(null);
-  const [form, setForm] = useState({ login: '', email: '', nom_complet: '', role: 'CONSULTANT', password: '', actif: true });
+  const [form, setForm] = useState({ 
+    login: '', email: '', nom_complet: '', role: 'CONSULTANT', 
+    password: '', actif: true, formateur_id: '' 
+  });
   const [saving, setSaving] = useState(false);
 
   const charger = () => {
@@ -23,15 +28,30 @@ export default function Utilisateurs() {
     api.get('/api/utilisateurs').then(r => setUsers(r.data.data || [])).finally(() => setLoading(false));
   };
 
-  useEffect(() => { charger(); }, []);
+  const chargerFormateurs = () => {
+    api.get('/api/formateurs?actif_only=true').then(r => setFormateurs(r.data.formateurs || []));
+  };
+
+  useEffect(() => { 
+    charger(); 
+    chargerFormateurs();
+  }, []);
 
   const ouvrir = (user = null) => {
     if (user) {
       setEditUser(user);
-      setForm({ login: user.login, email: user.email, nom_complet: user.nom_complet || '', role: user.role, password: '', actif: user.actif });
+      setForm({ 
+        login: user.login, 
+        email: user.email, 
+        nom_complet: user.nom_complet || '', 
+        role: user.role, 
+        password: '', 
+        actif: user.actif,
+        formateur_id: user.formateur_id || ''
+      });
     } else {
       setEditUser(null);
-      setForm({ login: '', email: '', nom_complet: '', role: 'CONSULTANT', password: '', actif: true });
+      setForm({ login: '', email: '', nom_complet: '', role: 'CONSULTANT', password: '', actif: true, formateur_id: '' });
     }
     setShowForm(true);
   };
@@ -45,13 +65,21 @@ export default function Utilisateurs() {
       toast.error('Login obligatoire');
       return;
     }
+    if (form.role === 'FORMATEUR' && !form.formateur_id) {
+      toast.error('Veuillez sélectionner un formateur associé');
+      return;
+    }
     setSaving(true);
     try {
+      const payload = {
+        ...form,
+        formateur_id: form.formateur_id ? parseInt(form.formateur_id) : null
+      };
       if (editUser) {
-        await api.put(`/api/utilisateurs/${editUser.id}`, form);
+        await api.put(`/api/utilisateurs/${editUser.id}`, payload);
         toast.success('Utilisateur mis à jour');
       } else {
-        await api.post('/api/utilisateurs', form);
+        await api.post('/api/utilisateurs', payload);
         toast.success('Utilisateur créé');
       }
       setShowForm(false);
@@ -78,7 +106,7 @@ export default function Utilisateurs() {
   };
 
   return (
-    <div className="space-y-6 max-w-4xl">
+    <div className="space-y-6 max-w-5xl">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Utilisateurs</h1>
@@ -88,7 +116,7 @@ export default function Utilisateurs() {
       </div>
 
       {/* Légende des rôles */}
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-4 gap-4">
         {ROLES.map(r => (
           <div key={r.value} className="card p-3">
             <span className={`px-2 py-0.5 rounded text-xs font-medium ${r.color}`}>{r.label}</span>
@@ -123,10 +151,35 @@ export default function Utilisateurs() {
             </div>
             <div>
               <label className="label">Rôle *</label>
-              <select className="input" value={form.role} onChange={e => setForm(f => ({ ...f, role: e.target.value }))}>
+              <select className="input" value={form.role} onChange={e => setForm(f => ({ ...f, role: e.target.value, formateur_id: e.target.value !== 'FORMATEUR' ? '' : f.formateur_id }))}>
                 {ROLES.map(r => <option key={r.value} value={r.value}>{r.label}</option>)}
               </select>
             </div>
+            
+            {/* Sélecteur de formateur - visible pour tous les rôles mais obligatoire pour FORMATEUR */}
+            <div>
+              <label className="label">
+                Formateur associé {form.role === 'FORMATEUR' && <span className="text-red-500">*</span>}
+              </label>
+              <select 
+                className="input" 
+                value={form.formateur_id} 
+                onChange={e => setForm(f => ({ ...f, formateur_id: e.target.value }))}
+              >
+                <option value="">— Aucun —</option>
+                {formateurs.map(f => (
+                  <option key={f.id} value={f.id}>
+                    {f.prenom} {f.nom}
+                  </option>
+                ))}
+              </select>
+              <p className="text-xs text-gray-400 mt-1">
+                {form.role === 'FORMATEUR' 
+                  ? 'Obligatoire : détermine les prestations visibles' 
+                  : 'Optionnel : permet d\'accéder à "Mes prestations"'}
+              </p>
+            </div>
+
             <div>
               <label className="label">{editUser ? 'Nouveau mot de passe (laisser vide = inchangé)' : 'Mot de passe *'}</label>
               <input className="input" type="password" value={form.password}
@@ -160,6 +213,7 @@ export default function Utilisateurs() {
                 <th className="pb-3">Utilisateur</th>
                 <th className="pb-3">Email</th>
                 <th className="pb-3">Rôle</th>
+                <th className="pb-3">Formateur</th>
                 <th className="pb-3">Statut</th>
                 <th className="pb-3">Dernière connexion</th>
                 <th className="pb-3">Actions</th>
@@ -177,6 +231,9 @@ export default function Utilisateurs() {
                     <td className="py-3 text-gray-600">{u.email}</td>
                     <td className="py-3">
                       <span className={`px-2 py-0.5 rounded text-xs font-medium ${ri.color}`}>{ri.label}</span>
+                    </td>
+                    <td className="py-3 text-gray-600">
+                      {u.formateur_nom || '—'}
                     </td>
                     <td className="py-3">
                       <button onClick={() => toggleActif(u)}
