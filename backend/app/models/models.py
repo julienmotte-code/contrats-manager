@@ -302,6 +302,7 @@ class Commande(Base):
     id                  = Column(Integer, primary_key=True, index=True)
     karlia_document_id  = Column(Integer, unique=True, nullable=False)
     karlia_customer_id  = Column(Integer)
+    karlia_opportunity_id = Column(Integer)
     reference_devis     = Column(String(100))
     client_nom          = Column(String(255))
     client_email        = Column(String(255))

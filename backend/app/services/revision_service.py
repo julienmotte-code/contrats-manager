@@ -30,6 +30,7 @@ FAMILLES_CONTRAT = [
     {"code": "MAINTENANCE",    "label": "Maintenance matériel",   "revision": "SYNTEC_AOUT",    "description": "Révision annuelle Syntec Août"},
     {"code": "ASSISTANCE_TEL", "label": "Assistance Téléphonique","revision": "SYNTEC_AOUT",    "description": "Révision annuelle Syntec Août"},
     {"code": "KIWI_BACKUP",    "label": "Kiwi Backup",            "revision": "AUCUNE",         "description": "Prix fixe — pas de révision"},
+    {"code": "AUTRE",          "label": "Autre",                  "revision": "AUCUNE",         "description": "Prix fixe — pas de révision"},
 ]
 
 REVISION_PAR_FAMILLE = {f["code"]: f["revision"] for f in FAMILLES_CONTRAT}

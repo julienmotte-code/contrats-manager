@@ -59,6 +59,7 @@ class CommandeResponse(BaseModel):
     id: int
     karlia_document_id: int
     karlia_customer_id: Optional[int] = None
+    karlia_opportunity_id: Optional[int] = None
     reference_devis: Optional[str] = None
     client_nom: Optional[str] = None
     client_email: Optional[str] = None
@@ -115,6 +116,8 @@ class SyncDevisResult(BaseModel):
     success: bool
     nouveaux_devis: int = 0
     devis_mis_a_jour: int = 0
+    devis_ignores: int = 0
+    opportunites_marquees: int = 0
     erreurs: List[str] = []
     message: str = ""
 
