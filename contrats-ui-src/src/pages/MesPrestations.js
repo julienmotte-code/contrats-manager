@@ -37,32 +37,34 @@ export default function MesPrestations() {
   const [datePlanifiee, setDatePlanifiee] = useState(null);
   const [heureDebut, setHeureDebut] = useState(null);
   const [heureFin, setHeureFin] = useState(null);
+  const [agendaFormateurId, setAgendaFormateurId] = useState('');
   const [lieu, setLieu] = useState('');
   const [notes, setNotes] = useState('');
   const [planifLoading, setPlanifLoading] = useState(false);
 
   // Peut voir tous les formateurs ?
   const canViewAllFormateurs = droits?.toutes_prestations || user?.role === 'ADMIN' || user?.role === 'GESTIONNAIRE';
+  const isTechnicien = user?.role === 'TECHNICIEN';
 
   // Charger les formateurs pour le sélecteur (admin/gestionnaire uniquement)
   useEffect(() => {
     const fetchFormateurs = async () => {
       try {
-        if (canViewAllFormateurs) {
+        if (canViewAllFormateurs || isTechnicien) {
           const res = await api.get('/api/formateurs?actif_only=true');
-          setFormateurs(res.data.formateurs || []);
-          
-          // Si l'utilisateur a un formateur_id, le sélectionner par défaut
+          const liste = res.data.formateurs || [];
+          setFormateurs(liste);
+
           if (user?.formateur_id) {
-            const monFormateur = res.data.formateurs.find(f => f.id === user.formateur_id);
+            const monFormateur = liste.find(f => f.id === user.formateur_id);
             if (monFormateur) {
               setSelectedFormateur(monFormateur);
               return;
             }
           }
-          // Sinon premier formateur
-          if (res.data.formateurs?.length > 0) {
-            setSelectedFormateur(res.data.formateurs[0]);
+
+          if (liste.length > 0) {
+            setSelectedFormateur(liste[0]);
           }
         } else if (user?.formateur_id) {
           // Formateur : charger uniquement ses infos
@@ -72,13 +74,13 @@ export default function MesPrestations() {
         }
       } catch (err) {
         console.error('Erreur chargement formateurs:', err);
-        if (!canViewAllFormateurs) {
+        if (!canViewAllFormateurs && !isTechnicien) {
           setError('Aucun profil formateur associé à votre compte');
         }
       }
     };
     fetchFormateurs();
-  }, [user, canViewAllFormateurs]);
+  }, [user, canViewAllFormateurs, isTechnicien]);
 
   const fetchPrestations = useCallback(async () => {
     if (!selectedFormateur) return;
@@ -109,6 +111,7 @@ export default function MesPrestations() {
     setDatePlanifiee(prestation.date_planifiee ? parseISO(prestation.date_planifiee) : null);
     setHeureDebut(prestation.heure_debut ? parseISO(`2000-01-01T${prestation.heure_debut}`) : null);
     setHeureFin(prestation.heure_fin ? parseISO(`2000-01-01T${prestation.heure_fin}`) : null);
+    setAgendaFormateurId(prestation.agenda_formateur_id || prestation.formateur_id || '');
     setLieu(prestation.lieu || '');
     setNotes(prestation.notes || '');
     setPlanifOpen(true);
@@ -120,6 +123,7 @@ export default function MesPrestations() {
     try {
       await api.post(`/api/prestations/${selectedPrestation.id}/planifier`, {
         date_planifiee: format(datePlanifiee, 'yyyy-MM-dd'),
+        agenda_formateur_id: agendaFormateurId || null,
         heure_debut: heureDebut ? format(heureDebut, 'HH:mm:ss') : null,
         heure_fin: heureFin ? format(heureFin, 'HH:mm:ss') : null,
         lieu,
@@ -392,6 +396,21 @@ export default function MesPrestations() {
                       slotProps={{ textField: { fullWidth: true } }}
                     />
                   </Box>
+
+                  <FormControl fullWidth>
+                    <InputLabel>Agenda cible</InputLabel>
+                    <Select
+                      value={agendaFormateurId}
+                      label="Agenda cible"
+                      onChange={(e) => setAgendaFormateurId(e.target.value)}
+                    >
+                      {formateurs.map(f => (
+                        <MenuItem key={f.id} value={f.id}>
+                          {f.prenom} {f.nom}
+                        </MenuItem>
+                      ))}
+                    </Select>
+                  </FormControl>
 
                   <TextField
                     label="Lieu"
