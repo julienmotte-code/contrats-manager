@@ -9,7 +9,6 @@ const MENU_COMPLET = [
   { path: '/commandes/a-planifier', label: 'À planifier', icon: '📅', droit: 'formateurs' },
   { path: '/commandes/planifiees', label: 'Planifiées', icon: '✅', droit: 'commandes' },
   { path: '/commandes/terminees', label: 'Terminées', icon: '🏁', droit: 'commandes' },
-  { path: '/commandes/a-traiter', label: 'À traiter', icon: '🛒', droit: 'commandes' },
   { path: '/mes-prestations', label: 'Mes prestations', icon: '📋', droit: null, forFormateur: true },
   { type: 'separator', label: 'Contrats' },
   { path: '/contrats', label: 'Liste des contrats', icon: '📄', droit: null },

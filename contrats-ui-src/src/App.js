@@ -20,7 +20,6 @@ import NouvellesCommandes from './pages/NouvellesCommandes';
 import CommandesAPlanifier from './pages/CommandesAPlanifier';
 import CommandesPlanifiees from './pages/CommandesPlanifiees';
 import CommandesTerminees from './pages/CommandesTerminees';
-import CommandesATraiter from './pages/CommandesATraiter';
 import ContratsACreer from './pages/ContratsACreer';
 import Formateurs from './pages/Formateurs';
 import MesPrestations from './pages/MesPrestations';
@@ -58,7 +57,6 @@ function AppRoutes() {
       <Route path="/commandes/a-planifier" element={<PrivateRoute><CommandesAPlanifier /></PrivateRoute>} />
       <Route path="/commandes/planifiees" element={<PrivateRoute><CommandesPlanifiees /></PrivateRoute>} />
       <Route path="/commandes/terminees" element={<PrivateRoute><CommandesTerminees /></PrivateRoute>} />
-      <Route path="/commandes/a-traiter" element={<PrivateRoute><CommandesATraiter /></PrivateRoute>} />
       <Route path="/contrats-a-creer" element={<PrivateRoute><ContratsACreer /></PrivateRoute>} />
       <Route path="/formateurs" element={<PrivateRoute><Formateurs /></PrivateRoute>} />
       <Route path="/mes-prestations" element={<PrivateRoute><MesPrestations /></PrivateRoute>} />

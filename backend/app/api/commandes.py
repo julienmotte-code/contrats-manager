@@ -107,7 +107,7 @@ class CommandeStats(BaseModel):
     nouvelles: int = 0
     a_planifier: int = 0
     planifiees: int = 0
-    a_commander: int = 0
+
     contrats_a_creer: int = 0
     total: int = 0
 
@@ -219,7 +219,6 @@ async def get_commandes_stats(db: Session = Depends(get_db)):
         nouvelles=db.query(Commande).filter(Commande.statut == "nouvelle").count(),
         a_planifier=db.query(Commande).filter(Commande.statut == "a_planifier").count(),
         planifiees=db.query(Commande).filter(Commande.statut == "planifiee").count(),
-        a_commander=db.query(Commande).filter(Commande.statut == "a_commander").count(),
         contrats_a_creer=db.query(Commande).filter(
             Commande.necessite_contrat == True,
             Commande.contrat_id == None
@@ -272,15 +271,6 @@ async def get_commandes_terminees(
     return _get_commandes_by_statut(db, "deployee", page, page_size, search)
 
 
-@router.get("/a-commander", response_model=CommandeListResponse)
-async def get_commandes_a_commander(
-    page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
-    search: Optional[str] = None,
-    db: Session = Depends(get_db)
-):
-    """Liste des commandes à traiter (sans planification)."""
-    return _get_commandes_by_statut(db, "a_commander", page, page_size, search)
 
 
 @router.get("/contrats-a-creer", response_model=CommandeListResponse)
@@ -339,7 +329,7 @@ async def valider_commande(
     commande.type_traitement = validation.type_traitement
     commande.necessite_contrat = validation.necessite_contrat
     commande.date_validation = datetime.utcnow()
-    commande.statut = "a_planifier" if validation.type_traitement == "a_planifier" else "a_commander"
+    commande.statut = "a_planifier" if validation.type_traitement == "a_planifier" else "deployee"
     
     db.commit()
     db.refresh(commande)
