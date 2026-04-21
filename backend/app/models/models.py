@@ -460,7 +460,8 @@ class Formateur(Base):
     updated_at   = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     commandes   = relationship("Commande", back_populates="formateur")
-    prestations = relationship("Prestation", back_populates="formateur")
+    prestations = relationship("Prestation", back_populates="formateur", foreign_keys="Prestation.formateur_id")
+    prestations_agenda = relationship("Prestation", back_populates="agenda_formateur", foreign_keys="Prestation.agenda_formateur_id")
 
 
 class Prestation(Base):
@@ -471,6 +472,7 @@ class Prestation(Base):
     commande_id       = Column(Integer, ForeignKey("commandes.id", ondelete="CASCADE"), nullable=False)
     commande_ligne_id = Column(Integer, ForeignKey("commande_lignes.id", ondelete="SET NULL"))
     formateur_id      = Column(Integer, ForeignKey("formateurs.id"))
+    agenda_formateur_id = Column(Integer, ForeignKey("formateurs.id"))
     designation       = Column(String(500), nullable=False)
     description       = Column(Text)
     duree_jours       = Column(Numeric(5, 2), default=1)
@@ -487,4 +489,5 @@ class Prestation(Base):
 
     commande       = relationship("Commande", back_populates="prestations")
     commande_ligne = relationship("CommandeLigne", back_populates="prestations")
-    formateur      = relationship("Formateur", back_populates="prestations")
+    formateur      = relationship("Formateur", back_populates="prestations", foreign_keys=[formateur_id])
+    agenda_formateur = relationship("Formateur", back_populates="prestations_agenda", foreign_keys=[agenda_formateur_id])

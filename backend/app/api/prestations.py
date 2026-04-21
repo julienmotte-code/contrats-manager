@@ -8,7 +8,8 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel
 
 from app.core.database import get_db
-from app.models.models import Prestation, Commande, CommandeLigne, Formateur
+from app.models.models import Prestation, Commande, CommandeLigne, Formateur, Utilisateur
+from app.api.auth import get_current_user
 
 router = APIRouter(tags=["prestations"])
 
@@ -38,6 +39,7 @@ class PrestationUpdate(BaseModel):
 
 class PrestationPlanifier(BaseModel):
     date_planifiee: date
+    agenda_formateur_id: Optional[int] = None
     heure_debut: Optional[time] = None
     heure_fin: Optional[time] = None
     lieu: Optional[str] = None
@@ -48,6 +50,7 @@ class PrestationResponse(BaseModel):
     commande_id: int
     commande_ligne_id: Optional[int]
     formateur_id: Optional[int]
+    agenda_formateur_id: Optional[int] = None
     formateur_nom: Optional[str] = None
     designation: str
     description: Optional[str]
@@ -88,6 +91,7 @@ def _prestation_to_response(prestation: Prestation, db: Session) -> PrestationRe
         commande_id=prestation.commande_id,
         commande_ligne_id=prestation.commande_ligne_id,
         formateur_id=prestation.formateur_id,
+        agenda_formateur_id=prestation.agenda_formateur_id,
         formateur_nom=formateur_nom,
         designation=prestation.designation,
         description=prestation.description,
@@ -284,14 +288,41 @@ async def update_prestation(
 async def planifier_prestation(
     prestation_id: int,
     data: PrestationPlanifier,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: Utilisateur = Depends(get_current_user)
 ):
     """Planifie une prestation (définit la date)."""
     prestation = db.query(Prestation).filter(Prestation.id == prestation_id).first()
     if not prestation:
         raise HTTPException(status_code=404, detail="Prestation non trouvée")
     
+    agenda_cible_id = data.agenda_formateur_id or prestation.formateur_id
+    if not agenda_cible_id:
+        raise HTTPException(status_code=400, detail="Aucun agenda cible défini")
+
+    agenda_cible = db.query(Formateur).filter(
+        Formateur.id == agenda_cible_id,
+        Formateur.actif == True
+    ).first()
+    if not agenda_cible:
+        raise HTTPException(status_code=400, detail="Agenda cible introuvable ou inactif")
+
+    if current_user.role == "FORMATEUR":
+        if not current_user.formateur_id or prestation.formateur_id != current_user.formateur_id:
+            raise HTTPException(status_code=403, detail="Vous ne pouvez planifier que vos prestations")
+        if agenda_cible_id != current_user.formateur_id:
+            raise HTTPException(status_code=403, detail="Vous ne pouvez planifier que sur votre propre agenda")
+
+    elif current_user.role == "TECHNICIEN":
+        if not current_user.formateur_id or prestation.formateur_id != current_user.formateur_id:
+            raise HTTPException(status_code=403, detail="Vous ne pouvez planifier que vos prestations")
+        # Le technicien peut planifier sur son agenda ou sur un agenda formateur actif
+
+    elif current_user.role not in ("ADMIN", "GESTIONNAIRE"):
+        raise HTTPException(status_code=403, detail="Droits insuffisants pour planifier cette prestation")
+
     prestation.date_planifiee = data.date_planifiee
+    prestation.agenda_formateur_id = data.agenda_formateur_id or prestation.formateur_id
     prestation.heure_debut = data.heure_debut
     prestation.heure_fin = data.heure_fin
     prestation.lieu = data.lieu or prestation.lieu
