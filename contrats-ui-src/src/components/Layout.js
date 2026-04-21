@@ -11,12 +11,12 @@ const MENU_COMPLET = [
   { path: '/commandes/terminees', label: 'Terminées', icon: '🏁', droit: 'commandes' },
   { path: '/mes-prestations', label: 'Mes prestations', icon: '📋', droit: null, forFormateur: true },
   { type: 'separator', label: 'Contrats' },
-  { path: '/contrats', label: 'Liste des contrats', icon: '📄', droit: null },
+  { path: '/contrats', label: 'Liste des contrats', icon: '📄', droit: 'contrats_lecture' },
   { path: '/contrats/tunnel?mode=nouveau', label: 'Nouveau contrat', icon: '➕', droit: 'contrats_ecriture' },
   { path: '/contrats-a-creer', label: 'Contrats à créer', icon: '📝', droit: 'commandes' },
-  { path: '/renouvellements', label: 'Renouvellements', icon: '🔄', droit: null },
+  { path: '/renouvellements', label: 'Renouvellements', icon: '🔄', droit: 'contrats_ecriture' },
   { type: 'separator', label: 'Gestion' },
-  { path: '/clients', label: 'Clients', icon: '🏢', droit: null },
+  { path: '/clients', label: 'Clients', icon: '🏢', droit: 'contrats_ecriture' },
   { path: '/facturation', label: 'Facturation', icon: '💶', droit: 'facturation' },
   { path: '/indices', label: 'Indices Syntec', icon: '📈', droit: 'indices' },
   { path: '/chorus-pro', label: 'Chorus Pro', icon: '📤', droit: 'facturation' },
@@ -33,28 +33,41 @@ const MENU_FORMATEUR = [
   { path: '/mes-prestations', label: 'Mes prestations', icon: '📋', droit: null },
 ];
 
+// Menu technicien : prestations + contrats techniques
+const MENU_TECHNICIEN = [
+  { path: '/', label: 'Tableau de bord', icon: '🏠', droit: null },
+  { type: 'separator', label: 'Mes activités' },
+  { path: '/mes-prestations', label: 'Mes prestations', icon: '📋', droit: null },
+  { type: 'separator', label: 'Contrats' },
+  { path: '/contrats', label: 'Contrats techniques', icon: '📄', droit: null },
+];
+
 export default function Layout({ children }) {
   const { user, droits, logout } = useAuth();
   const location = useLocation();
 
   // Menu selon le rôle
-  const menuSource = user?.role === 'FORMATEUR' ? MENU_FORMATEUR : MENU_COMPLET;
+  let menuSource;
+  if (user?.role === 'FORMATEUR') {
+    menuSource = MENU_FORMATEUR;
+  } else if (user?.role === 'TECHNICIEN') {
+    menuSource = MENU_TECHNICIEN;
+  } else {
+    menuSource = MENU_COMPLET;
+  }
 
   const menu = menuSource.filter(item => {
     if (item.type === 'separator') return true;
-    // Masquer "Mes prestations" pour non-formateurs sans formateur_id dans le menu complet
-    if (item.forFormateur && !user?.formateur_id && user?.role !== 'FORMATEUR') return false;
+    // Masquer "Mes prestations" pour non-formateurs/techniciens sans formateur_id dans le menu complet
+    if (item.forFormateur && !user?.formateur_id && !['FORMATEUR', 'TECHNICIEN'].includes(user?.role)) return false;
     return !item.droit || (droits && droits[item.droit]);
   });
 
   // Supprimer les séparateurs consécutifs ou en fin de liste
   const cleanMenu = menu.filter((item, idx, arr) => {
     if (item.type !== 'separator') return true;
-    // Supprimer si c'est le dernier élément
     if (idx === arr.length - 1) return false;
-    // Supprimer si le suivant est aussi un séparateur
     if (arr[idx + 1]?.type === 'separator') return false;
-    // Supprimer si c'est le premier élément
     if (idx === 0) return false;
     return true;
   });

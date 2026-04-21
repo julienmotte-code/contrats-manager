@@ -1,7 +1,11 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { contratsAPI } from '../services/api';
+import { useAuth } from '../context/AuthContext';
 import { format } from 'date-fns';
+
+// Familles accessibles au technicien
+const FAMILLES_TECHNICIEN = ['MAINTENANCE', 'DIGITECH', 'KIWI_BACKUP'];
 
 const ONGLETS = [
   { key: '',             label: 'Tous',        color: 'gray' },
@@ -22,6 +26,7 @@ function StatutBadge({ statut }) {
 }
 
 export default function Contrats() {
+  const { user } = useAuth();
   const [contrats, setContrats] = useState([]);
   const [total, setTotal] = useState(0);
   const [compteurs, setCompteurs] = useState({});
@@ -31,11 +36,14 @@ export default function Contrats() {
   const [page, setPage] = useState(0);
   const limit = 20;
 
+  const isTechnicien = user?.role === 'TECHNICIEN';
+  const famillesParam = isTechnicien ? FAMILLES_TECHNICIEN.join(',') : undefined;
+
   const chargerCompteurs = useCallback(() => {
     const statuts = ['EN_COURS', 'A_RENOUVELER', 'BROUILLON', 'TERMINE'];
     Promise.all(
       statuts.map(s =>
-        contratsAPI.liste({ statut: s, limit: 1, offset: 0 })
+        contratsAPI.liste({ statut: s, limit: 1, offset: 0, familles: famillesParam })
           .then(r => ({ statut: s, total: r.data.total || 0 }))
           .catch(() => ({ statut: s, total: 0 }))
       )
@@ -45,7 +53,7 @@ export default function Contrats() {
       c[''] = Object.values(c).reduce((a, b) => a + b, 0);
       setCompteurs(c);
     });
-  }, []);
+  }, [famillesParam]);
 
   const charger = useCallback(() => {
     setLoading(true);
@@ -54,13 +62,14 @@ export default function Contrats() {
       statut: ongletActif || undefined,
       limit,
       offset: page * limit,
+      familles: famillesParam,
     })
       .then(r => {
         setContrats(r.data.data || []);
         setTotal(r.data.total || 0);
       })
       .finally(() => setLoading(false));
-  }, [ongletActif, page, recherche]);
+  }, [ongletActif, page, recherche, famillesParam]);
 
   useEffect(() => { chargerCompteurs(); }, [chargerCompteurs]);
   useEffect(() => { charger(); }, [charger]);
@@ -106,10 +115,17 @@ export default function Contrats() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Contrats</h1>
-          <p className="text-gray-500 text-sm mt-1">{total} contrat(s)</p>
+          <h1 className="text-2xl font-bold text-gray-900">
+            {isTechnicien ? 'Contrats techniques' : 'Contrats'}
+          </h1>
+          <p className="text-gray-500 text-sm mt-1">
+            {total} contrat(s)
+            {isTechnicien && ' — Maintenance, Digitech, Kiwi Backup'}
+          </p>
         </div>
-        <Link to="/contrats/nouveau" className="btn-primary">➕ Nouveau contrat</Link>
+        {!isTechnicien && (
+          <Link to="/contrats/nouveau" className="btn-primary">➕ Nouveau contrat</Link>
+        )}
       </div>
 
       <div className="border-b border-gray-200">
@@ -163,6 +179,7 @@ export default function Contrats() {
               <tr className="text-left text-gray-500 border-b border-gray-200 bg-gray-50">
                 <th className="px-4 py-3 font-medium">N° Contrat</th>
                 <th className="px-4 py-3 font-medium">Client</th>
+                <th className="px-4 py-3 font-medium">Famille</th>
                 <th className="px-4 py-3 font-medium">Début</th>
                 <th className="px-4 py-3 font-medium">Fin</th>
                 <th className="px-4 py-3 font-medium text-right">Montant annuel HT</th>
@@ -175,6 +192,7 @@ export default function Contrats() {
                 <tr key={c.id} className="hover:bg-gray-50 transition-colors">
                   <td className="px-4 py-3 font-medium text-gray-900">{c.numero_contrat}</td>
                   <td className="px-4 py-3 text-gray-700">{c.client_nom}</td>
+                  <td className="px-4 py-3 text-gray-600 text-xs">{c.famille_contrat || '-'}</td>
                   <td className="px-4 py-3 text-gray-600">
                     {c.date_debut ? format(new Date(c.date_debut + 'T12:00:00'), 'dd/MM/yyyy') : '-'}
                   </td>

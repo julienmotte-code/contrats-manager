@@ -6,7 +6,7 @@ const ROLES = [
   { value: 'ADMIN', label: 'Administrateur', color: 'bg-red-100 text-red-800', description: 'Accès total + gestion utilisateurs' },
   { value: 'GESTIONNAIRE', label: 'Gestionnaire', color: 'bg-blue-100 text-blue-800', description: 'Contrats + facturation + commandes' },
   { value: 'FORMATEUR', label: 'Formateur', color: 'bg-green-100 text-green-800', description: 'Accès limité à ses prestations' },
-  { value: 'CONSULTANT', label: 'Consultant', color: 'bg-gray-100 text-gray-700', description: 'Lecture seule' },
+  { value: 'TECHNICIEN', label: 'Technicien', color: 'bg-purple-100 text-purple-800', description: 'Prestations + contrats techniques' },
 ];
 
 const roleInfo = (role) => ROLES.find(r => r.value === role) || ROLES[3];
@@ -17,9 +17,9 @@ export default function Utilisateurs() {
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [editUser, setEditUser] = useState(null);
-  const [form, setForm] = useState({ 
-    login: '', email: '', nom_complet: '', role: 'CONSULTANT', 
-    password: '', actif: true, formateur_id: '' 
+  const [form, setForm] = useState({
+    login: '', email: '', nom_complet: '', role: 'TECHNICIEN',
+    password: '', actif: true, formateur_id: ''
   });
   const [saving, setSaving] = useState(false);
 
@@ -32,29 +32,31 @@ export default function Utilisateurs() {
     api.get('/api/formateurs?actif_only=true').then(r => setFormateurs(r.data.formateurs || []));
   };
 
-  useEffect(() => { 
-    charger(); 
+  useEffect(() => {
+    charger();
     chargerFormateurs();
   }, []);
 
   const ouvrir = (user = null) => {
     if (user) {
       setEditUser(user);
-      setForm({ 
-        login: user.login, 
-        email: user.email, 
-        nom_complet: user.nom_complet || '', 
-        role: user.role, 
-        password: '', 
+      setForm({
+        login: user.login,
+        email: user.email,
+        nom_complet: user.nom_complet || '',
+        role: user.role,
+        password: '',
         actif: user.actif,
         formateur_id: user.formateur_id || ''
       });
     } else {
       setEditUser(null);
-      setForm({ login: '', email: '', nom_complet: '', role: 'CONSULTANT', password: '', actif: true, formateur_id: '' });
+      setForm({ login: '', email: '', nom_complet: '', role: 'TECHNICIEN', password: '', actif: true, formateur_id: '' });
     }
     setShowForm(true);
   };
+
+  const needsFormateur = (role) => ['FORMATEUR', 'TECHNICIEN'].includes(role);
 
   const sauvegarder = async () => {
     if (!form.email || (!editUser && !form.password)) {
@@ -65,7 +67,7 @@ export default function Utilisateurs() {
       toast.error('Login obligatoire');
       return;
     }
-    if (form.role === 'FORMATEUR' && !form.formateur_id) {
+    if (needsFormateur(form.role) && !form.formateur_id) {
       toast.error('Veuillez sélectionner un formateur associé');
       return;
     }
@@ -151,19 +153,19 @@ export default function Utilisateurs() {
             </div>
             <div>
               <label className="label">Rôle *</label>
-              <select className="input" value={form.role} onChange={e => setForm(f => ({ ...f, role: e.target.value, formateur_id: e.target.value !== 'FORMATEUR' ? '' : f.formateur_id }))}>
+              <select className="input" value={form.role} onChange={e => setForm(f => ({ ...f, role: e.target.value, formateur_id: !needsFormateur(e.target.value) ? '' : f.formateur_id }))}>
                 {ROLES.map(r => <option key={r.value} value={r.value}>{r.label}</option>)}
               </select>
             </div>
-            
-            {/* Sélecteur de formateur - visible pour tous les rôles mais obligatoire pour FORMATEUR */}
+
+            {/* Sélecteur de formateur */}
             <div>
               <label className="label">
-                Formateur associé {form.role === 'FORMATEUR' && <span className="text-red-500">*</span>}
+                Formateur associé {needsFormateur(form.role) && <span className="text-red-500">*</span>}
               </label>
-              <select 
-                className="input" 
-                value={form.formateur_id} 
+              <select
+                className="input"
+                value={form.formateur_id}
                 onChange={e => setForm(f => ({ ...f, formateur_id: e.target.value }))}
               >
                 <option value="">— Aucun —</option>
@@ -174,8 +176,8 @@ export default function Utilisateurs() {
                 ))}
               </select>
               <p className="text-xs text-gray-400 mt-1">
-                {form.role === 'FORMATEUR' 
-                  ? 'Obligatoire : détermine les prestations visibles' 
+                {needsFormateur(form.role)
+                  ? 'Obligatoire : détermine les prestations et commandes visibles'
                   : 'Optionnel : permet d\'accéder à "Mes prestations"'}
               </p>
             </div>

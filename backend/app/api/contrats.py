@@ -80,6 +80,7 @@ def lister_contrats(
     annee: Optional[int] = None,
     limit: int = Query(50, le=200),
     offset: int = 0,
+    familles: Optional[str] = Query(None, description="Familles séparées par virgule"),
     db: Session = Depends(get_db),
 ):
     """Liste les contrats avec filtres."""
@@ -94,6 +95,9 @@ def lister_contrats(
                 Contrat.client_numero.ilike(f"%{recherche}%"),
             )
         )
+    if familles:
+        liste_familles = [f.strip().upper() for f in familles.split(",")]
+        q = q.filter(Contrat.famille_contrat.in_(liste_familles))
     if annee:
         q = q.filter(Contrat.date_debut <= date(annee, 12, 31))
         q = q.filter(Contrat.date_fin >= date(annee, 1, 1))

@@ -11,13 +11,13 @@ router = APIRouter()
 def get_password_hash(password: str) -> str:
     return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
 
-ROLES = ["ADMIN", "GESTIONNAIRE", "FORMATEUR", "CONSULTANT"]
+ROLES = ["ADMIN", "GESTIONNAIRE", "FORMATEUR", "TECHNICIEN"]
 
 DROITS = {
-    "ADMIN":        {"contrats_ecriture": True,  "facturation": True,  "indices": True,  "commandes": True,  "parametres": True,  "utilisateurs": True,  "formateurs": True,  "toutes_prestations": True},
-    "GESTIONNAIRE": {"contrats_ecriture": True,  "facturation": True,  "indices": True,  "commandes": True,  "parametres": False, "utilisateurs": False, "formateurs": True,  "toutes_prestations": True},
-    "FORMATEUR":    {"contrats_ecriture": False, "facturation": False, "indices": False, "commandes": False, "parametres": False, "utilisateurs": False, "formateurs": False, "toutes_prestations": False},
-    "CONSULTANT":   {"contrats_ecriture": False, "facturation": False, "indices": False, "commandes": False, "parametres": False, "utilisateurs": False, "formateurs": False, "toutes_prestations": False},
+    "ADMIN":        {"contrats_ecriture": True,  "contrats_lecture": True,  "facturation": True,  "indices": True,  "commandes": True,  "parametres": True,  "utilisateurs": True,  "formateurs": True,  "toutes_prestations": True},
+    "GESTIONNAIRE": {"contrats_ecriture": True,  "contrats_lecture": True,  "facturation": True,  "indices": True,  "commandes": True,  "parametres": False, "utilisateurs": False, "formateurs": True,  "toutes_prestations": True},
+    "FORMATEUR":    {"contrats_ecriture": False, "contrats_lecture": False, "facturation": False, "indices": False, "commandes": False, "parametres": False, "utilisateurs": False, "formateurs": False, "toutes_prestations": False},
+    "TECHNICIEN":   {"contrats_ecriture": False, "contrats_lecture": True,  "facturation": False, "indices": False, "commandes": False, "parametres": False, "utilisateurs": False, "formateurs": False, "toutes_prestations": False},
 }
 
 def require_admin(current_user: Utilisateur = Depends(get_current_user)):
@@ -28,7 +28,7 @@ def require_admin(current_user: Utilisateur = Depends(get_current_user)):
 @router.get("/droits")
 def get_droits(current_user: Utilisateur = Depends(get_current_user)):
     """Retourne les droits de l'utilisateur connecté."""
-    role = current_user.role if current_user.role in DROITS else "CONSULTANT"
+    role = current_user.role if current_user.role in DROITS else "FORMATEUR"
     return {
         "role": role,
         "droits": DROITS[role],
@@ -43,7 +43,7 @@ def lister_utilisateurs(
 ):
     """Liste tous les utilisateurs."""
     users = db.query(Utilisateur).order_by(Utilisateur.nom_complet).all()
-    
+
     result = []
     for u in users:
         formateur_nom = None
@@ -51,7 +51,7 @@ def lister_utilisateurs(
             formateur = db.query(Formateur).filter(Formateur.id == u.formateur_id).first()
             if formateur:
                 formateur_nom = f"{formateur.prenom or ''} {formateur.nom}".strip()
-        
+
         result.append({
             "id": str(u.id),
             "login": u.login,
@@ -64,7 +64,7 @@ def lister_utilisateurs(
             "derniere_connexion": str(u.derniere_connexion) if u.derniere_connexion else None,
             "created_at": str(u.created_at),
         })
-    
+
     return {"data": result}
 
 @router.post("")
@@ -77,7 +77,7 @@ def creer_utilisateur(
     login = data.get("login", "").strip()
     email = data.get("email", "").strip()
     password = data.get("password", "").strip()
-    role = data.get("role", "CONSULTANT")
+    role = data.get("role", "TECHNICIEN")
     formateur_id = data.get("formateur_id")
 
     if not login or not email or not password:
@@ -88,11 +88,11 @@ def creer_utilisateur(
         raise HTTPException(400, f"Login '{login}' déjà utilisé")
     if db.query(Utilisateur).filter(Utilisateur.email == email).first():
         raise HTTPException(400, f"Email '{email}' déjà utilisé")
-    
-    # Si rôle FORMATEUR, vérifier que formateur_id est fourni
-    if role == "FORMATEUR" and not formateur_id:
-        raise HTTPException(400, "Un formateur doit être associé pour le rôle FORMATEUR")
-    
+
+    # Si rôle FORMATEUR ou TECHNICIEN, vérifier que formateur_id est fourni
+    if role in ("FORMATEUR", "TECHNICIEN") and not formateur_id:
+        raise HTTPException(400, "Un formateur doit être associé pour ce rôle")
+
     # Vérifier que le formateur existe
     if formateur_id:
         formateur = db.query(Formateur).filter(Formateur.id == formateur_id).first()
@@ -124,18 +124,18 @@ def modifier_utilisateur(
     user = db.query(Utilisateur).filter(Utilisateur.id == user_id).first()
     if not user:
         raise HTTPException(404, "Utilisateur non trouvé")
-    
+
     # Empêcher de se rétrograder soi-même
     if str(user.id) == str(current_user.id) and data.get("role") and data.get("role") != "ADMIN":
         raise HTTPException(400, "Impossible de modifier votre propre rôle")
 
-    if "nom_complet" in data: 
+    if "nom_complet" in data:
         user.nom_complet = data["nom_complet"]
-    if "email" in data: 
+    if "email" in data:
         user.email = data["email"]
-    if "role" in data and data["role"] in ROLES: 
+    if "role" in data and data["role"] in ROLES:
         user.role = data["role"]
-    if "actif" in data: 
+    if "actif" in data:
         user.actif = data["actif"]
     if "password" in data and data["password"]:
         user.password_hash = get_password_hash(data["password"])
@@ -145,7 +145,7 @@ def modifier_utilisateur(
             if not formateur:
                 raise HTTPException(400, "Formateur non trouvé")
         user.formateur_id = data["formateur_id"] if data["formateur_id"] else None
-    
+
     db.commit()
     return {"id": str(user.id), "login": user.login, "role": user.role, "actif": user.actif, "formateur_id": user.formateur_id}
 
