@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { contratsAPI } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { format } from 'date-fns';
+import api from '../services/api';
 
 // Familles accessibles au technicien
 const FAMILLES_TECHNICIEN = ['MAINTENANCE', 'DIGITECH', 'KIWI_BACKUP'];
@@ -27,6 +28,7 @@ function StatutBadge({ statut }) {
 
 export default function Contrats() {
   const { user } = useAuth();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [contrats, setContrats] = useState([]);
   const [total, setTotal] = useState(0);
   const [compteurs, setCompteurs] = useState({});
@@ -34,10 +36,25 @@ export default function Contrats() {
   const [recherche, setRecherche] = useState('');
   const [ongletActif, setOngletActif] = useState('');
   const [page, setPage] = useState(0);
+  const [famillesDisponibles, setFamillesDisponibles] = useState([]);
   const limit = 20;
 
   const isTechnicien = user?.role === 'TECHNICIEN';
-  const famillesParam = isTechnicien ? FAMILLES_TECHNICIEN.join(',') : undefined;
+
+  // Lire le filtre famille depuis l'URL ou le state
+  const [filtreFamille, setFiltreFamille] = useState(searchParams.get('famille') || '');
+
+  // Charger les familles disponibles
+  useEffect(() => {
+    api.get('/api/indices/familles').then(r => {
+      setFamillesDisponibles(r.data.data || []);
+    }).catch(() => {});
+  }, []);
+
+  // Calculer le paramètre familles pour l'API
+  const famillesParam = isTechnicien
+    ? FAMILLES_TECHNICIEN.join(',')
+    : filtreFamille || undefined;
 
   const chargerCompteurs = useCallback(() => {
     const statuts = ['EN_COURS', 'A_RENOUVELER', 'BROUILLON', 'TERMINE'];
@@ -73,6 +90,17 @@ export default function Contrats() {
 
   useEffect(() => { chargerCompteurs(); }, [chargerCompteurs]);
   useEffect(() => { charger(); }, [charger]);
+
+  // Synchroniser le filtre famille avec l'URL
+  const changerFamille = (code) => {
+    setFiltreFamille(code);
+    setPage(0);
+    if (code) {
+      setSearchParams({ famille: code });
+    } else {
+      setSearchParams({});
+    }
+  };
 
   const handleRecherche = (e) => {
     e.preventDefault();
@@ -117,6 +145,11 @@ export default function Contrats() {
         <div>
           <h1 className="text-2xl font-bold text-gray-900">
             {isTechnicien ? 'Contrats techniques' : 'Contrats'}
+            {filtreFamille && !isTechnicien && (
+              <span className="text-lg font-normal text-gray-500 ml-2">
+                — {famillesDisponibles.find(f => f.code === filtreFamille)?.label || filtreFamille}
+              </span>
+            )}
           </h1>
           <p className="text-gray-500 text-sm mt-1">
             {total} contrat(s)
@@ -148,20 +181,46 @@ export default function Contrats() {
       </div>
 
       <div className="card">
-        <form onSubmit={handleRecherche} className="flex gap-3">
-          <input
-            className="input flex-1"
-            placeholder="🔍 Rechercher par numéro, client..."
-            value={recherche}
-            onChange={e => setRecherche(e.target.value)}
-          />
-          <button type="submit" className="btn-primary">Rechercher</button>
-          {recherche && (
-            <button type="button" className="btn-secondary" onClick={() => { setRecherche(''); setPage(0); }}>
-              ✕
-            </button>
+        <div className="flex gap-3 items-end">
+          <form onSubmit={handleRecherche} className="flex gap-3 flex-1">
+            <input
+              className="input flex-1"
+              placeholder="🔍 Rechercher par numéro, client..."
+              value={recherche}
+              onChange={e => setRecherche(e.target.value)}
+            />
+            <button type="submit" className="btn-primary">Rechercher</button>
+            {recherche && (
+              <button type="button" className="btn-secondary" onClick={() => { setRecherche(''); setPage(0); }}>
+                ✕
+              </button>
+            )}
+          </form>
+          {!isTechnicien && (
+            <div className="flex items-center gap-2">
+              <select
+                className="input py-2 text-sm"
+                value={filtreFamille}
+                onChange={e => changerFamille(e.target.value)}
+              >
+                <option value="">Toutes les familles</option>
+                {famillesDisponibles.map(f => (
+                  <option key={f.code} value={f.code}>{f.label}</option>
+                ))}
+              </select>
+              {filtreFamille && (
+                <button
+                  type="button"
+                  className="text-gray-400 hover:text-gray-600 text-sm"
+                  onClick={() => changerFamille('')}
+                  title="Réinitialiser le filtre"
+                >
+                  ✕
+                </button>
+              )}
+            </div>
           )}
-        </form>
+        </div>
       </div>
 
       <div className="card overflow-x-auto p-0">
@@ -172,6 +231,7 @@ export default function Contrats() {
             Aucun contrat
             {ongletActif && ` dans "${ONGLETS.find(o => o.key === ongletActif)?.label}"`}
             {recherche && ` pour "${recherche}"`}
+            {filtreFamille && ` (famille: ${filtreFamille})`}
           </div>
         ) : (
           <table className="w-full text-sm">
