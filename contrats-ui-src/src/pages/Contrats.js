@@ -1,11 +1,28 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import { contratsAPI } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { format } from 'date-fns';
 
 // Familles accessibles au technicien
 const FAMILLES_TECHNICIEN = ['MAINTENANCE', 'DIGITECH', 'KIWI_BACKUP'];
+const LABELS_FAMILLES_TECHNICIEN = {
+  MAINTENANCE: 'Maintenance matériel',
+  DIGITECH: 'Digitech',
+  KIWI_BACKUP: 'Kiwi Backup',
+};
+
+const LABELS_FAMILLES = {
+  COSOLUCE: 'Cosoluce',
+  CANTINE: 'Cantine de France',
+  DIGITECH: 'Digitech',
+  MAINTENANCE: 'Maintenance matériel',
+  ASSISTANCE_TEL: 'Assistance téléphonique',
+  KIWI_BACKUP: 'Kiwi Backup',
+  AUTRE: 'Autre',
+};
+
+const FAMILLES_ADMIN = ['COSOLUCE', 'CANTINE', 'DIGITECH', 'MAINTENANCE', 'ASSISTANCE_TEL', 'KIWI_BACKUP', 'AUTRE'];
 
 const ONGLETS = [
   { key: '',             label: 'Tous',        color: 'gray' },
@@ -27,6 +44,8 @@ function StatutBadge({ statut }) {
 
 export default function Contrats() {
   const { user } = useAuth();
+  const location = useLocation();
+  const queryFamille = new URLSearchParams(location.search).get('famille') || '';
   const [contrats, setContrats] = useState([]);
   const [total, setTotal] = useState(0);
   const [compteurs, setCompteurs] = useState({});
@@ -34,10 +53,20 @@ export default function Contrats() {
   const [recherche, setRecherche] = useState('');
   const [ongletActif, setOngletActif] = useState('');
   const [page, setPage] = useState(0);
+  const [familleFiltre, setFamilleFiltre] = useState('');
   const limit = 20;
 
   const isTechnicien = user?.role === 'TECHNICIEN';
-  const famillesParam = isTechnicien ? FAMILLES_TECHNICIEN.join(',') : undefined;
+  const famillesDisponibles = isTechnicien ? FAMILLES_TECHNICIEN : FAMILLES_ADMIN;
+  const famillesParam = familleFiltre
+    ? familleFiltre
+    : (isTechnicien ? FAMILLES_TECHNICIEN.join(',') : undefined);
+
+  useEffect(() => {
+    const famille = queryFamille && famillesDisponibles.includes(queryFamille) ? queryFamille : '';
+    setFamilleFiltre(famille);
+    setPage(0);
+  }, [queryFamille, isTechnicien]);
 
   const chargerCompteurs = useCallback(() => {
     const statuts = ['EN_COURS', 'A_RENOUVELER', 'BROUILLON', 'TERMINE'];
@@ -148,16 +177,41 @@ export default function Contrats() {
       </div>
 
       <div className="card">
-        <form onSubmit={handleRecherche} className="flex gap-3">
+        <form onSubmit={handleRecherche} className="flex gap-3 flex-wrap">
           <input
             className="input flex-1"
             placeholder="🔍 Rechercher par numéro, client..."
             value={recherche}
             onChange={e => setRecherche(e.target.value)}
           />
+          <select
+            className="input max-w-xs"
+            value={familleFiltre}
+            onChange={e => {
+              setFamilleFiltre(e.target.value);
+              setPage(0);
+            }}
+          >
+            <option value="">
+              {isTechnicien ? 'Toutes les familles techniques' : 'Toutes les familles'}
+            </option>
+            {famillesDisponibles.map(f => (
+              <option key={f} value={f}>
+                {LABELS_FAMILLES[f] || LABELS_FAMILLES_TECHNICIEN[f] || f}
+              </option>
+            ))}
+          </select>
           <button type="submit" className="btn-primary">Rechercher</button>
-          {recherche && (
-            <button type="button" className="btn-secondary" onClick={() => { setRecherche(''); setPage(0); }}>
+          {(recherche || familleFiltre) && (
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => {
+                setRecherche('');
+                setFamilleFiltre('');
+                setPage(0);
+              }}
+            >
               ✕
             </button>
           )}
