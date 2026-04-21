@@ -1,45 +1,100 @@
 import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { contratsAPI, facturationAPI, indicesAPI } from '../services/api';
 import api from '../services/api';
+import { indicesAPI } from '../services/api';
 import { format } from 'date-fns';
 import { fr } from 'date-fns/locale';
-function KPI({ label, value, color, icon }) {
+
+// Icônes par famille de contrat
+const FAMILLE_ICONS = {
+  COSOLUCE: '🏛️',
+  CANTINE: '🍽️',
+  DIGITECH: '💻',
+  MAINTENANCE: '🔧',
+  ASSISTANCE_TEL: '📞',
+  KIWI_BACKUP: '💾',
+  AUTRE: '📋',
+};
+
+// Couleurs par famille de contrat
+const FAMILLE_COLORS = {
+  COSOLUCE: 'bg-blue-50 border-blue-200 text-blue-700',
+  CANTINE: 'bg-amber-50 border-amber-200 text-amber-700',
+  DIGITECH: 'bg-purple-50 border-purple-200 text-purple-700',
+  MAINTENANCE: 'bg-emerald-50 border-emerald-200 text-emerald-700',
+  ASSISTANCE_TEL: 'bg-cyan-50 border-cyan-200 text-cyan-700',
+  KIWI_BACKUP: 'bg-teal-50 border-teal-200 text-teal-700',
+  AUTRE: 'bg-gray-50 border-gray-200 text-gray-700',
+};
+
+// Config des statuts commandes
+const STATUT_CONFIG = {
+  nouvelles: { label: 'Nouvelles', icon: '🆕', color: 'bg-red-50 border-red-200 text-red-700', link: '/commandes/nouvelles' },
+  a_planifier: { label: 'À planifier', icon: '📅', color: 'bg-orange-50 border-orange-200 text-orange-700', link: '/commandes/a-planifier' },
+  planifiees: { label: 'Planifiées', icon: '✅', color: 'bg-green-50 border-green-200 text-green-700', link: '/commandes/planifiees' },
+};
+
+function FamilleCard({ famille }) {
+  const icon = FAMILLE_ICONS[famille.code] || '📋';
+  const colors = FAMILLE_COLORS[famille.code] || FAMILLE_COLORS.AUTRE;
+
   return (
-    <div className="card flex items-center gap-4">
-      <div className={`text-3xl p-3 rounded-xl ${color}`}>{icon}</div>
-      <div><div className="text-2xl font-bold text-gray-900">{value}</div><div className="text-sm text-gray-500">{label}</div></div>
-    </div>
+    <Link
+      to={`/contrats?famille=${famille.code}`}
+      className={`block border rounded-xl p-4 transition-all hover:shadow-md hover:scale-[1.02] ${colors}`}
+    >
+      <div className="flex items-center gap-3">
+        <span className="text-2xl">{icon}</span>
+        <div className="min-w-0 flex-1">
+          <div className="text-2xl font-bold">{famille.total}</div>
+          <div className="text-sm font-medium truncate">{famille.label}</div>
+        </div>
+      </div>
+    </Link>
   );
 }
+
+function CommandeStatutCard({ statut, count }) {
+  const config = STATUT_CONFIG[statut];
+  if (!config) return null;
+
+  return (
+    <Link
+      to={config.link}
+      className={`block border rounded-xl p-4 transition-all hover:shadow-md hover:scale-[1.02] ${config.color}`}
+    >
+      <div className="flex items-center gap-3">
+        <span className="text-2xl">{config.icon}</span>
+        <div className="min-w-0 flex-1">
+          <div className="text-2xl font-bold">{count}</div>
+          <div className="text-sm font-medium">{config.label}</div>
+        </div>
+      </div>
+    </Link>
+  );
+}
+
 export default function Dashboard() {
-  const [renouvellements, setRenouvellements] = useState([]);
-  const [facturesAVenir, setFacturesAVenir] = useState([]);
-  const [stats, setStats] = useState({ actifs: 0, renouveler: 0, ca: 0 });
+  const [dashboardStats, setDashboardStats] = useState(null);
   const [indice, setIndice] = useState(null);
   const [loading, setLoading] = useState(true);
   const [synchroInfo, setSynchroInfo] = useState(null);
   const [synchroLoading, setSynchroLoading] = useState(false);
-  const annee = new Date().getFullYear();
-  const mois = new Date().getMonth() + 1;
 
   useEffect(() => {
     // Synchro automatique à l'ouverture + mise à jour du bandeau
     api.post('/api/synchro/lancer').then(r => setSynchroInfo(r.data)).catch(() => {
       api.get('/api/synchro/statut').then(r => setSynchroInfo(r.data)).catch(() => {});
     });
+
     Promise.all([
-      contratsAPI.liste({ statut: 'EN_COURS', limit: 200 }),
-      contratsAPI.renouvellements({ mois, annee }),
-      facturationAPI.apercu(annee + 1),
+      api.get('/api/dashboard/stats'),
       indicesAPI.courant().catch(() => null),
-    ]).then(([contratsRes, renouvRes, factRes, indiceRes]) => {
-      const contrats = contratsRes.data.data || [];
-      const ca = contrats.reduce((s, c) => s + (c.montant_annuel_ht || 0), 0);
-      setStats({ actifs: contratsRes.data.total || 0, renouveler: renouvRes.data.total || 0, ca: ca.toLocaleString('fr-FR') });
-      setRenouvellements(renouvRes.data.data?.slice(0, 5) || []);
-      setFacturesAVenir(factRes.data.data?.slice(0, 5) || []);
+    ]).then(([statsRes, indiceRes]) => {
+      setDashboardStats(statsRes.data);
       if (indiceRes) setIndice(indiceRes.data);
+    }).catch(err => {
+      console.error('Erreur chargement dashboard:', err);
     }).finally(() => setLoading(false));
   }, []);
 
@@ -48,13 +103,22 @@ export default function Dashboard() {
     try {
       const r = await api.post('/api/synchro/lancer');
       setSynchroInfo(r.data);
-    } catch(e) { console.error(e); }
-    finally { setSynchroLoading(false); }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setSynchroLoading(false);
+    }
   };
 
   if (loading) return <div className="flex items-center justify-center h-64 text-gray-400 text-lg">Chargement...</div>;
+
+  const contrats = dashboardStats?.contrats_par_famille || [];
+  const commandes = dashboardStats?.commandes_par_statut || {};
+  const totalContrats = dashboardStats?.total_contrats || 0;
+
   return (
     <div className="space-y-6">
+      {/* En-tête */}
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Tableau de bord</h1>
@@ -78,49 +142,53 @@ export default function Dashboard() {
         </button>
       </div>
 
-      {/* KPIs */}
-      <div className="grid grid-cols-3 gap-4">
-        <KPI label="Contrats actifs" value={stats.actifs} icon="📄" color="bg-blue-50" />
-        <KPI label="CA annuel HT" value={`${stats.ca} €`} icon="💶" color="bg-green-50" />
-        <KPI label="À renouveler ce mois" value={stats.renouveler} icon="⚠️" color="bg-orange-50" />
+      {/* Contrats actifs par famille */}
+      <div className="card">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="font-semibold text-gray-900">📄 Contrats actifs par famille</h2>
+          <div className="flex items-center gap-3">
+            <span className="text-sm text-gray-500">{totalContrats} contrat{totalContrats > 1 ? 's' : ''} actif{totalContrats > 1 ? 's' : ''}</span>
+            <Link to="/contrats" className="text-blue-600 text-sm hover:underline">Voir tout →</Link>
+          </div>
+        </div>
+        {contrats.length === 0 ? (
+          <p className="text-gray-400 text-sm text-center py-6">Aucun contrat actif</p>
+        ) : (
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+            {contrats.map(f => (
+              <FamilleCard key={f.code} famille={f} />
+            ))}
+          </div>
+        )}
       </div>
 
-
-
-      <div className="grid grid-cols-2 gap-6">
-        <div className="card">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="font-semibold text-gray-900">🔄 Renouvellements ce mois</h2>
-            <Link to="/renouvellements" className="text-blue-600 text-sm">Voir tout →</Link>
-          </div>
-          {renouvellements.length === 0 ? <p className="text-gray-400 text-sm text-center py-4">Aucun renouvellement ce mois</p> : (
-            <div className="space-y-2">
-              {renouvellements.map(c => (
-                <Link key={c.id} to={`/contrats/${c.id}`} className="flex items-center justify-between p-3 rounded-lg hover:bg-gray-50 border border-gray-100">
-                  <div><div className="font-medium text-sm">{c.numero_contrat}</div><div className="text-xs text-gray-500">{c.client_nom}</div></div>
-                  <div className="text-right"><div className="text-sm font-medium">{c.montant_annuel_ht?.toLocaleString('fr-FR')} €</div><div className="text-xs text-orange-600">{c.date_fin ? format(new Date(c.date_fin), 'dd/MM/yyyy') : ''}</div></div>
-                </Link>
-              ))}
-            </div>
-          )}
+      {/* État des commandes */}
+      <div className="card">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="font-semibold text-gray-900">📦 État des commandes</h2>
+          <span className="text-sm text-gray-500">{commandes.total || 0} commande{(commandes.total || 0) > 1 ? 's' : ''} au total</span>
         </div>
-        <div className="card">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="font-semibold text-gray-900">💶 Prochaines factures ({annee + 1})</h2>
-            <Link to="/facturation" className="text-blue-600 text-sm">Gérer →</Link>
-          </div>
-          {facturesAVenir.length === 0 ? <p className="text-gray-400 text-sm text-center py-4">Aucune facture planifiée</p> : (
-            <div className="space-y-2">
-              {facturesAVenir.map(f => (
-                <div key={f.id} className="flex items-center justify-between p-3 rounded-lg border border-gray-100">
-                  <div><div className="font-medium text-sm">{f.contrat_numero}</div><div className="text-xs text-gray-500">{f.client_nom}</div></div>
-                  <div className="text-right"><div className="text-sm font-medium">{f.montant_ht_prevu?.toLocaleString('fr-FR')} €</div><span className="badge-blue text-xs">Planifiée</span></div>
-                </div>
-              ))}
-            </div>
-          )}
+        <div className="grid grid-cols-3 gap-3">
+          <CommandeStatutCard statut="nouvelles" count={commandes.nouvelles || 0} />
+          <CommandeStatutCard statut="a_planifier" count={commandes.a_planifier || 0} />
+          <CommandeStatutCard statut="planifiees" count={commandes.planifiees || 0} />
         </div>
       </div>
+
+      {/* Dernier indice Syntec */}
+      {indice?.indice && (
+        <div className="card">
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="font-semibold text-gray-900">📈 Dernier indice Syntec</h2>
+              <p className="text-sm text-gray-500 mt-1">
+                {indice.indice.mois} {indice.indice.annee} — Valeur : <span className="font-bold text-gray-900">{indice.indice.valeur}</span>
+              </p>
+            </div>
+            <Link to="/indices" className="text-blue-600 text-sm hover:underline">Gérer les indices →</Link>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
