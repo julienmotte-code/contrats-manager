@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from app.core.database import get_db
 from app.models.models import Prestation, Commande, CommandeLigne, Formateur, Utilisateur
 from app.api.auth import get_current_user
+from app.services.google_calendar_service import google_calendar_service
 
 router = APIRouter(tags=["prestations"])
 
@@ -51,6 +52,9 @@ class PrestationResponse(BaseModel):
     commande_ligne_id: Optional[int]
     formateur_id: Optional[int]
     agenda_formateur_id: Optional[int] = None
+    google_calendar_id: Optional[str] = None
+    google_sync_status: Optional[str] = None
+    google_sync_error: Optional[str] = None
     formateur_nom: Optional[str] = None
     designation: str
     description: Optional[str]
@@ -92,6 +96,9 @@ def _prestation_to_response(prestation: Prestation, db: Session) -> PrestationRe
         commande_ligne_id=prestation.commande_ligne_id,
         formateur_id=prestation.formateur_id,
         agenda_formateur_id=prestation.agenda_formateur_id,
+        google_calendar_id=prestation.google_calendar_id,
+        google_sync_status=prestation.google_sync_status,
+        google_sync_error=prestation.google_sync_error,
         formateur_nom=formateur_nom,
         designation=prestation.designation,
         description=prestation.description,
@@ -329,6 +336,26 @@ async def planifier_prestation(
     prestation.notes = data.notes or prestation.notes
     prestation.statut = 'planifiee'
     prestation.updated_at = datetime.utcnow()
+
+    agenda_email = agenda_cible.email_google or agenda_cible.email
+    google_result = google_calendar_service.create_or_update_event(
+        prestation_id=prestation.id,
+        title=prestation.designation,
+        agenda_email=agenda_email,
+        date_planifiee=str(data.date_planifiee),
+        heure_debut=str(data.heure_debut) if data.heure_debut else None,
+        heure_fin=str(data.heure_fin) if data.heure_fin else None,
+        lieu=prestation.lieu,
+        notes=prestation.notes,
+        existing_event_id=prestation.google_event_id,
+    )
+
+    prestation.google_calendar_id = google_result.get("calendar_id")
+    prestation.google_event_id = google_result.get("event_id")
+    prestation.google_sync_status = google_result.get("status")
+    prestation.google_sync_error = google_result.get("error")
+    if google_result.get("success"):
+        prestation.google_synced_at = datetime.utcnow()
     
     db.commit()
     db.refresh(prestation)
