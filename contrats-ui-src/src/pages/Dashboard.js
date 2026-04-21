@@ -4,6 +4,8 @@ import { contratsAPI, facturationAPI, indicesAPI } from '../services/api';
 import api from '../services/api';
 import { format } from 'date-fns';
 import { fr } from 'date-fns/locale';
+import { useAuth } from '../context/AuthContext';
+
 function KPI({ label, value, color, icon }) {
   return (
     <div className="card flex items-center gap-4">
@@ -12,7 +14,9 @@ function KPI({ label, value, color, icon }) {
     </div>
   );
 }
+
 export default function Dashboard() {
+  const { user } = useAuth();
   const [renouvellements, setRenouvellements] = useState([]);
   const [facturesAVenir, setFacturesAVenir] = useState([]);
   const [stats, setStats] = useState({ actifs: 0, renouveler: 0, ca: 0 });
@@ -22,9 +26,9 @@ export default function Dashboard() {
   const [synchroLoading, setSynchroLoading] = useState(false);
   const annee = new Date().getFullYear();
   const mois = new Date().getMonth() + 1;
+  const isFormateur = user?.role === 'FORMATEUR';
 
   useEffect(() => {
-    // Synchro automatique à l'ouverture + mise à jour du bandeau
     api.post('/api/synchro/lancer').then(r => setSynchroInfo(r.data)).catch(() => {
       api.get('/api/synchro/statut').then(r => setSynchroInfo(r.data)).catch(() => {});
     });
@@ -41,7 +45,7 @@ export default function Dashboard() {
       setFacturesAVenir(factRes.data.data?.slice(0, 5) || []);
       if (indiceRes) setIndice(indiceRes.data);
     }).finally(() => setLoading(false));
-  }, []);
+  }, [mois, annee]);
 
   const lancerSynchro = async () => {
     setSynchroLoading(true);
@@ -53,6 +57,7 @@ export default function Dashboard() {
   };
 
   if (loading) return <div className="flex items-center justify-center h-64 text-gray-400 text-lg">Chargement...</div>;
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -60,13 +65,14 @@ export default function Dashboard() {
           <h1 className="text-2xl font-bold text-gray-900">Tableau de bord</h1>
           <p className="text-gray-500 text-sm mt-1">{format(new Date(), "EEEE d MMMM yyyy", { locale: fr })}</p>
         </div>
-        <div className="flex gap-3">
-          <Link to="/contrats/tunnel?mode=nouveau" className="btn-primary">➕ Nouveau contrat</Link>
-          <Link to="/indices" className="btn-secondary">📈 Saisir un indice</Link>
-        </div>
+        {!isFormateur && (
+          <div className="flex gap-3">
+            <Link to="/contrats/tunnel?mode=nouveau" className="btn-primary">➕ Nouveau contrat</Link>
+            <Link to="/indices" className="btn-secondary">📈 Saisir un indice</Link>
+          </div>
+        )}
       </div>
 
-      {/* Bandeau synchro */}
       <div className="bg-white border border-gray-200 rounded-xl px-5 py-3 flex items-center justify-between">
         <div className="text-sm text-gray-500">
           🔄 Dernière synchronisation Karlia :
@@ -78,28 +84,36 @@ export default function Dashboard() {
         </button>
       </div>
 
-      {/* KPIs */}
       <div className="grid grid-cols-3 gap-4">
         <KPI label="Contrats actifs" value={stats.actifs} icon="📄" color="bg-blue-50" />
         <KPI label="CA annuel HT" value={`${stats.ca} €`} icon="💶" color="bg-green-50" />
         <KPI label="À renouveler ce mois" value={stats.renouveler} icon="⚠️" color="bg-orange-50" />
       </div>
 
-
-
       <div className="grid grid-cols-2 gap-6">
         <div className="card">
           <div className="flex items-center justify-between mb-4">
             <h2 className="font-semibold text-gray-900">🔄 Renouvellements ce mois</h2>
-            <Link to="/renouvellements" className="text-blue-600 text-sm">Voir tout →</Link>
+            {isFormateur ? (
+              <span className="text-gray-400 text-sm">Consultation seule</span>
+            ) : (
+              <Link to="/renouvellements" className="text-blue-600 text-sm">Voir tout →</Link>
+            )}
           </div>
           {renouvellements.length === 0 ? <p className="text-gray-400 text-sm text-center py-4">Aucun renouvellement ce mois</p> : (
             <div className="space-y-2">
               {renouvellements.map(c => (
-                <Link key={c.id} to={`/contrats/${c.id}`} className="flex items-center justify-between p-3 rounded-lg hover:bg-gray-50 border border-gray-100">
-                  <div><div className="font-medium text-sm">{c.numero_contrat}</div><div className="text-xs text-gray-500">{c.client_nom}</div></div>
-                  <div className="text-right"><div className="text-sm font-medium">{c.montant_annuel_ht?.toLocaleString('fr-FR')} €</div><div className="text-xs text-orange-600">{c.date_fin ? format(new Date(c.date_fin), 'dd/MM/yyyy') : ''}</div></div>
-                </Link>
+                isFormateur ? (
+                  <div key={c.id} className="flex items-center justify-between p-3 rounded-lg border border-gray-100 bg-gray-50">
+                    <div><div className="font-medium text-sm">{c.numero_contrat}</div><div className="text-xs text-gray-500">{c.client_nom}</div></div>
+                    <div className="text-right"><div className="text-sm font-medium">{c.montant_annuel_ht?.toLocaleString('fr-FR')} €</div><div className="text-xs text-orange-600">{c.date_fin ? format(new Date(c.date_fin), 'dd/MM/yyyy') : ''}</div></div>
+                  </div>
+                ) : (
+                  <Link key={c.id} to={`/contrats/${c.id}`} className="flex items-center justify-between p-3 rounded-lg hover:bg-gray-50 border border-gray-100">
+                    <div><div className="font-medium text-sm">{c.numero_contrat}</div><div className="text-xs text-gray-500">{c.client_nom}</div></div>
+                    <div className="text-right"><div className="text-sm font-medium">{c.montant_annuel_ht?.toLocaleString('fr-FR')} €</div><div className="text-xs text-orange-600">{c.date_fin ? format(new Date(c.date_fin), 'dd/MM/yyyy') : ''}</div></div>
+                  </Link>
+                )
               ))}
             </div>
           )}
@@ -107,7 +121,11 @@ export default function Dashboard() {
         <div className="card">
           <div className="flex items-center justify-between mb-4">
             <h2 className="font-semibold text-gray-900">💶 Prochaines factures ({annee + 1})</h2>
-            <Link to="/facturation" className="text-blue-600 text-sm">Gérer →</Link>
+            {isFormateur ? (
+              <span className="text-gray-400 text-sm">Consultation seule</span>
+            ) : (
+              <Link to="/facturation" className="text-blue-600 text-sm">Gérer →</Link>
+            )}
           </div>
           {facturesAVenir.length === 0 ? <p className="text-gray-400 text-sm text-center py-4">Aucune facture planifiée</p> : (
             <div className="space-y-2">
@@ -121,6 +139,12 @@ export default function Dashboard() {
           )}
         </div>
       </div>
+
+      {indice && !isFormateur && (
+        <div className="text-xs text-gray-400">
+          Indice courant : {indice.famille} — {indice.valeur}
+        </div>
+      )}
     </div>
   );
 }
