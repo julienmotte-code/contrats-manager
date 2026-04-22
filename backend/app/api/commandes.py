@@ -447,12 +447,23 @@ async def facturer_commande(
     # Préparer les lignes pour Karlia
     lignes_karlia = []
     for ligne in commande.lignes:
+        quantity = float(ligne.quantite or 1)
+        unit_price = float(ligne.prix_unitaire_ht or 0)
+        discount_type = (ligne.discount_type or "").strip().lower()
+        discount_value = float(ligne.discount_value or 0)
+        discount_percent = float(ligne.discount_percent or 0)
+
+        if discount_type == "percent" and discount_percent > 0:
+            unit_price = round(unit_price * (1 - discount_percent / 100), 6)
+        elif discount_type in ("amount", "fixed") and discount_value > 0 and quantity > 0:
+            unit_price = round(max(0, unit_price - (discount_value / quantity)), 6)
+
         lignes_karlia.append({
             "id_product": ligne.karlia_product_id,
-            "quantity": float(ligne.quantite or 1),
-            "unit_price": float(ligne.prix_unitaire_ht or 0),
+            "quantity": quantity,
+            "unit_price": unit_price,
             "vat_rate": float(ligne.taux_tva or 20),
-            "description": ligne.designation or ""
+            "description": ligne.designation or "",
         })
     
     if not lignes_karlia:
