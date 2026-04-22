@@ -357,6 +357,9 @@ class CommandeLigne(Base):
     montant_ht        = Column(Numeric(15, 2))
     montant_tva       = Column(Numeric(15, 2))
     montant_ttc       = Column(Numeric(15, 2))
+    discount_type     = Column(String(20))
+    discount_value    = Column(Numeric(15, 6))
+    discount_percent  = Column(Numeric(15, 6))
     ordre             = Column(Integer, default=0)
     created_at        = Column(DateTime(timezone=True), server_default=func.now())
 

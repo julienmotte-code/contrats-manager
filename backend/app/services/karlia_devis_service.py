@@ -362,6 +362,9 @@ class KarliaDevisService:
                 prix_unitaire_ht=product.get("price_without_tax"),
                 taux_tva=self._parse_tva(product.get("id_vat")) or float(product.get("vat", 0)),
                 montant_ht=product.get("total_without_tax"),
+                discount_type=product.get("discount_type"),
+                discount_value=product.get("discount_value"),
+                discount_percent=product.get("discount_percent"),
                 ordre=idx
             )
             db.add(ligne)

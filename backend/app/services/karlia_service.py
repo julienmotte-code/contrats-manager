@@ -203,14 +203,14 @@ class KarliaService:
                 # Ne pas envoyer description pour éviter le doublon d'intitulé.
                 p["id_product"] = ligne["id_product"]
             else:
-                # Sans id_product, on envoie la description en fallback
+                # Sans id_product, on envoie description en fallback
                 p["description"] = ligne.get("description", "")
             products_list.append(p)
 
         payload = {
             "id_customer": int(client_karlia_id),
             "id_type": 4,                              # 4 = Facture dans Karlia
-            "id_status": 2,                            # 2 = Envoyée (directement émise)
+            "id_status": 0,                            # 0 = Brouillon
             "reference": reference_contrat,
             "date": datetime.now().strftime("%d/%m/%Y"),
             "date_end": date_echeance.strftime("%d/%m/%Y"),
@@ -227,6 +227,11 @@ class KarliaService:
     async def lister_templates_documents(self) -> dict:
         """Liste les templates de documents disponibles dans Karlia."""
         return await self._get("/documents/templates")
+
+    async def marquer_facture_envoyee(self, doc_id: str) -> dict:
+        """Passe une facture Karlia au statut 2 = Envoyée."""
+        payload = {"id_status": 2}
+        return await self._post(f"/documents/{doc_id}", payload)
 
     # ─────────────────────────────────────────────
     # UTILITAIRES

@@ -131,10 +131,10 @@ async def synchroniser_factures_karlia(
     erreurs = 0
 
     try:
-        # Récupérer les factures depuis Karlia (type 4 = Facture, statut 2 = Envoyée)
+        # Récupérer les factures depuis Karlia (type 4 = Facture, statut 1 = Acceptée)
         result = await karlia._get("/documents", {
             "type": 4,
-            "status": 2,
+            "status": 1,
             "limit": 500,
             "order": "date",
             "direction": "DESC"
@@ -421,6 +421,12 @@ async def transmettre_factures(
             facture.date_transmission = datetime.now()
             facture.chorus_numero_flux = str(id_flux) if id_flux else None
             facture.chorus_message_erreur = None
+
+            if facture.karlia_document_id:
+                try:
+                    await karlia.marquer_facture_envoyee(str(facture.karlia_document_id))
+                except Exception as e:
+                    logger.error(f"Erreur mise à jour statut Karlia facture {facture.karlia_document_id}: {e}")
 
             db.commit()
 
