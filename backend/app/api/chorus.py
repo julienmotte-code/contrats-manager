@@ -70,6 +70,7 @@ class TransmissionOut(BaseModel):
 class TransmettreRequest(BaseModel):
     facture_ids: List[str]
     code_service_destinataire: Optional[str] = None
+    dry_run: bool = False
 
 
 class SynchroFacturesResponse(BaseModel):
@@ -116,6 +117,54 @@ async def tester_connexion_chorus(
     return result
 
 
+@router.post("/auto-config")
+async def auto_config_chorus(
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Récupère idUtilisateurCourant et idFournisseur depuis Chorus Pro et les sauvegarde.
+    À appeler une fois après configuration des credentials OAuth.
+    """
+    service = _get_chorus_service(db)
+    try:
+        info = await service.recuperer_utilisateur_courant()
+    except ChorusError as e:
+        raise HTTPException(status_code=502, detail={"message": str(e), "detail": e.detail})
+
+    id_utilisateur = info.get("idUtilisateurCourant")
+    structure = info.get("structureCourante") or {}
+    id_structure = structure.get("idStructureCPP") or structure.get("idStructure")
+
+    if not id_utilisateur or not id_structure:
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "message": "Réponse Chorus Pro inattendue : idUtilisateurCourant ou idStructureCPP absent.",
+                "raw": info,
+            }
+        )
+
+    saved = {}
+    for cle, valeur in [
+        ("chorus_id_fournisseur", str(id_structure)),
+        ("chorus_id_utilisateur_courant", str(id_utilisateur)),
+    ]:
+        param = db.query(Parametre).filter(Parametre.cle == cle).first()
+        if param:
+            param.valeur = valeur
+        else:
+            db.add(Parametre(cle=cle, valeur=valeur, description=""))
+        saved[cle] = valeur
+    db.commit()
+
+    return {
+        "message": "Auto-configuration Chorus Pro effectuée",
+        "saved": saved,
+        "structure": structure,
+    }
+
+
 @router.post("/synchro-factures", response_model=SynchroFacturesResponse)
 async def synchroniser_factures_karlia(
     db: Session = Depends(get_db),
@@ -141,7 +190,13 @@ async def synchroniser_factures_karlia(
         })
 
         factures_karlia = result.get("data", [])
-        logger.info(f"Récupération de {len(factures_karlia)} factures depuis Karlia")
+        logger.info(f"Récupération brute de {len(factures_karlia)} documents depuis Karlia")
+
+        factures_karlia = [
+            fk for fk in factures_karlia
+            if str(fk.get("id_type")) == "4" and str(fk.get("canceled", "0")) == "0"
+        ]
+        logger.info(f"Factures Karlia retenues après filtre: {len(factures_karlia)}")
 
         for fk in factures_karlia:
             try:
@@ -155,8 +210,8 @@ async def synchroniser_factures_karlia(
                 ).first()
 
                 # Récupérer les infos client
-                client_id = fk.get("id_customer")
-                client_nom = fk.get("customer_name", "")
+                client_id = fk.get("id_customer") or fk.get("id_customer_supplier")
+                client_nom = fk.get("customer_name") or fk.get("customer_supplier_title", "")
                 client_siret = None
 
                 # Chercher le SIRET dans le cache client
@@ -169,8 +224,8 @@ async def synchroniser_factures_karlia(
                         client_nom = client_cache.nom
 
                 # Calculer les montants
-                montant_ht = Decimal(str(fk.get("amount_without_tax", 0) or 0))
-                montant_ttc = Decimal(str(fk.get("amount_with_tax", 0) or 0))
+                montant_ht = Decimal(str(fk.get("total_without_tax", 0) or 0))
+                montant_ttc = Decimal(str(fk.get("total_with_tax", 0) or 0))
                 montant_tva = montant_ttc - montant_ht
 
                 # Parser les dates
@@ -203,8 +258,8 @@ async def synchroniser_factures_karlia(
                     # Nouvelle facture
                     nouvelle = FactureKarlia(
                         karlia_document_id=karlia_id,
-                        numero_facture=fk.get("reference", f"FAC-{karlia_id}"),
-                        reference=fk.get("reference"),
+                        numero_facture=fk.get("number") or fk.get("reference") or f"FAC-{karlia_id}",
+                        reference=fk.get("reference") or fk.get("number"),
                         client_karlia_id=client_id or 0,
                         client_nom=client_nom,
                         client_siret=client_siret,
@@ -383,11 +438,40 @@ async def transmettre_factures(
             })
             continue
 
+        if request.dry_run:
+            try:
+                reponse = await service.soumettre_facture(
+                    destinataire_siret=facture.client_siret,
+                    destinataire_code_service=request.code_service_destinataire or facture.client_code_service,
+                    numero_facture=facture.numero_facture,
+                    date_facture=facture.date_facture,
+                    date_echeance=facture.date_echeance,
+                    montant_ht=facture.montant_ht,
+                    montant_tva=facture.montant_tva or Decimal("0"),
+                    montant_ttc=facture.montant_ttc or facture.montant_ht,
+                    commentaire=f"Facture {facture.numero_facture}",
+                    dry_run=True,
+                )
+                resultats.append({
+                    "facture_id": fid,
+                    "succes": True,
+                    "dry_run": True,
+                    "payload": reponse.get("payload"),
+                })
+            except ChorusError as e:
+                resultats.append({
+                    "facture_id": fid,
+                    "succes": False,
+                    "dry_run": True,
+                    "erreur": str(e),
+                })
+            continue
+
         # Créer l'enregistrement de transmission
         transmission = TransmissionChorus(
             facture_id=facture.id,
             statut="EN_COURS",
-            transmis_par=current_user.get("login", "system"),
+            transmis_par=getattr(current_user, "login", None) or getattr(current_user, "email", None) or "system",
             transmis_at=datetime.now()
         )
         db.add(transmission)
@@ -395,7 +479,6 @@ async def transmettre_factures(
         db.commit()
 
         try:
-            # Appel API Chorus Pro
             reponse = await service.soumettre_facture(
                 destinataire_siret=facture.client_siret,
                 destinataire_code_service=request.code_service_destinataire or facture.client_code_service,
@@ -408,14 +491,14 @@ async def transmettre_factures(
                 commentaire=f"Facture {facture.numero_facture}"
             )
 
-            # Mise à jour succès
             id_flux = reponse.get("numeroFluxDepot") or reponse.get("idFlux")
             id_facture = reponse.get("identifiantFactureCPP") or reponse.get("idFacture")
 
             transmission.statut = "SUCCES"
             transmission.chorus_id_flux = str(id_flux) if id_flux else None
             transmission.chorus_id_facture = str(id_facture) if id_facture else None
-            transmission.reponse_json = reponse
+            transmission.payload_json = service.last_request
+            transmission.reponse_json = service.last_response or reponse
 
             facture.statut_chorus = "TRANSMISE"
             facture.date_transmission = datetime.now()
@@ -441,7 +524,8 @@ async def transmettre_factures(
             transmission.statut = "ECHEC"
             transmission.code_retour = str(e.status_code)
             transmission.message_retour = e.message
-            transmission.reponse_json = e.detail
+            transmission.payload_json = service.last_request
+            transmission.reponse_json = service.last_response or e.detail
 
             facture.statut_chorus = "ERREUR"
             facture.chorus_message_erreur = f"{e.status_code}: {e.message}"
@@ -458,6 +542,8 @@ async def transmettre_factures(
         except Exception as e:
             transmission.statut = "ECHEC"
             transmission.message_retour = str(e)
+            transmission.payload_json = service.last_request
+            transmission.reponse_json = service.last_response
 
             facture.statut_chorus = "ERREUR"
             facture.chorus_message_erreur = str(e)

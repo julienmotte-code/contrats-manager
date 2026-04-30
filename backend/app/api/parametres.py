@@ -100,6 +100,8 @@ CHORUS_PARAMS = [
     'chorus_siret_emetteur',
     'chorus_code_service',
     'chorus_code_banque',
+    'chorus_id_fournisseur',
+    'chorus_id_utilisateur_courant',
     'chorus_mode_qualification',
 ]
 
@@ -153,6 +155,8 @@ def update_chorus_params(
                 'chorus_siret_emetteur': 'SIRET de la structure émettrice',
                 'chorus_code_service': 'Code service fournisseur (optionnel)',
                 'chorus_code_banque': 'Code coordonnées bancaires fournisseur',
+                'chorus_id_fournisseur': 'Identifiant Chorus du fournisseur',
+                'chorus_id_utilisateur_courant': 'Identifiant Chorus de l\'utilisateur courant',
                 'chorus_mode_qualification': 'Utiliser l\'environnement de qualification (sandbox)',
             }
             db.add(Parametre(cle=cle, valeur=valeur, description=descriptions.get(cle, '')))
