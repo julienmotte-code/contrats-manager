@@ -19,6 +19,8 @@ const PARAMS_CHORUS = [
   { cle: 'chorus_siret_emetteur', label: 'SIRET émetteur', type: 'text', placeholder: '12345678901234' },
   { cle: 'chorus_code_service', label: 'Code service (optionnel)', type: 'text', placeholder: '' },
   { cle: 'chorus_code_banque', label: 'Code banque (optionnel)', type: 'text', placeholder: '' },
+  { cle: 'chorus_id_fournisseur', label: 'idFournisseur Chorus (requis)', type: 'text', placeholder: 'ID numérique de la structure fournisseur' },
+  { cle: 'chorus_id_utilisateur_courant', label: 'idUtilisateurCourant Chorus (optionnel)', type: 'text', placeholder: 'ID numérique du compte technique' },
 ];
 
 export default function Parametres() {
