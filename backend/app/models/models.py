@@ -435,6 +435,9 @@ class TransmissionChorus(Base):
     payload_json      = Column(JSONB)
     reponse_json      = Column(JSONB)
 
+    # Mode test (true = soumission de validation, n'engage aucune vraie facture côté Karlia)
+    is_test           = Column(Boolean, nullable=False, default=False, server_default="false")
+
     # Métadonnées
     transmis_par      = Column(String(100))
     transmis_at       = Column(DateTime(timezone=True), server_default=func.now())

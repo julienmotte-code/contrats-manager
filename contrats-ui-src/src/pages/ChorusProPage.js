@@ -15,7 +15,8 @@ import {
   Error as ErrorIcon,
   HourglassEmpty as PendingIcon,
   Info as InfoIcon,
-  Edit as EditIcon
+  Edit as EditIcon,
+  Science as ScienceIcon
 } from '@mui/icons-material';
 import { format } from 'date-fns';
 import { fr } from 'date-fns/locale';
@@ -55,6 +56,7 @@ export default function ChorusProPage() {
   const [stats, setStats] = useState(null);
   const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'info' });
   const [editDialog, setEditDialog] = useState({ open: false, facture: null, siret: '', codeService: '' });
+  const [testDialog, setTestDialog] = useState({ open: false, siret: '', codeService: '', running: false, result: null });
 
   const chargerFactures = useCallback(async () => {
     setLoading(true);
@@ -199,6 +201,34 @@ export default function ChorusProPage() {
     });
   };
 
+  const lancerTestSoumission = async () => {
+    if (testDialog.siret.length !== 14 || !/^\d{14}$/.test(testDialog.siret)) {
+      setSnackbar({ open: true, message: 'SIRET destinataire invalide (14 chiffres)', severity: 'warning' });
+      return;
+    }
+    setTestDialog(prev => ({ ...prev, running: true, result: null }));
+    try {
+      const response = await api.post('/api/chorus/test-soumission', {
+        destinataire_siret: testDialog.siret,
+        destinataire_code_service: testDialog.codeService || null,
+        montant_ht: 1.0,
+        taux_tva: 20.0,
+      });
+      setTestDialog(prev => ({ ...prev, running: false, result: response.data }));
+      setSnackbar({
+        open: true,
+        message: response.data.succes ? `Test ${response.data.numero_facture} OK` : `Test ${response.data.numero_facture} échoué`,
+        severity: response.data.succes ? 'success' : 'error',
+      });
+      chargerFactures();
+    } catch (error) {
+      const detail = error.response?.data?.detail;
+      const msg = typeof detail === 'object' ? (detail.message || JSON.stringify(detail)) : (detail || error.message);
+      setTestDialog(prev => ({ ...prev, running: false, result: { succes: false, erreur: msg, http_status: error.response?.status } }));
+      setSnackbar({ open: true, message: msg || 'Erreur test soumission', severity: 'error' });
+    }
+  };
+
   const sauvegarderSiret = async () => {
     try {
       await api.put(
@@ -283,6 +313,15 @@ export default function ChorusProPage() {
             onClick={testerConnexion}
           >
             Tester connexion
+          </Button>
+
+          <Button
+            variant="outlined"
+            color="warning"
+            startIcon={<ScienceIcon />}
+            onClick={() => setTestDialog({ open: true, siret: '', codeService: '', running: false, result: null })}
+          >
+            Test soumission
           </Button>
 
           <Box sx={{ flexGrow: 1 }} />
@@ -472,6 +511,83 @@ export default function ChorusProPage() {
             disabled={editDialog.siret.length !== 14}
           >
             Enregistrer
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Dialog Test soumission */}
+      <Dialog
+        open={testDialog.open}
+        onClose={() => !testDialog.running && setTestDialog({ open: false, siret: '', codeService: '', running: false, result: null })}
+        maxWidth="md"
+        fullWidth
+      >
+        <DialogTitle>🧪 Soumission de test à Chorus Pro</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            Construit une facture fictive (1,00 € HT, TVA 20 %, numéro <code>TEST-YYYYMMDD-HHMMSS</code>) et l'envoie via le même builder que la soumission réelle. Permet de valider le format du payload sans consommer de vrai numéro Karlia.
+          </Typography>
+          <TextField
+            label="SIRET destinataire (14 chiffres)"
+            fullWidth
+            value={testDialog.siret}
+            onChange={(e) => setTestDialog(prev => ({ ...prev, siret: e.target.value.replace(/\D/g, '').slice(0, 14) }))}
+            inputProps={{ maxLength: 14 }}
+            helperText="SIRET d'une vraie collectivité publique (l'envoi se fera en sandbox si le mode qualification est activé)"
+            sx={{ mb: 2, mt: 1 }}
+          />
+          <TextField
+            label="Code service exécutant (optionnel)"
+            fullWidth
+            value={testDialog.codeService}
+            onChange={(e) => setTestDialog(prev => ({ ...prev, codeService: e.target.value }))}
+            helperText="À ne renseigner que si le destinataire l'exige"
+            sx={{ mb: 2 }}
+          />
+          {testDialog.result && (
+            <Alert
+              severity={testDialog.result.succes ? 'success' : 'error'}
+              sx={{ mt: 2 }}
+            >
+              <Typography variant="body2" sx={{ fontWeight: 'bold', mb: 1 }}>
+                {testDialog.result.succes ? `✅ Succès — ${testDialog.result.numero_facture}` : `❌ Échec — ${testDialog.result.numero_facture || ''}`}
+              </Typography>
+              {testDialog.result.last_response && (
+                <Box sx={{ mt: 1 }}>
+                  <Typography variant="caption" component="div" sx={{ fontWeight: 'bold' }}>Status HTTP : {testDialog.result.last_response.status_code} {testDialog.result.last_response.reason || ''}</Typography>
+                  {testDialog.result.last_response.x_correlation_id && (
+                    <Typography variant="caption" component="div">x-correlationid : <code>{testDialog.result.last_response.x_correlation_id}</code></Typography>
+                  )}
+                </Box>
+              )}
+              <Box component="pre" sx={{ mt: 1, fontSize: '0.75rem', whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 300, overflow: 'auto', backgroundColor: 'rgba(0,0,0,0.04)', p: 1, borderRadius: 1 }}>
+                {JSON.stringify({
+                  succes: testDialog.result.succes,
+                  numero_flux: testDialog.result.numero_flux,
+                  id_facture_chorus: testDialog.result.id_facture_chorus,
+                  erreur: testDialog.result.erreur,
+                  request: testDialog.result.last_request,
+                  response: testDialog.result.last_response,
+                }, null, 2)}
+              </Box>
+            </Alert>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button
+            onClick={() => setTestDialog({ open: false, siret: '', codeService: '', running: false, result: null })}
+            disabled={testDialog.running}
+          >
+            Fermer
+          </Button>
+          <Button
+            variant="contained"
+            color="warning"
+            onClick={lancerTestSoumission}
+            disabled={testDialog.running || testDialog.siret.length !== 14}
+            startIcon={testDialog.running ? <CircularProgress size={16} color="inherit" /> : <ScienceIcon />}
+          >
+            {testDialog.running ? 'Envoi...' : 'Lancer le test'}
           </Button>
         </DialogActions>
       </Dialog>
