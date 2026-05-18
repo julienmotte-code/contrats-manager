@@ -98,11 +98,16 @@ class ChorusProService:
             body_text = response.text
         except Exception:
             body_text = None
+        try:
+            body_json = response.json() if body_text else None
+        except Exception:
+            body_json = None
         self.last_response = {
-            "status": response.status_code,
+            "status_code": response.status_code,
             "reason": response.reason_phrase,
             "headers": dict(response.headers),
-            "body_raw": body_text,
+            "body_text": body_text,
+            "body_json": body_json,
             "x_correlation_id": response.headers.get("x-correlationid"),
         }
 
@@ -307,7 +312,9 @@ class ChorusProService:
                 {"missing_param": "chorus_id_fournisseur"}
             )
 
-        # Construction du payload selon le format Chorus Pro
+        # Construction du payload selon le format Chorus Pro V5.01
+        # Note: lignePosteTauxTva (code varchar6) ET lignePosteTauxTvaManuel (decimal) sont
+        # mutuellement exclusifs. On envoie uniquement Manuel et on OMET totalement la clé code.
         lignes_poste = []
         if lignes:
             for i, ligne in enumerate(lignes, 1):
@@ -319,7 +326,6 @@ class ChorusProService:
                     "lignePosteUnite": ligne.get("unite", "lot"),
                     "lignePosteMontantUnitaireHT": float(ligne.get("prix_unitaire_ht", 0)),
                     "lignePosteMontantRemiseHT": 0,
-                    "lignePosteTauxTva": None,
                     "lignePosteTauxTvaManuel": float(ligne.get("taux_tva", 20)),
                 })
         else:
@@ -332,7 +338,6 @@ class ChorusProService:
                 "lignePosteUnite": "lot",
                 "lignePosteMontantUnitaireHT": float(montant_ht),
                 "lignePosteMontantRemiseHT": 0,
-                "lignePosteTauxTva": None,
                 "lignePosteTauxTvaManuel": 20.0,
             })
 
@@ -369,19 +374,18 @@ class ChorusProService:
             "lignePoste": lignes_poste,
             "ligneTva": [
                 {
-                    "ligneRecapTvaTauxManuel": 20.0,
-                    "ligneRecapTvaMontantBaseHtParTaux": float(montant_ht),
-                    "ligneRecapTvaMontantTvaParTaux": float(montant_tva),
+                    "ligneTvaTauxManuel": 20.0,
+                    "ligneTvaMontantBaseHtParTaux": float(montant_ht),
+                    "ligneTvaMontantTvaParTaux": float(montant_tva),
                 }
             ],
             "montantTotal": {
                 "montantHtTotal": float(montant_ht),
-                "montantTvaTotal": float(montant_tva),
+                "montantTVA": float(montant_tva),
                 "montantTtcTotal": float(montant_ttc),
                 "montantRemiseGlobaleTTC": 0,
                 "motifRemiseGlobaleTTC": None,
                 "montantAPayer": float(montant_ttc),
-                "montantAcompte": 0,
             },
         }
 

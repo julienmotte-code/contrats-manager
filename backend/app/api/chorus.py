@@ -73,6 +73,14 @@ class TransmettreRequest(BaseModel):
     dry_run: bool = False
 
 
+class TestSoumissionRequest(BaseModel):
+    destinataire_siret: str
+    destinataire_code_service: Optional[str] = None
+    montant_ht: float = 1.0
+    taux_tva: float = 20.0
+    commentaire: Optional[str] = None
+
+
 class SynchroFacturesResponse(BaseModel):
     importees: int
     mises_a_jour: int
@@ -559,6 +567,115 @@ async def transmettre_factures(
         "echecs": nb_echecs,
         "details": resultats
     }
+
+
+@router.post("/test-soumission")
+async def test_soumission_chorus(
+    request: TestSoumissionRequest,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Soumission de test à Chorus Pro avec une facture fictive.
+    Réutilise le builder de payload de la soumission réelle pour valider le format.
+    Numéro de facture = TEST-{YYYYMMDD-HHMMSS} (unique, ne consomme aucun numéro Karlia).
+    La transmission est marquée is_test=TRUE dans transmissions_chorus.
+    Renvoie la réponse PISTE complète (status_code + body_text + headers).
+    """
+    if len(request.destinataire_siret) != 14 or not request.destinataire_siret.isdigit():
+        raise HTTPException(status_code=400, detail="SIRET destinataire invalide (14 chiffres requis)")
+
+    service = _get_chorus_service(db)
+
+    now = datetime.now()
+    numero_test = f"TEST-{now.strftime('%Y%m%d-%H%M%S')}"
+    karlia_id_synthetique = -int(now.timestamp())  # négatif → ne peut pas entrer en collision avec un vrai id Karlia
+    montant_ht = Decimal(str(request.montant_ht))
+    montant_tva = (montant_ht * Decimal(str(request.taux_tva)) / Decimal("100")).quantize(Decimal("0.01"))
+    montant_ttc = montant_ht + montant_tva
+
+    # Facture fictive persistée pour respecter la FK + tracer le test
+    facture_test = FactureKarlia(
+        karlia_document_id=karlia_id_synthetique,
+        numero_facture=numero_test,
+        reference=numero_test,
+        client_karlia_id=0,
+        client_nom="TEST Chorus Pro",
+        client_siret=request.destinataire_siret,
+        client_code_service=request.destinataire_code_service,
+        montant_ht=montant_ht,
+        montant_tva=montant_tva,
+        montant_ttc=montant_ttc,
+        date_facture=now.date(),
+        statut_chorus="EN_COURS",
+    )
+    db.add(facture_test)
+    db.flush()
+
+    transmission = TransmissionChorus(
+        facture_id=facture_test.id,
+        statut="EN_COURS",
+        is_test=True,
+        transmis_par=getattr(current_user, "login", None) or getattr(current_user, "email", None) or "system",
+        transmis_at=now,
+    )
+    db.add(transmission)
+    db.commit()
+
+    try:
+        reponse = await service.soumettre_facture(
+            destinataire_siret=request.destinataire_siret,
+            destinataire_code_service=request.destinataire_code_service,
+            numero_facture=numero_test,
+            date_facture=now.date(),
+            montant_ht=montant_ht,
+            montant_tva=montant_tva,
+            montant_ttc=montant_ttc,
+            commentaire=request.commentaire or f"Soumission de test {numero_test}",
+        )
+
+        id_flux = reponse.get("numeroFluxDepot") or reponse.get("idFlux")
+        id_facture_chorus = reponse.get("identifiantFactureCPP") or reponse.get("idFacture")
+
+        transmission.statut = "SUCCES"
+        transmission.chorus_id_flux = str(id_flux) if id_flux else None
+        transmission.chorus_id_facture = str(id_facture_chorus) if id_facture_chorus else None
+        transmission.payload_json = service.last_request
+        transmission.reponse_json = service.last_response or reponse
+        facture_test.statut_chorus = "TRANSMISE"
+        facture_test.date_transmission = datetime.now()
+        facture_test.chorus_numero_flux = str(id_flux) if id_flux else None
+        db.commit()
+
+        return {
+            "succes": True,
+            "numero_facture": numero_test,
+            "transmission_id": str(transmission.id),
+            "numero_flux": id_flux,
+            "id_facture_chorus": id_facture_chorus,
+            "last_request": service.last_request,
+            "last_response": service.last_response,
+        }
+
+    except ChorusError as e:
+        transmission.statut = "ECHEC"
+        transmission.code_retour = str(e.status_code)
+        transmission.message_retour = e.message
+        transmission.payload_json = service.last_request
+        transmission.reponse_json = service.last_response or e.detail
+        facture_test.statut_chorus = "ERREUR"
+        facture_test.chorus_message_erreur = f"{e.status_code}: {e.message}"
+        db.commit()
+
+        return {
+            "succes": False,
+            "numero_facture": numero_test,
+            "transmission_id": str(transmission.id),
+            "erreur": str(e),
+            "status_code": e.status_code,
+            "last_request": service.last_request,
+            "last_response": service.last_response,
+        }
 
 
 @router.get("/factures/{facture_id}/transmissions", response_model=List[TransmissionOut])
