@@ -41,4 +41,7 @@ export const facturationAPI = {
   lancer: (data) => api.post('/api/facturation/lancer', data),
   lotStatut: (id) => api.get(`/api/facturation/lot/${id}`),
 };
+export const dashboardAPI = {
+  stats: () => api.get('/api/dashboard/stats'),
+};
 export default api;
