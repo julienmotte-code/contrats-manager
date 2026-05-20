@@ -129,7 +129,7 @@ Exemple 2026 (Syntec Août) : `Prix 2026 = Prix 2025 × (Août 2025 / Août 2024
 - **URL API :** `https://karlia.fr/app/api/v2`
 - **Auth :** Bearer token (stocké en base, table `parametres`, clé `karlia_api_key`)
 - **Synchronisation :** clients et articles (manuelle + automatique nocturne 2h00)
-- **Factures :** créées directement en statut "Envoyée" (`id_status: 2`)
+- **Factures :** créées en statut "Brouillon" (`id_status: 1`) — validation manuelle dans Karlia
 - **Contrainte :** `id_product` obligatoire dans `products_list` pour que le montant soit enregistré
 - **DNS Docker :** `/etc/docker/daemon.json` → `{"dns": ["8.8.8.8", "8.8.4.4"]}`
 
@@ -181,7 +181,7 @@ Voir `CODING_RULES.md` pour le détail complet.
 ✅ CRUD contrats pluriannuels + avenants + prorata
 ✅ Plan de facturation prévisionnel
 ✅ Révision annuelle par indice Syntec
-✅ Émission factures dans Karlia (statut Envoyée)
+✅ Émission factures dans Karlia (statut Brouillon, validation manuelle)
 ✅ Gestion indices Syntec Août/Octobre
 ✅ Interface multi-rôles avec menus dynamiques
 ✅ Génération contrats Word par publipostage (champs «NomChamp»)

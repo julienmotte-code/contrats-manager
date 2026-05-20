@@ -84,7 +84,7 @@ db.commit()
 {
   "id_customer": 1234567,
   "id_type": 4,
-  "id_status": 2,
+  "id_status": 1,
   "reference": "NUM-CONTRAT",
   "date": "03/03/2026",
   "date_end": "31/12/2026",
@@ -98,7 +98,7 @@ db.commit()
 }
 ```
 - `id_product` est OBLIGATOIRE pour que le montant soit enregistré
-- `id_status: 2` à la création = Envoyée directement
+- `id_status: 1` à la création = Brouillon (à valider manuellement dans Karlia)
 - `POST /documents/{id}/status` ne fonctionne PAS pour les factures
 - `id_vat` : "1"=20%, "2"=10%, "3"=5.5%, "4"=0%
 

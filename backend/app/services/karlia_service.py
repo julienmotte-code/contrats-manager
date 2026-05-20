@@ -210,7 +210,7 @@ class KarliaService:
         payload = {
             "id_customer": int(client_karlia_id),
             "id_type": 4,                              # 4 = Facture dans Karlia
-            "id_status": 2,                            # 2 = Envoyée (directement émise)
+            "id_status": 1,                            # 1 = Brouillon (à valider manuellement dans Karlia)
             "reference": reference_contrat,
             "date": datetime.now().strftime("%d/%m/%Y"),
             "date_end": date_echeance.strftime("%d/%m/%Y"),
