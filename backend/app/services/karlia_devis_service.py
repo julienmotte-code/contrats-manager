@@ -17,6 +17,7 @@ from app.models.models import Commande, CommandeLigne, Parametre
 logger = logging.getLogger(__name__)
 
 KARLIA_TYPE_DEVIS = 1
+KARLIA_TYPE_BON_COMMANDE = 2  # documenté pour traçabilité, utilisé uniquement dans les logs/diagnostics
 KARLIA_STATUS_DEVIS_ACCEPTE = 2
 KARLIA_FIELD_TRAITE_ID = "66505"
 
@@ -72,10 +73,13 @@ class KarliaDevisService:
             limit = 100
             while True:
                 params = {
-                    "id_type": KARLIA_TYPE_DEVIS,
+                    # NB: Karlia v2 attend `type` (pas `id_type` qui est silencieusement
+                    # ignoré). Validé par test live le 2026-05-20 — voir commit message
+                    # et fix/cleanup-bc-commandes pour le contexte.
+                    "type": KARLIA_TYPE_DEVIS,
                     "id_status": KARLIA_STATUS_DEVIS_ACCEPTE,
                     "limit": limit,
-                    "offset": offset
+                    "offset": offset,
                 }
                 if depuis_date:
                     params["update_date_min"] = depuis_date.strftime("%Y-%m-%d")
@@ -201,12 +205,14 @@ class KarliaDevisService:
         Synchronise les devis acceptés depuis Karlia.
         - Ignore les devis dont l'opportunité est déjà marquée 'Traité'
         - Après import d'un nouveau devis, marque l'opportunité comme 'Traité'
+        - Rejette tout document dont id_type != KARLIA_TYPE_DEVIS (défense en profondeur)
         """
         result = {
             "success": True,
             "nouveaux_devis": 0,
             "devis_mis_a_jour": 0,
             "devis_ignores": 0,
+            "documents_rejetes_par_type": 0,
             "opportunites_marquees": 0,
             "erreurs": [],
             "message": ""
@@ -224,6 +230,20 @@ class KarliaDevisService:
                     try:
                         karlia_id = devis_data.get("id")
                         if not karlia_id:
+                            continue
+
+                        # Défense en profondeur : rejet d'un document de mauvais type.
+                        # Karlia v2 filtre déjà côté serveur via `type=1`, mais ce
+                        # filtre Python protège contre une régression future (changement
+                        # de comportement API, nouveau type introduit, etc.).
+                        id_type_recu = int(devis_data.get("id_type", 0))
+                        if id_type_recu != KARLIA_TYPE_DEVIS:
+                            logger.warning(
+                                f"Document Karlia rejeté (id_type={id_type_recu}, "
+                                f"number={devis_data.get('number')}, "
+                                f"karlia_document_id={karlia_id}) — attendu id_type=1"
+                            )
+                            result["documents_rejetes_par_type"] += 1
                             continue
 
                         id_opportunity = devis_data.get("id_opportunity")
@@ -282,6 +302,7 @@ class KarliaDevisService:
                 f"Sync terminée: {result['nouveaux_devis']} nouveaux, "
                 f"{result['devis_mis_a_jour']} MAJ, "
                 f"{result['devis_ignores']} ignorés (déjà traités), "
+                f"{result['documents_rejetes_par_type']} rejetés (mauvais type), "
                 f"{result['opportunites_marquees']} opportunités marquées"
             )
         except Exception as e:
