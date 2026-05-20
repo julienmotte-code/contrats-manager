@@ -1,10 +1,10 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   Box, Paper, Typography, Table, TableBody, TableCell, TableContainer,
   TableHead, TableRow, Button, IconButton, Chip, TextField, InputAdornment,
   Dialog, DialogTitle, DialogContent, DialogActions, CircularProgress,
   Alert, Card, CardContent, Grid, Radio, RadioGroup, FormControlLabel,
-  FormControl, FormLabel, Checkbox, Tooltip, TablePagination
+  FormControl, FormLabel, Checkbox, Tooltip, TablePagination, TableSortLabel
 } from '@mui/material';
 import {
   Sync as SyncIcon, Search as SearchIcon, Visibility as ViewIcon,
@@ -25,6 +25,10 @@ export default function NouvellesCommandes() {
   const [total, setTotal] = useState(0);
   const [error, setError] = useState(null);
   const [success, setSuccess] = useState(null);
+
+  // Tri client-side : colonne + direction. null/null = ordre serveur par défaut.
+  const [sortBy, setSortBy] = useState(null);
+  const [sortDir, setSortDir] = useState(null);
 
   // Dialog validation
   const [validationOpen, setValidationOpen] = useState(false);
@@ -139,6 +143,45 @@ export default function NouvellesCommandes() {
     return new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'EUR' }).format(montant);
   };
 
+  // Cycle de tri : null -> asc -> desc -> null. Un seul tri actif à la fois.
+  const handleSortClick = (column) => {
+    if (sortBy !== column) {
+      setSortBy(column);
+      setSortDir('asc');
+      return;
+    }
+    if (sortDir === 'asc') {
+      setSortDir('desc');
+      return;
+    }
+    setSortBy(null);
+    setSortDir(null);
+  };
+
+  // Tri client-side sur la page courante. Les vides (null/'') vont toujours en dernier.
+  const sortedCommandes = useMemo(() => {
+    if (!sortBy || !sortDir) return commandes;
+    const arr = [...commandes];
+    arr.sort((a, b) => {
+      const va = a[sortBy];
+      const vb = b[sortBy];
+      const aEmpty = !va;
+      const bEmpty = !vb;
+      if (aEmpty && bEmpty) return 0;
+      if (aEmpty) return 1;
+      if (bEmpty) return -1;
+      const da = new Date(va + 'T12:00:00').getTime();
+      const db = new Date(vb + 'T12:00:00').getTime();
+      const aInvalid = isNaN(da);
+      const bInvalid = isNaN(db);
+      if (aInvalid && bInvalid) return 0;
+      if (aInvalid) return 1;
+      if (bInvalid) return -1;
+      return sortDir === 'asc' ? da - db : db - da;
+    });
+    return arr;
+  }, [commandes, sortBy, sortDir]);
+
   return (
     <Box sx={{ p: 3 }}>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
@@ -233,8 +276,24 @@ export default function NouvellesCommandes() {
             <TableRow sx={{ backgroundColor: 'grey.100' }}>
               <TableCell>Référence</TableCell>
               <TableCell>Client</TableCell>
-              <TableCell>Date devis</TableCell>
-              <TableCell>Date acceptation</TableCell>
+              <TableCell sortDirection={sortBy === 'date_devis' ? sortDir : false}>
+                <TableSortLabel
+                  active={sortBy === 'date_devis'}
+                  direction={sortBy === 'date_devis' && sortDir ? sortDir : 'asc'}
+                  onClick={() => handleSortClick('date_devis')}
+                >
+                  Date devis
+                </TableSortLabel>
+              </TableCell>
+              <TableCell sortDirection={sortBy === 'date_acceptation' ? sortDir : false}>
+                <TableSortLabel
+                  active={sortBy === 'date_acceptation'}
+                  direction={sortBy === 'date_acceptation' && sortDir ? sortDir : 'asc'}
+                  onClick={() => handleSortClick('date_acceptation')}
+                >
+                  Date acceptation
+                </TableSortLabel>
+              </TableCell>
               <TableCell align="right">Montant TTC</TableCell>
               <TableCell align="center">PDF</TableCell>
               <TableCell align="center">Actions</TableCell>
@@ -247,14 +306,14 @@ export default function NouvellesCommandes() {
                   <CircularProgress />
                 </TableCell>
               </TableRow>
-            ) : commandes.length === 0 ? (
+            ) : sortedCommandes.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={7} align="center" sx={{ py: 4 }}>
                   Aucune nouvelle commande
                 </TableCell>
               </TableRow>
             ) : (
-              commandes.map((cmd) => (
+              sortedCommandes.map((cmd) => (
                 <TableRow key={cmd.id} hover>
                   <TableCell>
                     <Typography variant="body2" fontWeight="medium">
