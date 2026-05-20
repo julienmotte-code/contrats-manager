@@ -12,3 +12,4 @@ contrats-ui/build/
 contrats-ui-src/node_modules/
 contrats-ui-src/build/
 storage/documents_generes/
+backups/*.sql
