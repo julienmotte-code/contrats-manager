@@ -14,15 +14,13 @@ POST /api/commandes/{id}/terminer     → Marquer comme terminée
 GET  /api/commandes/{id}/pdf          → Télécharger le PDF du devis
 """
 from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import StreamingResponse
+from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import or_
 from typing import Optional, List
 from pydantic import BaseModel
 from datetime import date, datetime
 from decimal import Decimal
-import io
-import base64
 import logging
 
 from app.core.database import get_db
@@ -81,7 +79,6 @@ class CommandeResponse(BaseModel):
     contrat_id: Optional[str] = None
     pdf_disponible: bool = False
     pdf_url: Optional[str] = None
-    pdf_devis_nom: Optional[str] = None
     nb_prestations: int = 0
     nb_prestations_attribuees: int = 0
     nb_prestations_planifiees: int = 0
@@ -166,9 +163,8 @@ def _commande_to_response(commande: Commande) -> CommandeResponse:
         intervenant_nom=commande.intervenant_nom,
         notes_planification=commande.notes_planification,
         contrat_id=str(commande.contrat_id) if commande.contrat_id else None,
-        pdf_disponible=bool(commande.pdf_url or commande.pdf_devis),
+        pdf_disponible=bool(commande.pdf_url),
         pdf_url=commande.pdf_url,
-        pdf_devis_nom=commande.pdf_devis_nom,
         nb_prestations=nb_prestations,
         nb_prestations_attribuees=nb_attribuees,
         nb_prestations_planifiees=nb_planifiees,
@@ -397,33 +393,13 @@ async def lier_contrat_commande(commande_id: int, contrat_id: str, db: Session =
 
 @router.get("/{commande_id}/pdf")
 async def get_commande_pdf(commande_id: int, db: Session = Depends(get_db)):
-    """Redirige vers le PDF du devis sur Karlia."""
-    from fastapi.responses import RedirectResponse
-    
+    """Redirige vers le PDF du devis hébergé par Karlia."""
     commande = db.query(Commande).filter(Commande.id == commande_id).first()
     if not commande:
         raise HTTPException(status_code=404, detail="Commande non trouvée")
-    
-    # Utiliser l'URL directe si disponible
-    if commande.pdf_url:
-        return RedirectResponse(url=commande.pdf_url)
-    
-    raise HTTPException(status_code=404, detail="PDF non disponible")
-    
-    filename = commande.pdf_devis_nom or f"devis_{commande.reference_devis or commande.id}.pdf"
-    
-    # Décoder le base64 si nécessaire
-    pdf_content = commande.pdf_devis
-    if isinstance(pdf_content, bytes):
-        pdf_content = base64.b64decode(pdf_content.decode("utf-8"))
-    elif isinstance(pdf_content, str):
-        pdf_content = base64.b64decode(pdf_content)
-    
-    return StreamingResponse(
-        io.BytesIO(pdf_content),
-        media_type="application/pdf",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'}
-    )
+    if not commande.pdf_url:
+        raise HTTPException(status_code=404, detail="PDF non disponible pour cette commande")
+    return RedirectResponse(url=commande.pdf_url)
 
 @router.post("/{commande_id}/facturer")
 async def facturer_commande(
