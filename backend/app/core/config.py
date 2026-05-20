@@ -28,6 +28,12 @@ class Settings(BaseSettings):
     # Quota Karlia : 100 req/min — on limite à 80 pour sécurité
     KARLIA_MAX_REQUESTS_PER_MINUTE: int = 80
 
+    # Sync devis Karlia : sleep entre chaque itération du loop.
+    # 1.2s ≈ 50 req/min en pire cas (4 appels/devis) → marge confortable
+    # sous le quota 100. À ajuster si la sync devient trop lente sur de
+    # gros volumes (variable d'env KARLIA_SYNC_SLEEP_SECONDS).
+    KARLIA_SYNC_SLEEP_SECONDS: float = 1.2
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
