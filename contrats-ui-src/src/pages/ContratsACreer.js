@@ -13,6 +13,7 @@ import {
 import { format } from 'date-fns';
 import { fr } from 'date-fns/locale';
 import api from '../services/api';
+import { openPdfWithAuth } from '../services/pdfFetch';
 
 export default function ContratsACreer() {
   const navigate = useNavigate();
@@ -60,7 +61,7 @@ export default function ContratsACreer() {
   };
 
   const handleDownloadPdf = (commande) => {
-    window.open(`/api/commandes/${commande.id}/pdf`, '_blank');
+    openPdfWithAuth(`/api/commandes/${commande.id}/pdf`);
   };
 
   const handleCreerContrat = (commande) => {

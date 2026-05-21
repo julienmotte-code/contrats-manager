@@ -2,8 +2,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from app.core.database import get_db
-from app.models.models import Contrat, PlanFacturation, IndiceRevision, Utilisateur
-from app.api.auth import get_current_user
+from app.core.security import require_role
+from app.models.models import Contrat, PlanFacturation, IndiceRevision
 from app.services.karlia_service import karlia
 from app.services.revision_service import (
     calculer_revision, verifier_indices_disponibles, get_regle_revision, FAMILLES_CONTRAT
@@ -16,7 +16,12 @@ import uuid
 router = APIRouter()
 
 @router.get("/apercu/{annee}")
-def apercu_facturation(annee: int, famille: Optional[str] = None, db: Session = Depends(get_db)):
+def apercu_facturation(
+    annee: int,
+    famille: Optional[str] = None,
+    db: Session = Depends(get_db),
+    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE")),
+):
     """Liste les factures à émettre pour une année donnée."""
     annee_courante = date.today().year
     q = db.query(PlanFacturation).join(Contrat).filter(
@@ -57,7 +62,7 @@ def apercu_facturation(annee: int, famille: Optional[str] = None, db: Session = 
 async def calculer_factures(
     body: dict,
     db: Session = Depends(get_db),
-    current_user: Utilisateur = Depends(get_current_user)
+    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE")),
 ):
     """
     Calcule les montants révisés pour une liste de plans.
@@ -136,7 +141,7 @@ async def calculer_factures(
 async def lancer_facturation(
     body: dict,
     db: Session = Depends(get_db),
-    current_user: Utilisateur = Depends(get_current_user)
+    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE")),
 ):
     """Émet les factures pour une liste de plan_ids."""
     annee = body.get("annee", date.today().year)

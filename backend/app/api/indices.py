@@ -2,9 +2,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
 from app.core.database import get_db
+from app.core.security import require_authenticated, require_role
 from app.models.models import IndiceRevision
-from app.api.auth import get_current_user
-from app.models.models import Utilisateur
 from app.services.revision_service import FAMILLES_CONTRAT
 from datetime import date
 from typing import Optional
@@ -13,7 +12,9 @@ import uuid
 router = APIRouter()
 
 @router.get("/familles")
-def lister_familles():
+def lister_familles(
+    current_user = Depends(require_authenticated),
+):
     """Liste les familles de contrats et leurs règles de révision."""
     return {"data": FAMILLES_CONTRAT}
 
@@ -21,7 +22,8 @@ def lister_familles():
 def lister_indices(
     mois: Optional[str] = None,
     annee: Optional[int] = None,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user = Depends(require_authenticated),
 ):
     """Liste les indices Syntec avec filtres optionnels."""
     q = db.query(IndiceRevision)
@@ -43,7 +45,10 @@ def lister_indices(
     }
 
 @router.get("/courant")
-def indice_courant(db: Session = Depends(get_db)):
+def indice_courant(
+    db: Session = Depends(get_db),
+    current_user = Depends(require_authenticated),
+):
     """Retourne le dernier indice Syntec Août."""
     indice = db.query(IndiceRevision).filter(
         IndiceRevision.mois == "AOUT"
@@ -64,7 +69,7 @@ def indice_courant(db: Session = Depends(get_db)):
 def creer_indice(
     data: dict,
     db: Session = Depends(get_db),
-    current_user: Utilisateur = Depends(get_current_user)
+    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE")),
 ):
     """Crée un nouvel indice Syntec."""
     mois = data.get("mois", "AOUT").upper()
@@ -108,7 +113,7 @@ def modifier_indice(
     indice_id: str,
     data: dict,
     db: Session = Depends(get_db),
-    current_user: Utilisateur = Depends(get_current_user)
+    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE")),
 ):
     """Modifie un indice existant."""
     indice = db.query(IndiceRevision).filter(IndiceRevision.id == indice_id).first()
@@ -125,7 +130,7 @@ def modifier_indice(
 def supprimer_indice(
     indice_id: str,
     db: Session = Depends(get_db),
-    current_user: Utilisateur = Depends(get_current_user)
+    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE")),
 ):
     """Supprime un indice."""
     from app.models.models import Contrat, PlanFacturation
@@ -144,7 +149,8 @@ def supprimer_indice(
 def verifier_indices(
     famille: str,
     annee: int,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user = Depends(require_authenticated),
 ):
     """Vérifie que les indices nécessaires sont disponibles pour une famille et une année."""
     from app.services.revision_service import verifier_indices_disponibles

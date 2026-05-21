@@ -12,6 +12,7 @@ import {
 import { format, isPast, parseISO } from 'date-fns';
 import { fr } from 'date-fns/locale';
 import api from '../services/api';
+import { openPdfWithAuth } from '../services/pdfFetch';
 
 export default function CommandesPlanifiees() {
   const [commandes, setCommandes] = useState([]);
@@ -85,7 +86,7 @@ export default function CommandesPlanifiees() {
   };
 
   const handleDownloadPdf = (commande) => {
-    window.open(`/api/commandes/${commande.id}/pdf`, '_blank');
+    openPdfWithAuth(`/api/commandes/${commande.id}/pdf`);
   };
 
   const formatDate = (dateStr) => {

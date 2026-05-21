@@ -24,6 +24,7 @@ from decimal import Decimal
 import logging
 
 from app.core.database import get_db
+from app.core.security import require_authenticated, require_role
 from app.services.karlia_service import karlia
 from app.models.models import Commande, CommandeLigne, Prestation, Contrat
 from app.services.karlia_devis_service import karlia_devis_service
@@ -198,7 +199,11 @@ def _get_commandes_by_statut(db: Session, statut: str, page: int, page_size: int
 # ── Routes ───────────────────────────────────────────────────────────────────
 
 @router.post("/sync", response_model=SyncDevisResult)
-async def sync_devis_karlia(force_full: bool = Query(False), db: Session = Depends(get_db)):
+async def sync_devis_karlia(
+    force_full: bool = Query(False),
+    db: Session = Depends(get_db),
+    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE")),
+):
     """Synchronise les devis acceptés depuis Karlia."""
     try:
         result = await karlia_devis_service.sync_devis_acceptes(db, force_full=force_full)
@@ -209,7 +214,10 @@ async def sync_devis_karlia(force_full: bool = Query(False), db: Session = Depen
 
 
 @router.get("/stats", response_model=CommandeStats)
-async def get_commandes_stats(db: Session = Depends(get_db)):
+async def get_commandes_stats(
+    db: Session = Depends(get_db),
+    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE")),
+):
     """Retourne les statistiques des commandes."""
     return CommandeStats(
         nouvelles=db.query(Commande).filter(Commande.statut == "nouvelle").count(),
@@ -228,7 +236,8 @@ async def get_nouvelles_commandes(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     search: Optional[str] = None,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE")),
 ):
     """Liste des nouvelles commandes à traiter."""
     return _get_commandes_by_statut(db, "nouvelle", page, page_size, search)
@@ -239,7 +248,8 @@ async def get_commandes_a_planifier(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     search: Optional[str] = None,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE")),
 ):
     """Liste des commandes à planifier."""
     return _get_commandes_by_statut(db, "a_planifier", page, page_size, search)
@@ -250,7 +260,8 @@ async def get_commandes_planifiees(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     search: Optional[str] = None,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE")),
 ):
     """Liste des commandes planifiées."""
     return _get_commandes_by_statut(db, "planifiee", page, page_size, search)
@@ -261,7 +272,8 @@ async def get_commandes_terminees(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     search: Optional[str] = None,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE")),
 ):
     """Liste des commandes terminées (prestations réalisées, à facturer)."""
     return _get_commandes_by_statut(db, "deployee", page, page_size, search)
@@ -274,7 +286,8 @@ async def get_contrats_a_creer(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     search: Optional[str] = None,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE")),
 ):
     """Liste des commandes nécessitant la création d'un contrat/avenant."""
     query = db.query(Commande).filter(
@@ -299,7 +312,11 @@ async def get_contrats_a_creer(
 
 
 @router.get("/{commande_id}", response_model=CommandeResponse)
-async def get_commande(commande_id: int, db: Session = Depends(get_db)):
+async def get_commande(
+    commande_id: int,
+    db: Session = Depends(get_db),
+    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE")),
+):
     """Récupère les détails d'une commande."""
     commande = db.query(Commande).filter(Commande.id == commande_id).first()
     if not commande:
@@ -311,7 +328,8 @@ async def get_commande(commande_id: int, db: Session = Depends(get_db)):
 async def valider_commande(
     commande_id: int,
     validation: CommandeValidation,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE")),
 ):
     """Valide une commande avec le choix de traitement."""
     commande = db.query(Commande).filter(Commande.id == commande_id).first()
@@ -336,7 +354,8 @@ async def valider_commande(
 async def planifier_commande(
     commande_id: int,
     planification: CommandePlanification,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE")),
 ):
     """Planifie une commande (date et intervenant)."""
     commande = db.query(Commande).filter(Commande.id == commande_id).first()
@@ -358,7 +377,11 @@ async def planifier_commande(
 
 
 @router.post("/{commande_id}/terminer", response_model=CommandeResponse)
-async def terminer_commande(commande_id: int, db: Session = Depends(get_db)):
+async def terminer_commande(
+    commande_id: int,
+    db: Session = Depends(get_db),
+    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE")),
+):
     """Marque une commande comme terminée."""
     commande = db.query(Commande).filter(Commande.id == commande_id).first()
     if not commande:
@@ -373,7 +396,12 @@ async def terminer_commande(commande_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/{commande_id}/lier-contrat/{contrat_id}", response_model=CommandeResponse)
-async def lier_contrat_commande(commande_id: int, contrat_id: str, db: Session = Depends(get_db)):
+async def lier_contrat_commande(
+    commande_id: int,
+    contrat_id: str,
+    db: Session = Depends(get_db),
+    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE")),
+):
     """Lie un contrat créé à une commande."""
     commande = db.query(Commande).filter(Commande.id == commande_id).first()
     if not commande:
@@ -392,7 +420,11 @@ async def lier_contrat_commande(commande_id: int, contrat_id: str, db: Session =
 
 
 @router.get("/{commande_id}/pdf")
-async def get_commande_pdf(commande_id: int, db: Session = Depends(get_db)):
+async def get_commande_pdf(
+    commande_id: int,
+    db: Session = Depends(get_db),
+    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE")),
+):
     """Redirige vers le PDF du devis hébergé par Karlia."""
     commande = db.query(Commande).filter(Commande.id == commande_id).first()
     if not commande:
@@ -404,7 +436,8 @@ async def get_commande_pdf(commande_id: int, db: Session = Depends(get_db)):
 @router.post("/{commande_id}/facturer")
 async def facturer_commande(
     commande_id: int,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE")),
 ):
     """Émet une facture Karlia pour une commande terminée."""
     commande = db.query(Commande).options(

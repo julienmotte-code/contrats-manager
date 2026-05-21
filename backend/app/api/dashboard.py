@@ -9,6 +9,7 @@ from datetime import date
 import logging
 
 from app.core.database import get_db
+from app.core.security import require_authenticated
 from app.models.models import Contrat, Commande
 
 logger = logging.getLogger(__name__)
@@ -36,7 +37,10 @@ def _label_famille(code: str) -> str:
 # ── Route principale ────────────────────────────────────────
 
 @router.get("/stats")
-def dashboard_stats(db: Session = Depends(get_db)):
+def dashboard_stats(
+    db: Session = Depends(get_db),
+    current_user = Depends(require_authenticated),
+):
     """
     Retourne l'ensemble des statistiques pour la page d'accueil.
 

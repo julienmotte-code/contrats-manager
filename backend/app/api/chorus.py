@@ -16,7 +16,7 @@ from app.models.models import (
 )
 from app.services.chorus_service import ChorusProService, ChorusError, get_chorus_service_from_params
 from app.services.karlia_service import karlia, KarliaError
-from app.api.auth import get_current_user
+from app.core.security import require_role
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/chorus", tags=["Chorus Pro"])
@@ -108,7 +108,7 @@ def _get_chorus_service(db: Session) -> ChorusProService:
 @router.get("/test-connexion")
 async def tester_connexion_chorus(
     db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
+    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE"))
 ):
     """Teste la connexion à Chorus Pro."""
     service = _get_chorus_service(db)
@@ -119,7 +119,7 @@ async def tester_connexion_chorus(
 @router.post("/synchro-factures", response_model=SynchroFacturesResponse)
 async def synchroniser_factures_karlia(
     db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
+    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE"))
 ):
     """
     Synchronise les factures depuis Karlia vers la table locale.
@@ -243,7 +243,7 @@ async def lister_factures(
     date_fin: Optional[date] = Query(None),
     search: Optional[str] = Query(None, description="Recherche par numéro ou client"),
     db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
+    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE"))
 ):
     """Liste les factures avec filtres."""
     query = db.query(FactureKarlia)
@@ -294,7 +294,7 @@ async def lister_factures(
 async def obtenir_facture(
     facture_id: str,
     db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
+    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE"))
 ):
     """Détail d'une facture."""
     facture = db.query(FactureKarlia).filter(FactureKarlia.id == facture_id).first()
@@ -331,7 +331,7 @@ async def mettre_a_jour_siret(
     siret: str = Query(..., min_length=14, max_length=14),
     code_service: Optional[str] = Query(None),
     db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
+    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE"))
 ):
     """Met à jour le SIRET destinataire d'une facture."""
     facture = db.query(FactureKarlia).filter(FactureKarlia.id == facture_id).first()
@@ -353,7 +353,7 @@ async def mettre_a_jour_siret(
 async def transmettre_factures(
     request: TransmettreRequest,
     db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
+    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE"))
 ):
     """
     Transmet une ou plusieurs factures vers Chorus Pro.
@@ -387,7 +387,7 @@ async def transmettre_factures(
         transmission = TransmissionChorus(
             facture_id=facture.id,
             statut="EN_COURS",
-            transmis_par=current_user.get("login", "system"),
+            transmis_par=current_user.login,
             transmis_at=datetime.now()
         )
         db.add(transmission)
@@ -479,7 +479,7 @@ async def transmettre_factures(
 async def historique_transmissions(
     facture_id: str,
     db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
+    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE"))
 ):
     """Historique des tentatives de transmission pour une facture."""
     transmissions = db.query(TransmissionChorus).filter(
@@ -506,7 +506,7 @@ async def historique_transmissions(
 async def rechercher_structure(
     siret: str = Query(..., min_length=14, max_length=14),
     db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
+    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE"))
 ):
     """Recherche une structure dans Chorus Pro par SIRET."""
     service = _get_chorus_service(db)
@@ -521,7 +521,7 @@ async def rechercher_structure(
 @router.get("/statistiques")
 async def statistiques_chorus(
     db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
+    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE"))
 ):
     """Statistiques des transmissions Chorus Pro."""
     stats = db.query(

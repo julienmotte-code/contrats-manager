@@ -2,10 +2,9 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import Dict
 from app.core.database import get_db
+from app.core.security import require_role
 from app.models.models import Parametre, ClientCache, ArticleCache
 from app.services.karlia_service import karlia
-from app.api.auth import get_current_user
-from app.models.models import Utilisateur
 from pydantic import BaseModel
 
 router = APIRouter()
@@ -16,7 +15,10 @@ class ParamUpdate(BaseModel):
 
 
 @router.get("/")
-def get_parametres(db: Session = Depends(get_db), current_user: Utilisateur = Depends(get_current_user)):
+def get_parametres(
+    db: Session = Depends(get_db),
+    current_user = Depends(require_role("ADMIN")),
+):
     params = db.query(Parametre).all()
     result = {p.cle: p.valeur for p in params}
     # Masquer la clé API — afficher seulement les 8 premiers caractères
@@ -33,10 +35,8 @@ def get_parametres(db: Session = Depends(get_db), current_user: Utilisateur = De
 def update_karlia_api_key(
     body: ParamUpdate,
     db: Session = Depends(get_db),
-    current_user: Utilisateur = Depends(get_current_user)
+    current_user = Depends(require_role("ADMIN")),
 ):
-    if current_user.role != "ADMIN":
-        raise HTTPException(status_code=403, detail="Réservé aux administrateurs")
     param = db.query(Parametre).filter(Parametre.cle == "karlia_api_key").first()
     if param:
         param.valeur = body.valeur
@@ -50,8 +50,8 @@ def update_karlia_api_key(
 
 @router.post("/tester-connexion")
 async def tester_connexion(
-    current_user: Utilisateur = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user = Depends(require_role("ADMIN")),
 ):
     try:
         result = await karlia.tester_connexion()
@@ -71,10 +71,8 @@ async def tester_connexion(
 @router.post("/vider-cache")
 def vider_cache(
     db: Session = Depends(get_db),
-    current_user: Utilisateur = Depends(get_current_user)
+    current_user = Depends(require_role("ADMIN")),
 ):
-    if current_user.role != "ADMIN":
-        raise HTTPException(status_code=403, detail="Réservé aux administrateurs")
     nb_clients = db.query(ClientCache).count()
     nb_articles = db.query(ArticleCache).count()
     db.query(ClientCache).delete()
@@ -107,7 +105,7 @@ CHORUS_PARAMS = [
 @router.get("/chorus")
 def get_chorus_params(
     db: Session = Depends(get_db),
-    current_user: Utilisateur = Depends(get_current_user)
+    current_user = Depends(require_role("ADMIN")),
 ):
     """Récupère les paramètres Chorus Pro (masque les secrets)."""
     params = db.query(Parametre).filter(Parametre.cle.in_(CHORUS_PARAMS)).all()
@@ -125,12 +123,9 @@ def get_chorus_params(
 def update_chorus_params(
     data: Dict[str, str],
     db: Session = Depends(get_db),
-    current_user: Utilisateur = Depends(get_current_user)
+    current_user = Depends(require_role("ADMIN")),
 ):
     """Met à jour les paramètres Chorus Pro."""
-    if current_user.role != "ADMIN":
-        raise HTTPException(status_code=403, detail="Réservé aux administrateurs")
-    
     updated = 0
     for cle in CHORUS_PARAMS:
         if cle not in data:

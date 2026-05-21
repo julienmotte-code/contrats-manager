@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from typing import Optional
 from pydantic import BaseModel, EmailStr
 from app.core.database import get_db
+from app.core.security import require_role
 from app.models.models import ClientCache
 from app.services.karlia_service import karlia, KarliaError
 from app.services.contrat_service import generer_numero_client
@@ -52,6 +53,7 @@ async def lister_clients(
     offset: int = Query(0),
     source: str = Query("cache", description="'cache' ou 'karlia'"),
     db: Session = Depends(get_db),
+    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE")),
 ):
     """
     Liste les clients.
@@ -90,6 +92,7 @@ async def lister_clients(
 def rechercher_clients_cache(
     q: str = Query(..., min_length=2, description="Terme de recherche"),
     db: Session = Depends(get_db),
+    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE")),
 ):
     """Recherche dans le cache local en mode contient — nom, numéro, ville, SIRET, email."""
     termes = q.strip().split()
@@ -120,7 +123,10 @@ def rechercher_clients_cache(
 
 
 @router.get("/numero-suivant")
-async def prochain_numero_client(db: Session = Depends(get_db)):
+async def prochain_numero_client(
+    db: Session = Depends(get_db),
+    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE")),
+):
     """
     Retourne le prochain numéro incrémental disponible.
     Interroge Karlia pour être sûr de ne pas créer un doublon.
@@ -137,6 +143,7 @@ async def creer_client(
     data: ClientCreate,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
+    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE")),
 ):
     """
     Crée un client dans Karlia et le met en cache local.
@@ -235,6 +242,7 @@ async def creer_client(
 def fiche_client(
     karlia_id: str,
     db: Session = Depends(get_db),
+    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE")),
 ):
     """
     Fiche complete d'un client : coordonnees + contrats actifs + historique termines.
@@ -311,7 +319,11 @@ def fiche_client(
 
 
 @router.get("/{karlia_id}")
-async def obtenir_client(karlia_id: str, db: Session = Depends(get_db)):
+async def obtenir_client(
+    karlia_id: str,
+    db: Session = Depends(get_db),
+    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE")),
+):
     """Retourne le détail d'un client (cache local en priorité)."""
     client = db.query(ClientCache).filter(ClientCache.karlia_id == karlia_id).first()
     if client:
@@ -325,7 +337,10 @@ async def obtenir_client(karlia_id: str, db: Session = Depends(get_db)):
 
 
 @router.post("/synchro")
-async def synchroniser_clients(db: Session = Depends(get_db)):
+async def synchroniser_clients(
+    db: Session = Depends(get_db),
+    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE")),
+):
     """
     Resynchronise le cache local depuis Karlia.
     À lancer manuellement ou planifier périodiquement.

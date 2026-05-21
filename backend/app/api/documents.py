@@ -17,8 +17,8 @@ from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.models.models import Contrat, ClientCache, DocumentGenere, ModeleDocument, Utilisateur
-from app.api.auth import get_current_user
+from app.core.security import require_authenticated, require_role
+from app.models.models import Contrat, ClientCache, DocumentGenere, ModeleDocument
 from app.services.document_service import generer_document, lister_documents_contrat, MODELES_DIR
 
 router = APIRouter()
@@ -30,12 +30,20 @@ TYPES_VALIDES = [
 
 
 @router.get("/contrat/{contrat_id}")
-def liste_documents(contrat_id: str, db: Session = Depends(get_db), current_user: Utilisateur = Depends(get_current_user)):
+def liste_documents(
+    contrat_id: str,
+    db: Session = Depends(get_db),
+    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE")),
+):
     return {"data": lister_documents_contrat(contrat_id, db)}
 
 
 @router.post("/generer/{contrat_id}")
-def generer_contrat(contrat_id: str, db: Session = Depends(get_db), current_user: Utilisateur = Depends(get_current_user)):
+def generer_contrat(
+    contrat_id: str,
+    db: Session = Depends(get_db),
+    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE")),
+):
     contrat = db.query(Contrat).filter(Contrat.id == uuid.UUID(contrat_id)).first()
     if not contrat:
         raise HTTPException(404, "Contrat introuvable")
@@ -49,7 +57,11 @@ def generer_contrat(contrat_id: str, db: Session = Depends(get_db), current_user
 
 
 @router.get("/telecharger/{doc_id}")
-def telecharger_document(doc_id: str, db: Session = Depends(get_db), current_user: Utilisateur = Depends(get_current_user)):
+def telecharger_document(
+    doc_id: str,
+    db: Session = Depends(get_db),
+    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE")),
+):
     doc = db.query(DocumentGenere).filter(DocumentGenere.id == uuid.UUID(doc_id)).first()
     if not doc:
         raise HTTPException(404, "Document introuvable")
@@ -61,7 +73,10 @@ def telecharger_document(doc_id: str, db: Session = Depends(get_db), current_use
 
 
 @router.get("/modeles")
-def liste_modeles(db: Session = Depends(get_db), current_user: Utilisateur = Depends(get_current_user)):
+def liste_modeles(
+    db: Session = Depends(get_db),
+    current_user = Depends(require_authenticated),
+):
     modeles = db.query(ModeleDocument).order_by(ModeleDocument.type_document, ModeleDocument.uploaded_at.desc()).all()
     return {"data": [{"id": str(m.id), "type_document": m.type_document, "nom": m.nom, "version": m.version,
         "actif": m.actif, "uploaded_by": m.uploaded_by,
@@ -70,11 +85,15 @@ def liste_modeles(db: Session = Depends(get_db), current_user: Utilisateur = Dep
 
 
 @router.post("/modeles/upload")
-async def uploader_modele(fichier: UploadFile = File(...), type_document: str = Form(...),
-    nom: str = Form(...), version: str = Form("1.0"), description: str = Form(""),
-    db: Session = Depends(get_db), current_user: Utilisateur = Depends(get_current_user)):
-    if current_user.role != "ADMIN":
-        raise HTTPException(403, "Réservé aux administrateurs")
+async def uploader_modele(
+    fichier: UploadFile = File(...),
+    type_document: str = Form(...),
+    nom: str = Form(...),
+    version: str = Form("1.0"),
+    description: str = Form(""),
+    db: Session = Depends(get_db),
+    current_user = Depends(require_role("ADMIN")),
+):
     if type_document not in TYPES_VALIDES:
         raise HTTPException(400, f"Type invalide. Valeurs acceptées : {TYPES_VALIDES}")
     if not fichier.filename.endswith(".docx"):
@@ -94,9 +113,11 @@ async def uploader_modele(fichier: UploadFile = File(...), type_document: str = 
 
 
 @router.patch("/modeles/{modele_id}/activer")
-def activer_modele(modele_id: str, db: Session = Depends(get_db), current_user: Utilisateur = Depends(get_current_user)):
-    if current_user.role != "ADMIN":
-        raise HTTPException(403, "Réservé aux administrateurs")
+def activer_modele(
+    modele_id: str,
+    db: Session = Depends(get_db),
+    current_user = Depends(require_role("ADMIN")),
+):
     modele = db.query(ModeleDocument).filter(ModeleDocument.id == uuid.UUID(modele_id)).first()
     if not modele:
         raise HTTPException(404, "Modèle introuvable")
@@ -107,9 +128,11 @@ def activer_modele(modele_id: str, db: Session = Depends(get_db), current_user: 
 
 
 @router.delete("/modeles/{modele_id}")
-def supprimer_modele(modele_id: str, db: Session = Depends(get_db), current_user: Utilisateur = Depends(get_current_user)):
-    if current_user.role != "ADMIN":
-        raise HTTPException(403, "Réservé aux administrateurs")
+def supprimer_modele(
+    modele_id: str,
+    db: Session = Depends(get_db),
+    current_user = Depends(require_role("ADMIN")),
+):
     modele = db.query(ModeleDocument).filter(ModeleDocument.id == uuid.UUID(modele_id)).first()
     if not modele:
         raise HTTPException(404, "Modèle introuvable")
