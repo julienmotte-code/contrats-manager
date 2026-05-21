@@ -1800,3 +1800,400 @@ Les pages liste paginées (`Contrats`, `NouvellesCommandes`, `Renouvellements`, 
 | 14 | Pas de TypeScript | élevée si refonte ambitieuse |
 
 ---
+
+## 6. Workflows métier de bout en bout
+
+Cette section trace **chaque cas d'usage métier** à travers les couches : déclencheur utilisateur → pages frontend → endpoints backend → tables modifiées → appels externes → effets de bord → points de friction connus.
+
+### Workflow 1 — Création d'un contrat via le tunnel 4 étapes
+
+**Déclencheur** : clic sur "Nouveau contrat" (bouton dashboard ou item menu `/contrats/tunnel?mode=nouveau`).
+
+**Page frontend** : `pages/TunnelContrat.js` (608 lignes) — assistant en 4 étapes.
+
+**Flux détaillé** :
+
+```
+ÉTAPE 0 — INFORMATIONS
+─────────────────────
+Utilisateur saisit : numero_contrat, client (via recherche cache), famille,
+date_debut, date_fin, montant_annuel_ht.
+Frontend appelle :
+  - GET /api/clients (via clientsAPI.liste, recherche debounced 300ms)
+Le frontend calcule le prorata localement (fonction calculerProrata) pour preview ;
+le calcul officiel est refait côté backend lors du POST /api/contrats.
+
+ÉTAPE 1 — ARTICLES
+──────────────────
+Utilisateur ajoute jusqu'à 8 articles (1 principal rang 0 + 7 annexes).
+Pour chaque article : recherche dans le catalogue produits :
+  - GET /api/produits (via produitsAPI.liste, source=cache par défaut)
+Validation locale : article rang 0 obligatoire avec id_product Karlia.
+
+ÉTAPE 2 — RÉCAPITULATIF
+───────────────────────
+Affichage statique du contrat + plan prévisionnel calculé localement.
+Bouton "Créer le contrat" :
+  1. POST /api/contrats (contrats.py:150)
+       └─► INSERT contrats (statut=BROUILLON)
+       └─► INSERT N contrat_articles (rang 0..7)
+       └─► appelle generer_plan_facturation()
+       └─► INSERT N plan_facturation (1 par année civile, statut=PLANIFIEE)
+       └─► COMMIT
+  2. POST /api/contrats/{id}/valider (contrats.py:272)
+       └─► UPDATE contrats SET statut='EN_COURS', validated_at=now()
+       └─► COMMIT
+  3. GET /api/contrats/{id} (recharge)
+
+ÉTAPE 3 — PREMIÈRE FACTURE
+──────────────────────────
+Bouton "Émettre la première facture" (optionnel) :
+  1. POST /api/facturation/calculer (annee=an1, plan_ids=[premiere_id])
+       └─► garde_pre_calcul (validation_service.valider_pre_calcul)
+       └─► montant_revise_ht = montant_ht_prevu (an1 = pas de révision)
+       └─► UPDATE plan_facturation SET statut='CALCULEE'
+  2. POST /api/facturation/lancer (annee=an1, plan_ids=[premiere_id])
+       └─► appelle karlia.creer_facture()  ← APPEL KARLIA
+       └─► UPDATE plan_facturation SET statut='EMISE', facture_karlia_id=…
+       └─► COMMIT
+```
+
+**Tables modifiées** : `contrats` (E), `contrat_articles` (E), `plan_facturation` (E), éventuellement `documents_generes` (E si génération Word séparément).
+
+**Appels externes** : `POST Karlia /documents` (id_status=1 Brouillon) si étape 3.
+
+**Effets de bord** :
+- Le numéro de contrat doit être unique — saisi manuellement par l'utilisateur (pas de génération automatique).
+- L'étape 3 est **optionnelle** — un contrat peut être laissé sans facture an1 (sera émise lors du run de facturation Syntec annuelle).
+
+**Points de friction connus** :
+- `client_karlia_id` peut être désynchronisé si le cache local est obsolète (clients récemment créés dans Karlia). Recommandation : utiliser `source=karlia` pour la recherche, mais le code utilise `cache` par défaut.
+- L'étape 3 enchaîne `calculer` puis `lancer` dans la même session, mais `valider_pre_emission` n'est pas appelé entre les deux (cf. anti-pattern #9 de la phase 4).
+
+### Workflow 2 — Renouvellement d'un contrat
+
+**Déclencheur** : depuis l'écran `Renouvellements` (filtre par mois/famille), ou depuis le détail d'un contrat dont la date_fin approche.
+
+**Pages frontend** : `pages/Renouvellements.js` (289 lignes) — multi-sélection + traitement en lot, ou `pages/DetailContrat.js` (action individuelle).
+
+**Endpoint principal** : `POST /api/contrats/{id}/renouveler` avec body `{type_renouvellement, …}`. **3 cas** :
+
+```
+CAS A — SPONTANE (prolongation 1 an)
+─────────────────────────────────────
+Frontend choisit type_renouvellement="SPONTANE", aucune autre donnée.
+Backend (contrats.py:420-442) :
+  - date_fin += 1 an (dateutil.relativedelta)
+  - nombre_annees recalculé
+  - statut = 'EN_COURS'
+  - ajoute 1 ligne plan_facturation pour l'année supplémentaire
+  - COMMIT
+Tables : UPDATE contrats, INSERT plan_facturation (×1)
+Appels externes : aucun.
+
+CAS B — NOUVEAU_CONTRAT (création + archivage)
+──────────────────────────────────────────────
+Frontend saisit : nouveau_numero, nouvelle_date_debut, nouvelle_date_fin (optionnelles).
+Backend (contrats.py:444-541) :
+  - Archive l'ancien : statut='TERMINE', motif_fin="Remplacé par nouveau contrat"
+  - Trouve les avenants enfants (contrat_parent_id = ancien.id, type='AVENANT')
+  - Crée nouveau contrat (type='RENOUVELLEMENT', contrat_parent_id=ancien.id)
+  - Copie les articles principaux de l'ancien
+  - Fusionne les articles des avenants (avec préfixe "[Avenant N]")
+  - Génère le plan_facturation complet
+  - COMMIT
+Tables : INSERT contrats + N contrat_articles + N plan_facturation,
+         UPDATE ancien contrat (TERMINE), UPDATE avenants (TERMINE)
+Appels externes : aucun.
+
+CAS C — FIN (arrêt sans suite)
+──────────────────────────────
+Backend (contrats.py:413-418) :
+  - statut='TERMINE', motif_fin=notes ou "Départ client"
+  - COMMIT
+Tables : UPDATE contrats (×1)
+```
+
+**Variante lot** : `POST /api/contrats/renouveler-lot` (contrats.py:585) supporte uniquement `SPONTANE` et `FIN`, **avec 1 COMMIT par contrat** → pas de transaction globale (cf. anti-pattern phase 3).
+
+**Effets de bord NOUVEAU_CONTRAT** :
+- Le nouveau contrat naît en `BROUILLON` — il faut ensuite passer par `/valider` pour le faire passer `EN_COURS` (workflow non automatisé par le renouvellement).
+- Les avenants sont **automatiquement terminés** mais leurs articles sont **intégrés au nouveau contrat** uniquement si le rang reste ≤ 7 (limite dure). Au-delà, les articles d'avenants sont **silencieusement perdus**.
+
+**Points de friction** :
+- Le renouvellement multi-sélection commit par contrat — si une erreur survient à mi-parcours, les contrats déjà renouvelés sont engagés, les autres non.
+- Aucun audit-trail dédié n'enregistre qui a renouvelé quoi (juste `motif_fin` en texte libre).
+
+### Workflow 3 — Révision Syntec annuelle (facturation N)
+
+**Déclencheur** : utilisateur ouvre `/facturation` en début d'année N.
+
+**Page frontend** : `pages/Facturation.js` (305 lignes).
+
+**Flux détaillé** :
+
+```
+1. APERÇU
+─────────
+GET /api/facturation/apercu/{annee}?famille=… (facturation.py:18)
+   → liste des plans PLANIFIEE/CALCULEE pour l'année
+   → indique facturable=true si annee ≤ annee_courante
+   → indique indices_ok=false si Syntec N-2 ou N-1 manquant
+
+2. CHOIX UTILISATEUR
+────────────────────
+Cocher les plans à traiter. Pour les contrats DIGITECH, saisir nouveau_montant.
+
+3. CALCUL
+─────────
+POST /api/facturation/calculer (facturation.py:56)
+  body: { annee, plan_ids:[…], nouveaux_montants: { plan_id: montant } }
+  Pour chaque plan :
+    a. garde_pre_calcul (validation_service)
+       → bloque si déjà EMISE, indice manquant, montant manuel requis, montant_ref nul
+    b. Si annee == an1 du contrat : montant_revise = montant_ht_prevu (pas de révision)
+    c. Sinon :
+       - regle = COSOLUCE/MAINTENANCE/ASSISTANCE_TEL → Syntec AOUT
+       - regle = CANTINE → Syntec OCTOBRE
+       - regle = DIGITECH → manuel
+       - regle = KIWI_BACKUP/AUTRE → AUCUNE
+       calcul_revision(famille, annee, montant_precedent, nouveau_montant_manuel)
+       → taux = indice(N-1) / indice(N-2), arrondi 6 décimales
+       → montant_revise = montant_precedent × taux, arrondi 0.01
+    d. UPDATE plan_facturation SET statut='CALCULEE', montant_revise_ht, taux_revision,
+                                    indice_calcul_id, montant_annuel_precedent
+    e. COMMIT
+Retourne { resultats: [{plan_id, ok, montant_revise, taux_revision, message}] }
+
+4. ÉMISSION
+───────────
+POST /api/facturation/lancer (facturation.py:135)
+  body: { annee, plan_ids:[…] }
+  Pour chaque plan :
+    a. Récupère les articles du contrat (rang ASC)
+    b. Construit N lignes Karlia, applique taux_revision sur chaque unit_price
+    c. Ajustement d'arrondi sur la dernière ligne (somme == montant_ht_decimal)
+  Appelle karlia.traitement_lot_factures(factures_a_emettre, delai=0.8s)
+  Pour chaque résultat Karlia :
+    - succès : UPDATE plan_facturation SET statut='EMISE', facture_karlia_id,
+                                          facture_karlia_ref, montant_annuel_precedent
+               (montant_annuel_precedent ← montant émis, pour révision N+1)
+    - échec : UPDATE plan_facturation SET statut='ERREUR', erreur_message
+    - validation post (logée mais non bloquante)
+  COMMIT après chaque plan
+```
+
+**Tables modifiées** : `plan_facturation` (E lourd).
+
+**Appels externes** : N × `POST Karlia /documents` (1 facture par contrat retenu) avec délai 0.8s entre appels (≈ 75 req/min).
+
+**Effets de bord** :
+- Une fois EMISE, un plan ne peut plus être recalculé (`valider_pre_calcul` bloque DEJA_EMISE).
+- En cas d'échec Karlia, le plan reste `ERREUR` ; il faut intervenir manuellement (corriger en DB ou retraiter).
+- Pas de `lots_facturation` créé (cf. anti-pattern phase 3 — `lot_id` jamais persisté).
+
+**Points de friction** :
+- L'utilisateur peut **lancer `/lancer` directement** sans passer par `/calculer` si le plan est `PLANIFIEE` ; dans ce cas, le `montant_revise_ht` est NULL et le code prend `montant_ht_prevu` (qui est le montant **non révisé**) — risque de facturation à l'ancien tarif.
+- Aucun appel à `valider_pre_emission` (cf. anti-pattern phase 4 #9) → l'absence d'`article_karlia_id` ne bloque pas l'émission, Karlia peut alors enregistrer une facture à montant 0.
+
+### Workflow 4 — Devis → Commande → Prestation → Facture (cycle commandes)
+
+**Déclencheur** : utilisateur clique "Synchroniser depuis Karlia" sur `/commandes/nouvelles`.
+
+**Pages frontend** : `NouvellesCommandes`, `CommandesAPlanifier`, `CommandesPlanifiees`, `CommandesTerminees`, `MesPrestations`.
+
+**Cycle complet** :
+
+```
+ÉTAPE 1 — SYNCHRONISATION DEVIS ACCEPTÉS
+─────────────────────────────────────────
+Déclencheur : POST /api/commandes/sync (commandes.py:200)
+Backend :
+  → karlia_devis_service.sync_devis_acceptes(db, force_full=False)
+  → Lit derniere_synchro_devis dans parametres
+  → GET /documents?type=1&id_status=2 paginé (Karlia)
+  → Pour chaque devis :
+      - sleep 1.2s (KARLIA_SYNC_SLEEP_SECONDS)
+      - skip si opportunity déjà "Traité" et pas de commande locale
+      - sinon INSERT commandes (statut='nouvelle') + N INSERT commande_lignes
+      - GET /opportunities/{id}/custom-fields → vérification "Traité"
+      - POST /opportunities/{id}/custom-fields/66505 {field_value: 1}
+        → MARQUE COMME "TRAITÉ" CÔTÉ KARLIA (effet de bord externe non réversible)
+  → UPDATE parametres.derniere_synchro_devis
+
+ÉTAPE 2 — VALIDATION (choix de traitement)
+──────────────────────────────────────────
+Sur NouvellesCommandes : utilisateur clique "Valider"
+POST /api/commandes/{id}/valider (commandes.py:310)
+  body: { type_traitement: 'a_planifier' | 'sans_planification', necessite_contrat: bool }
+  Backend :
+    - statut 'nouvelle' → 'a_planifier' (si type='a_planifier')
+                        OU 'deployee' (si type='sans_planification')
+    - date_validation = now()
+
+ÉTAPE 3a — PLANIFICATION (si type='a_planifier')
+────────────────────────────────────────────────
+Sur CommandesAPlanifier : sélection formateur
+POST /api/commandes/{id}/planifier (commandes.py:335)
+  body: { date_planifiee, intervenant_id, intervenant_nom, notes }
+  Backend :
+    - statut 'a_planifier' → 'planifiee'
+    - date_planifiee, intervenant_id renseignés
+
+ÉTAPE 3b — CRÉATION DES PRESTATIONS (workflow récent)
+─────────────────────────────────────────────────────
+POST /api/prestations/from-commande/{commande_id}?formateur_id=X
+  (prestations.py:203)
+  Backend :
+    - bloque si des prestations existent déjà pour cette commande
+    - pour chaque commande_ligne, INSERT prestations (statut='a_planifier',
+      formateur_id, designation issue de la ligne)
+
+ÉTAPE 4 — PLANIFICATION DES PRESTATIONS (par formateur)
+───────────────────────────────────────────────────────
+Sur MesPrestations (vue formateur) :
+POST /api/prestations/{id}/planifier (prestations.py:283)
+  body: { date_planifiee, heure_debut, heure_fin, lieu, notes }
+  Backend :
+    - statut 'a_planifier' → 'planifiee'
+    - SI toutes les prestations de la commande sont 'planifiee'/'realisee' :
+      → la commande mère bascule à 'planifiee' (effet de bord en cascade)
+
+ÉTAPE 5 — RÉALISATION
+─────────────────────
+POST /api/prestations/{id}/realiser (prestations.py:315)
+  Backend :
+    - statut 'planifiee' → 'realisee'
+    - SI toutes les prestations de la commande sont 'realisee' :
+      → la commande mère bascule à 'deployee' (équivalent métier "terminée")
+
+ÉTAPE 6 — FACTURATION
+─────────────────────
+Sur CommandesTerminees : utilisateur clique "Facturer"
+POST /api/commandes/{id}/facturer (commandes.py:404)
+  Backend :
+    - bloque si statut != 'deployee' ou client_karlia_id absent
+    - construit lignes_karlia depuis commande_lignes
+    - POST Karlia /documents (id_status=1 Brouillon)
+    - UPDATE commandes SET statut='facturee', facture_karlia_id, facture_karlia_ref
+```
+
+**Tables modifiées** : `commandes` (E), `commande_lignes` (E), `prestations` (E), `parametres` (E derniere_synchro_devis).
+
+**Appels externes** :
+- Karlia : `GET /documents`, `GET /documents/{id}`, `GET /customers/{id}`, `GET /opportunities/{id}`, `POST /opportunities/{id}/custom-fields/66505`, `POST /documents` (facturation finale).
+- Pas d'appel Google Calendar (service retiré).
+
+**Points de friction** :
+- Le marquage "Traité" côté Karlia est **non réversible** sans intervention manuelle dans Karlia.
+- Le statut `terminee` (`commandes.py:367`) est mort — jamais affiché en liste.
+- Les "terminees" affichées dans `CommandesTerminees` sont en réalité `deployee` (incohérence terminologique).
+- Le cycle prestations est **embryonnaire** : 11 prestations seulement dans la DB sur 142 commandes (cf. phase 2). La majorité des commandes facturées suivent probablement le raccourci `sans_planification` (saute à `deployee` directement).
+
+### Workflow 5 — Génération du plan de facturation
+
+Sous-workflow déclenché à chaque **création** ou **modification** de contrat brouillon, ou par le **renouvellement** SPONTANE (1 ligne ajoutée).
+
+**Code** : `services/contrat_service.py::generer_plan_facturation` (`contrat_service.py:56`).
+
+**Algorithme** :
+
+```python
+plan = []
+annee_debut = date_debut.year
+annee_fin = date_fin.year
+num = 1
+
+for annee in range(annee_debut, annee_fin + 1):
+    if annee == annee_debut and prorata["prorate"]:
+        plan.append({
+            "numero_facture": num,
+            "annee_facturation": annee,
+            "date_echeance": date(annee, 1, 1) if date_debut.month == 1 else date_debut,
+            "type_facture": "PRORATE",
+            "montant_ht_prevu": float(prorata["montant_ht"]),
+            "statut": "PLANIFIEE",
+        })
+    else:
+        plan.append({
+            "numero_facture": num,
+            "annee_facturation": annee,
+            "date_echeance": date(annee, 1, 1),
+            "type_facture": "ANNUELLE",
+            "montant_ht_prevu": float(montant_annuel_ht),
+            "statut": "PLANIFIEE",
+        })
+    num += 1
+return plan
+```
+
+**Règles métier appliquées** :
+- 1 ligne par année civile entre `date_debut.year` et `date_fin.year` inclus.
+- Si l'an 1 est proraté (date_debut ≠ 01/01) : type `PRORATE`, montant proraté, échéance = `date_debut`.
+- Sinon : type `ANNUELLE`, montant = `montant_annuel_ht` brut, échéance = 1er janvier de l'année.
+- Statut initial : `PLANIFIEE`.
+- Les montants annuels seront révisés à l'émission via le workflow 3.
+
+**Tables modifiées** : `plan_facturation` (INSERT N lignes).
+
+**Points de friction** :
+- `calculer_nombre_annees` retourne `annee_fin - annee_debut + 1` : un contrat 01/03/2026 → 28/02/2027 retourne **2 lignes** (2026 prorata + 2027 année pleine) — comportement acceptable mais à expliciter.
+- En cas de modification (`PUT /api/contrats/{id}`), le plan est **DELETE puis ré-INSERT en bloc** (`contrats.py:362-382`). Les `karlia_synchro_at`, `facture_karlia_id`, etc. déjà renseignés sur les lignes sont perdus. Heureusement, seuls les `BROUILLON` sont modifiables — donc aucun plan n'a encore été émis. Mais si la règle évolue, attention.
+
+### Workflow 6 — Émission d'une facture vers Karlia
+
+Sous-workflow appelé par les **workflows 3 (révision Syntec)** et **4 (facturation commande)**.
+
+**Code** : `services/karlia_service.py::creer_facture` (`karlia_service.py:164`).
+
+**Étapes** :
+
+```
+1. CONVERSION LIGNES → format Karlia
+   pour chaque ligne :
+     tva = ligne["vat_rate"]
+     id_vat = "1" si tva ≥ 20
+              "2" si tva ≥ 10
+              "3" si tva ≥ 5
+              "4" sinon (0%)
+     p = { "price_without_tax": …, "quantity": …, "id_vat": … }
+     si "id_product" présent : p["id_product"] = ligne["id_product"]
+     sinon : p["description"] = ligne["description"] (fallback)
+
+2. PAYLOAD KARLIA
+   {
+     "id_customer": int(client_karlia_id),
+     "id_type": 4,                         # Facture
+     "id_status": 1,                       # Brouillon (depuis v2.4.1)
+     "reference": reference_contrat,       # ex CO-2025-001
+     "date": today.strftime("%d/%m/%Y"),
+     "date_end": date_echeance.strftime("%d/%m/%Y"),
+     "description": description,
+     "products_list": products_list
+   }
+
+3. POST /documents (Karlia)
+   → renvoie {id, reference, …}
+
+4. ERREURS
+   401 → KarliaError("Clé API invalide ou expirée")
+   429 → KarliaError("Quota dépassé 100 req/min")  — pas de retry ici
+   autre → KarliaError(status, …)
+```
+
+**Tables modifiées** :
+- Workflow 3 : `plan_facturation` (E facture_karlia_id, facture_karlia_ref, statut)
+- Workflow 4 : `commandes` (E facture_karlia_id, facture_karlia_ref, statut='facturee')
+
+**Appels externes** : `POST https://karlia.fr/app/api/v2/documents` avec Bearer Authorization.
+
+**État cible côté Karlia** : la facture est créée en **statut Brouillon** (`id_status=1`). Elle doit être **validée manuellement** dans l'interface Karlia pour être envoyée au client.
+
+> **Évolution récente** (cf. § 9) : le statut a évolué `2 (Envoyée) → 1 (Brouillon) → 0 (Brouillon réel)`. La branche `fix/karlia-facture-brouillon-v2` (tag `v2.4.6.1`) **non mergée sur main** change `id_status=1 → id_status=0`. Sur main aujourd'hui : `id_status=1`.
+
+**Points de friction** :
+- Le mapping `id_vat` plafonne à 4 codes — TVA intermédiaires (8.5%, 2.1%) toutes alignées sur `id_vat=4` ce qui est faux.
+- Si la facture échoue côté Karlia (validation manuelle refusée), aucune notification revient vers le module — `plan_facturation` reste `EMISE` indéfiniment.
+- `traitement_lot_factures` : aucun retry sur 429 (cf. anti-pattern phase 4 #4).
+
+---
