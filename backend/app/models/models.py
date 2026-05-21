@@ -341,6 +341,10 @@ class CommandeLigne(Base):
     montant_ht        = Column(Numeric(15, 2))
     montant_tva       = Column(Numeric(15, 2))
     montant_ttc       = Column(Numeric(15, 2))
+    # Remises Karlia (cf. AUDIT_REFONTE.md § 2.19 #6) — alimentées par la sync devis
+    discount_type     = Column(String(20))      # 'percent' | 'amount' | 'fixed' | NULL
+    discount_value    = Column(Numeric(15, 6))  # montant de remise en valeur absolue
+    discount_percent  = Column(Numeric(15, 6))  # pourcentage de remise
     ordre             = Column(Integer, default=0)
     created_at        = Column(DateTime, server_default=func.now())  # timestamp without time zone en DB — cf. AUDIT_REFONTE.md § 2.19 #5
 
