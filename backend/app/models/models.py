@@ -448,7 +448,7 @@ class Formateur(Base):
     updated_at   = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     commandes   = relationship("Commande", back_populates="formateur")
-    prestations = relationship("Prestation", back_populates="formateur")
+    prestations = relationship("Prestation", back_populates="formateur", foreign_keys="Prestation.formateur_id")
 
 
 class Prestation(Base):
@@ -473,6 +473,20 @@ class Prestation(Base):
     created_at        = Column(DateTime(timezone=True), server_default=func.now())
     updated_at        = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
+    # Agenda formateur — colonne fonctionnelle utilisée pour la saisie de date planifiée
+    # (cf. AUDIT_REFONTE.md § 2.19 #7). Distincte de formateur_id qui pointe vers
+    # le formateur titulaire de la prestation.
+    agenda_formateur_id = Column(Integer, ForeignKey("formateurs.id"))
+
+    # Reserved for future Google Calendar sync — Google Calendar service retiré
+    # mais colonnes conservées en DB et partiellement peuplées (5/11 prestations
+    # ont google_calendar_id, 11/11 ont google_sync_status). Cf. AUDIT § 7.3.
+    google_calendar_id = Column(String(255))
+    google_sync_status = Column(String(50))
+    google_sync_error  = Column(Text)
+    google_synced_at   = Column(DateTime(timezone=True))
+
     commande       = relationship("Commande", back_populates="prestations")
     commande_ligne = relationship("CommandeLigne", back_populates="prestations")
-    formateur      = relationship("Formateur", back_populates="prestations")
+    formateur      = relationship("Formateur", back_populates="prestations", foreign_keys=[formateur_id])
+    agenda_formateur = relationship("Formateur", foreign_keys=[agenda_formateur_id])
