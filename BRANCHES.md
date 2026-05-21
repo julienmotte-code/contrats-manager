@@ -368,5 +368,23 @@ Mot de passe commun : `Test123!`. Suppression à la clôture de la Vague 2.
 
 Référence détaillée : `~/contrats/CHANTIER_2_1_RECAP.md` (synthèse exhaustive avec liste des 18 commits, anomalies résolues, régressions évitées, tests effectués).
 
-**Statut** : chantier 2.1 complet. Prochain : 2.2 `valider_pre_emission`.
+**Précision post-merge sur l'état réel de la prod (2026-05-21, ~7h après les premiers rebuilds)** :
+
+Sur cette VM, **`docker compose build` + `docker compose up -d` équivaut à un déploiement en prod** (un seul environnement, pas de séparation dev/staging/prod). Or, pendant le chantier 2.1, chaque commit était suivi d'un cycle `build + up + tests rbac_check.sh`. **Le code RBAC est donc effectivement en production depuis les rebuilds de test du chantier**, et non en attente de déploiement.
+
+Vérification post-merge (logs backend des 7 dernières heures) :
+
+- 0 traceback Python, 0 exception SQLAlchemy, 0 statut 500
+- 22 logins `POST /api/auth/login` tous à 200 OK (uniquement comptes `test_*` via mes tests rbac_check.sh)
+- 1 seul 401 (test no-auth sur `/api/synchro/statut` — comportement attendu)
+- 14 × 403 tous attribuables aux tests `rbac_check.sh` (UUIDs bidon `00000000-...`)
+- **Aucun utilisateur réel bloqué, aucune régression fonctionnelle constatée**
+
+**Tag `v2.5.0-rbac-backend` posé** sur le commit `3df7c33` (HEAD main après merge + journal) pour traçabilité du déploiement RBAC.
+
+**Adaptation de la procédure pour 2.2 à 2.5** :
+
+Étant donné qu'un rebuild est un déploiement implicite, les chantiers 2.2 (`valider_pre_emission`), 2.3, 2.4 (`centralisation clé Karlia`) et 2.5 seront déployés au fur et à mesure de leurs validations, sans chantier de "déploiement Vague 2 complète" séparé. Chaque chantier posera son propre tag (`v2.5.X-<nom>`) à sa clôture, et le tag `v2.5.0-vague-2-complete` global sera réservé à la mise à jour finale de la Vague 2 (potentiellement incluant le fix prioritaire `feat/dashboard-filter-by-role`).
+
+**Statut** : chantier 2.1 complet, RBAC actif en prod. Prochain : 2.2 `valider_pre_emission`.
 
