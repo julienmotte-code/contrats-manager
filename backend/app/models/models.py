@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime, date
 from sqlalchemy import (
     Column, String, Integer, Numeric, Boolean, Date, DateTime, Time,
-    Text, ForeignKey, CheckConstraint, UniqueConstraint, JSON
+    Text, LargeBinary, ForeignKey, CheckConstraint, UniqueConstraint, JSON
 )
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship
@@ -23,7 +23,7 @@ class ClientCache(Base):
 
     id               = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     karlia_id        = Column(String(100), unique=True, nullable=False)
-    numero_client    = Column(String(20), unique=True, nullable=False)
+    numero_client    = Column(String(20), nullable=False)  # unique appliqué applicativement (cf. main.py:91-93) ; pas d'UNIQUE en DB — cf. AUDIT_REFONTE.md § 2.19 #1
     nom              = Column(String(255), nullable=False)
     adresse_ligne1   = Column(String(255))
     adresse_ligne2   = Column(String(255))
@@ -64,6 +64,7 @@ class ArticleCache(Base):
     created_at       = Column(DateTime(timezone=True), server_default=func.now())
 
 
+# TODO Chantier 1.4 Alembic : remplacer l'index UNIQUE date_publication par UNIQUE (annee, mois) — cf. CODING_RULES.md § 9. Voir AUDIT_REFONTE.md § 2.19 #2.
 class IndiceRevision(Base):
     """Historique des indices Syntec."""
     __tablename__ = "indices_revision"
@@ -88,7 +89,7 @@ class Contrat(Base):
 
     id                    = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     numero_contrat        = Column(String(100), unique=True, nullable=False)
-    client_karlia_id      = Column(String(100), nullable=False)
+    client_karlia_id      = Column(String(100))  # NULL toléré côté DB (cf. AUDIT_REFONTE.md § 2.19 #3) ; contrôle applicatif via API
     client_numero         = Column(String(20))
     client_nom            = Column(String(255))
 
@@ -297,8 +298,8 @@ class Commande(Base):
     montant_ttc         = Column(Numeric(15, 2))
     date_devis          = Column(Date)
     date_acceptation    = Column(Date)
-    date_import         = Column(DateTime(timezone=True), server_default=func.now())
-    date_validation     = Column(DateTime(timezone=True))
+    date_import         = Column(DateTime, server_default=func.now())  # timestamp without time zone en DB — cf. AUDIT_REFONTE.md § 2.19 #5
+    date_validation     = Column(DateTime)  # timestamp without time zone en DB
     statut              = Column(String(50), default='nouvelle')
     type_traitement     = Column(String(50))
     necessite_contrat   = Column(Boolean, default=False)
@@ -307,11 +308,11 @@ class Commande(Base):
     intervenant_nom     = Column(String(255))
     notes_planification = Column(Text)
     contrat_id          = Column(UUID(as_uuid=True), ForeignKey("contrats.id", ondelete="SET NULL"))
-    pdf_devis           = Column(Text)  # Base64 encoded
+    pdf_devis           = Column(LargeBinary)  # bytea en DB ; colonne actuellement non utilisée (cf. commit f71d223, AUDIT_REFONTE.md § 2.19 #4)
     pdf_devis_nom       = Column(String(255))
     pdf_url             = Column(Text)
-    created_at          = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at          = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    created_at          = Column(DateTime, server_default=func.now())  # timestamp without time zone en DB
+    updated_at          = Column(DateTime, server_default=func.now(), onupdate=func.now())  # timestamp without time zone en DB
     created_by          = Column(Integer)
     updated_by          = Column(Integer)
     formateur_id        = Column(Integer, ForeignKey("formateurs.id"))
@@ -340,8 +341,12 @@ class CommandeLigne(Base):
     montant_ht        = Column(Numeric(15, 2))
     montant_tva       = Column(Numeric(15, 2))
     montant_ttc       = Column(Numeric(15, 2))
+    # Remises Karlia (cf. AUDIT_REFONTE.md § 2.19 #6) — alimentées par la sync devis
+    discount_type     = Column(String(20))      # 'percent' | 'amount' | 'fixed' | NULL
+    discount_value    = Column(Numeric(15, 6))  # montant de remise en valeur absolue
+    discount_percent  = Column(Numeric(15, 6))  # pourcentage de remise
     ordre             = Column(Integer, default=0)
-    created_at        = Column(DateTime(timezone=True), server_default=func.now())
+    created_at        = Column(DateTime, server_default=func.now())  # timestamp without time zone en DB — cf. AUDIT_REFONTE.md § 2.19 #5
 
     commande = relationship("Commande", back_populates="lignes")
     prestations = relationship("Prestation", back_populates="commande_ligne")
@@ -418,6 +423,7 @@ class TransmissionChorus(Base):
     # Métadonnées
     transmis_par      = Column(String(100))
     transmis_at       = Column(DateTime(timezone=True), server_default=func.now())
+    is_test           = Column(Boolean, default=False)  # marqueur transmission de test vs réelle — cf. AUDIT_REFONTE.md § 2.19 #8
 
     # Relation
     facture           = relationship("FactureKarlia", back_populates="transmissions")
@@ -443,7 +449,7 @@ class Formateur(Base):
     updated_at   = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     commandes   = relationship("Commande", back_populates="formateur")
-    prestations = relationship("Prestation", back_populates="formateur")
+    prestations = relationship("Prestation", back_populates="formateur", foreign_keys="Prestation.formateur_id")
 
 
 class Prestation(Base):
@@ -468,6 +474,20 @@ class Prestation(Base):
     created_at        = Column(DateTime(timezone=True), server_default=func.now())
     updated_at        = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
+    # Agenda formateur — colonne fonctionnelle utilisée pour la saisie de date planifiée
+    # (cf. AUDIT_REFONTE.md § 2.19 #7). Distincte de formateur_id qui pointe vers
+    # le formateur titulaire de la prestation.
+    agenda_formateur_id = Column(Integer, ForeignKey("formateurs.id"))
+
+    # Reserved for future Google Calendar sync — Google Calendar service retiré
+    # mais colonnes conservées en DB et partiellement peuplées (5/11 prestations
+    # ont google_calendar_id, 11/11 ont google_sync_status). Cf. AUDIT § 7.3.
+    google_calendar_id = Column(String(255))
+    google_sync_status = Column(String(50))
+    google_sync_error  = Column(Text)
+    google_synced_at   = Column(DateTime(timezone=True))
+
     commande       = relationship("Commande", back_populates="prestations")
     commande_ligne = relationship("CommandeLigne", back_populates="prestations")
-    formateur      = relationship("Formateur", back_populates="prestations")
+    formateur      = relationship("Formateur", back_populates="prestations", foreign_keys=[formateur_id])
+    agenda_formateur = relationship("Formateur", foreign_keys=[agenda_formateur_id])
