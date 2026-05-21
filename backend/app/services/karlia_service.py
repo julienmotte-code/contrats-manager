@@ -218,7 +218,15 @@ class KarliaService:
             "products_list": products_list,
         }
         logger.info(f"Création facture Karlia pour contrat {reference_contrat}, client {client_karlia_id}")
-        return await self._post("/documents", payload)
+        logger.info(f"[KARLIA DEBUG] Payload envoyé : {payload}")
+        result = await self._post("/documents", payload)
+        logger.info(f"[KARLIA DEBUG] Réponse complète : {result}")
+        logger.info(
+            f"[KARLIA DEBUG] id_status retourné = {result.get('id_status')}, "
+            f"status = {result.get('status')}, status_name = {result.get('status_name')}, "
+            f"draft = {result.get('draft')}, is_draft = {result.get('is_draft')}"
+        )
+        return result
 
     async def obtenir_document(self, doc_id: str) -> dict:
         """Récupère un document Karlia (facture, devis...) par son ID."""
