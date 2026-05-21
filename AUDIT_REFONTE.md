@@ -3002,3 +3002,334 @@ Pas de stockage objet. Les fichiers (modèles Word, documents générés, PDF de
 Pour la migration GCP, prévoir une bascule vers GCS pour la durabilité et la scalabilité (cf. § 8).
 
 ---
+
+## 8. État des lieux et perspectives (préparation refonte / migration GCP)
+
+> **Cette phase n'avait jamais été traitée dans l'audit v2.3.0**. Elle synthétise les phases 1-7 sous forme de bilan : ce qui est solide, ce qui est partiel, ce qui est de la dette, et ce qu'il faut prévoir pour une migration vers Google Cloud Platform.
+
+### 8.1 Fonctionnalités complètement opérationnelles
+
+Fonctionnalités vues fonctionner en production avec des données réelles (volumétrie cf. § 2.1) :
+
+| Domaine | État | Volumétrie / preuve |
+|---|---|---|
+| **Authentification JWT** | ✓ stable | 8 utilisateurs actifs, 4 rôles, login/logout opérationnel |
+| **Synchronisation clients Karlia** | ✓ stable | 251 clients en cache, sync boot + cron 02:00 |
+| **Synchronisation articles Karlia** | ✓ stable | 404 articles en cache |
+| **Création de contrats (tunnel 4 étapes)** | ✓ stable | 572 contrats en base, tous `EN_COURS CONTRAT` |
+| **Plan de facturation prévisionnel** | ✓ stable | 1150 lignes `plan_facturation` |
+| **Calcul prorata an1 (avec demi-mois)** | ✓ stable | logique métier figée |
+| **Gestion des indices Syntec** | ✓ stable | 6 indices saisis, écran Indices |
+| **Familles de contrats + règles de révision** | ✓ stable | 7 familles, 4 règles (SYNTEC_AOUT / OCTOBRE / MANUELLE / AUCUNE) |
+| **Renouvellement SPONTANE + FIN (multi-sélection)** | ✓ stable | logique testée, tag `v2-renouvellements-multi-selection` |
+| **Émission de factures Karlia (Brouillon)** | ✓ stable | depuis tag `v2.4.1` |
+| **Sync devis Karlia → commandes** | ✓ stable depuis `v2.4.5` | rate-limit + retry consolidés après incident 20/05 |
+| **Workflow commande sans planification** | ✓ stable | majorité des commandes l'utilisent |
+| **Workflow commande avec planification + formateur** | ✓ stable | 1 + 4 + 6 = 11 prestations |
+| **Dashboard refondu (endpoint unique)** | ✓ stable depuis `v2.4.2` | `/api/dashboard/stats` |
+| **Filtre par famille sur écran Renouvellements** | ✓ stable | tag `v2-renouvellements-filtre-famille` |
+| **Cycle de vie contrats : BROUILLON → EN_COURS → TERMINE** | ✓ stable | seul `EN_COURS` actuellement en prod (572) |
+| **Gestion utilisateurs + droits par rôle (frontend)** | ✓ stable | tableau DROITS appliqué au menu |
+| **Gestion des formateurs (CRUD)** | ✓ stable | 7 formateurs |
+| **Cleanup BC commandes (one-shot)** | ✓ exécuté | `v2.3.1`, 66 lignes supprimées, backup conservé |
+
+### 8.2 Fonctionnalités partielles ou hooks à compléter
+
+#### 8.2.1 Tables et endpoints fantômes
+
+| Élément | État | Action requise |
+|---|---|---|
+| `lots_facturation` | **0 ligne en prod**, jamais alimentée | persister lots ou retirer table + endpoint stub `/api/facturation/lot/{id}` |
+| `GET /api/facturation/lot/{id}` | endpoint stub retourne `{statut: "TERMINE"}` toujours | aligner avec `lots_facturation` ou retirer |
+| `documents_generes` | **1 ligne** pour 572 contrats | génération Word à promouvoir ou à retirer |
+| `karlia_service.obtenir_produit` / `obtenir_prix_vente` / `lister_templates_documents` | déclarées, jamais appelées | code mort, supprimer |
+| `karlia_service.lister_types_documents` | utilitaire de debug | OK à garder pour outillage |
+| `contrat_service.calculer_montant_revise` | dupliquée par `revision_service` | supprimer |
+| `contrat_service.calculer_statut_renouvellement` | jamais appelée | supprimer ou activer pour le dashboard |
+| `commandes.statut = 'terminee'` | code path existe (commandes.py:367) mais jamais affiché en liste | retirer ou unifier avec `deployee` |
+| `pages/NouveauContrat.js` | probablement remplacée par `TunnelContrat` | retirer si confirmé |
+
+#### 8.2.2 Workflows à finaliser
+
+| Workflow | Manque |
+|---|---|
+| **Polling statut Chorus Pro** | aucun mécanisme ne met à jour `factures_karlia.statut_chorus` après le passage à `TRANSMISE` (pas de transition vers `ACCEPTEE`/`REJETEE`) |
+| **Polling validation Karlia** | aucun mécanisme ne détecte qu'une facture émise en Brouillon a été validée puis envoyée dans Karlia |
+| **Notifications email** | aucun envoi (renouvellements proches, échec Chorus, etc.) |
+| **Mise à jour `utilisateurs.derniere_connexion`** | colonne déclarée, jamais alimentée |
+| **Audit-trail des renouvellements** | seule trace = `motif_fin` en texte libre |
+| **Calendrier formateurs** | Google Calendar retiré, rien en place |
+
+#### 8.2.3 Hooks de validation incomplets
+
+- `valider_pre_emission` (validation_service.py:153) **jamais appelée** par `/api/facturation/lancer` (anti-pattern phase 4 #9)
+- Aucune validation en amont de `POST /api/commandes/{id}/facturer` (commandes terminées)
+- Aucune validation en amont de `POST /api/chorus/transmettre` au-delà du `client_siret IS NOT NULL`
+
+#### 8.2.4 Traces de TODO/FIXME en code
+
+Recherche exhaustive `grep -rnE "TODO|FIXME|XXX|HACK|TBD"` dans `backend/app/` et `contrats-ui-src/src/` : **aucun résultat**.
+
+Ce n'est pas un signe de propreté : les anti-patterns identifiés (cf. phases 4 #1-13 et 5 #1-14) ne sont **pas marqués** dans le code. Le suivi de la dette technique se fait uniquement via les **branches non mergées** sur origin (18 branches dormantes), les **messages de commit**, et les **notes en mémoire** (cf. `chorus_pro_blocage`, `versioning_baseline`).
+
+> **Recommandation refonte** : adopter un marqueur de dette `# TODO(refonte):` ou intégrer un outil comme `todocheck` au CI pour rendre visible la dette résiduelle.
+
+### 8.3 Dette technique identifiée
+
+Synthèse cross-phase. Chaque ligne renvoie à la phase qui l'a décrite en détail.
+
+#### 8.3.1 Schéma DB et ORM
+
+| Item | Phase | Sévérité |
+|---|---|---|
+| 8 divergences `models.py` ↔ DB live (types, colonnes orphelines) | § 2.19 | élevée |
+| Alembic dans requirements mais jamais câblé (toutes migrations à la main) | § 1.6 | **élevée** |
+| `prestations` : 5 colonnes Google Calendar orphelines | § 2.15 | moyenne |
+| `commande_lignes` : 3 colonnes `discount_*` non déclarées dans ORM | § 2.14 | moyenne |
+| `commandes.pdf_devis` : `Text` (ORM) vs `bytea` (DB) | § 2.13 | élevée |
+| Dates `timestamp without time zone` côté DB vs `timezone=True` côté ORM | § 2.13 | moyenne |
+| `clients_cache.numero_client unique=True` côté ORM, pas en DB | § 2.2 | basse |
+| `lots_facturation` 0 ligne et endpoint stub fictif | § 8.2.1 | basse |
+
+#### 8.3.2 Backend / API
+
+| Item | Phase | Sévérité |
+|---|---|---|
+| Aucune transaction explicite, commits intermédiaires | § 3.17 | **élevée** |
+| Droits backend non vérifiés sur la majorité des endpoints (gating frontend uniquement) | § 3.2 | **élevée** |
+| JWT 24h codé en dur (`Settings.ACCESS_TOKEN_EXPIRE_MINUTES=480` non utilisé) | § 3.2 | moyenne |
+| `chorus.py` cumule `prefix="/chorus"` interne + `prefix="/api"` externe | § 3.1 | basse |
+| `renouveler-lot` commit par contrat → pas de transaction globale | § 3.3 | moyenne |
+| `app.version="1.0.0"` désynchronisée des tags git `v2.4.6` | § 3.16 | basse |
+| `valider_pre_emission` jamais appelé | § 4.10 #9 | **élevée** |
+| Pas de retry sur 429 dans `traitement_lot_factures` | § 4.10 #4 | moyenne |
+| Cascade implicite prestation → commande non documentée | § 3.15 | moyenne |
+
+#### 8.3.3 Services métier
+
+| Item | Phase | Sévérité |
+|---|---|---|
+| Clé API Karlia lue à **5 endroits** différents | § 4.10 #1, § 7.1.2 | **élevée** |
+| `karlia_devis_service` lit la clé **une seule fois** au boot | § 4.10 #2, § 7.1.2 | élevée |
+| `clients.py:438` BackgroundTask utilise `settings.KARLIA_API_KEY` au lieu de la clé courante | § 3.8 | moyenne |
+| `karlia_devis_service._create_commande` raw SQL devenu obsolète | § 4.10 #5 | basse |
+| Mapping `id_vat` Karlia plafonné à 4 codes | § 7.1.6 | moyenne |
+| Famille `CITYWEB` dans Dashboard mais pas dans `FAMILLES_CONTRAT` | § 4.10 #8 | basse |
+| `chorus_service` : **double auth** (Basic header + `auth=`) écrasement probable | § 4.10 #11, § 7.2.3 | **critique** |
+| `chorus_service` : `typeTva` codé en dur | § 4.10 #10 | moyenne |
+| `chorus_service` : 1 seule ligne récapitulative TVA même pour multi-taux | § 7.2.5 | moyenne |
+| Singleton `karlia` modifié à chaud → race conditions possibles sur scale | § 4.1 | élevée |
+
+#### 8.3.4 Frontend React
+
+| Item | Phase | Sévérité |
+|---|---|---|
+| CRA en mode maintenance depuis 2024 | § 5.9 #1 | élevée |
+| Aucun test frontend (testing-library installé non utilisé) | § 5.9 #2 | élevée |
+| 3 libs UI installées jamais utilisées (~300 ko) | § 5.7, § 5.9 #3 | moyenne |
+| Double source de vérité droits (backend + AuthContext) | § 5.3, § 5.9 #4 | élevée |
+| Dashboard lance sync Karlia silencieuse au montage | § 5.9 #5 | moyenne |
+| `TunnelContrat` : 18 `useState` indépendants → manque store | § 5.9 #7 | moyenne |
+| Mélange `api.get` direct + helpers `xAPI.*` | § 5.9 #6 | moyenne |
+| Pas de TypeScript | § 5.9 #14 | dépend ambition |
+| Emojis comme icônes | § 5.9 #9 | basse |
+| TZ Paris : règle `T12:00:00` non systématique | § 5.9 #12 | moyenne |
+| `pages/NouveauContrat.js` probablement obsolète | § 5.9 #11 | basse |
+| Aucun composant `Pagination` partagé | § 5.9 #10 | basse |
+
+#### 8.3.5 Sécurité
+
+| Item | Phase | Sévérité |
+|---|---|---|
+| Secrets en clair dans `parametres` (`karlia_api_key`, `chorus_client_secret`, `chorus_tech_password`) | § 2.12, § 7.2.2 | **critique** |
+| `chorus_tech_password` à 13 chars en prod | § 7.2.2 | moyenne |
+| `GET /api/parametres/` accessible à tout utilisateur connecté (pas seulement ADMIN) — révèle des paramètres Chorus non masqués | § 3.7 | moyenne |
+| Aucun verrouillage de compte après N tentatives échouées | § 6 (workflow 10) | moyenne |
+| `localStorage.token` (vulnérable XSS) | § 5.3 | basse (intranet B2B) |
+| Backend en `uvicorn --reload` (anti-pattern prod) | § 1.2 | moyenne |
+| Pas de chiffrement TLS sur le port 80 (délégué Cloudflare Tunnel) | § 1.3 | basse |
+
+#### 8.3.6 Opérations
+
+| Item | Phase | Sévérité |
+|---|---|---|
+| Sync Karlia au boot bloquante → bouclage si Karlia down | § 1.8 | élevée |
+| APScheduler in-process → incompatible scale horizontale | § 1.8 | élevée |
+| Aucun backup automatique côté module (snapshots VM uniquement) | § 1.5 | élevée |
+| Aucun système de log centralisé / agrégé / Sentry | § 5.4 | moyenne |
+| Aucun monitoring applicatif (uptime, latence, erreurs) | — | moyenne |
+| `print()` utilisés pour logs critiques (`main.py:67,89,…`) | § 1.8 | basse |
+| 18 branches obsolètes sur origin | § 1.10 | basse |
+| Tags désordonnés (`v2.4.2 → v2.4.5` volontaire) | § 1.10 (mémoire) | n/a |
+
+### 8.4 Préparation à la migration GCP
+
+Hypothèse : la migration cible **Google Cloud Platform** avec services managés (Cloud Run + Cloud SQL + Cloud Storage + Secret Manager + Cloud Build). Le module doit donc être adapté pour ces environnements.
+
+#### 8.4.1 Cible architecturale recommandée
+
+```
+Utilisateur ──HTTPS──► Cloud CDN / Load Balancer
+                            │
+                            ├── frontend (Cloud Storage + Cloud CDN)
+                            │   ou Cloud Run conteneur statique
+                            │
+                            └── backend (Cloud Run)
+                                  │
+                                  ├── Cloud SQL PostgreSQL 16
+                                  ├── Cloud Storage (modèles, documents)
+                                  ├── Secret Manager (clé Karlia, Chorus, JWT)
+                                  ├── Cloud Logging (logs structurés)
+                                  ├── Cloud Scheduler (jobs cron Karlia)
+                                  └── Cloud Tasks (jobs async Karlia/Chorus)
+```
+
+#### 8.4.2 Migration des données — PostgreSQL → Cloud SQL
+
+**Volumétrie actuelle** : DB = **13 MB**. Cloud SQL absorbe sans difficulté.
+
+**Marche à suivre** :
+1. **Préalable : passer à Alembic** (cf. dette technique 8.3.1). Sans migrations versionnées, la migration est risquée.
+2. **Aligner `models.py` avec la DB** pour repartir d'un schéma propre (résoudre les 8 divergences phase 2).
+3. **Dump** : `pg_dump --no-owner --no-privileges contrats > dump.sql`
+4. **Import** : créer instance Cloud SQL PostgreSQL 16, configurer la connexion via Cloud SQL Proxy, importer le dump.
+5. **Connexion** : `DATABASE_URL` en variable d'environnement Cloud Run, utilisant l'instance Cloud SQL Connector.
+
+**Garde-fous à anticiper** :
+- Cloud SQL force **TLS** par défaut — adapter la string `DATABASE_URL` avec `sslmode=require`.
+- L'utilisateur `contrats` actuel doit être recréé côté Cloud SQL avec un mot de passe géré via Secret Manager.
+- Penser à activer **Point-in-Time Recovery** (backups automatiques 7 jours) — comble la lacune backup actuelle (cf. dette 8.3.6).
+
+#### 8.4.3 Migration des secrets — `parametres` clair → Secret Manager
+
+**Secrets actuellement en clair dans la table `parametres`** (cf. § 7.2.2) :
+- `karlia_api_key`
+- `chorus_client_secret`
+- `chorus_tech_password`
+
+Plus dans `.env` : `SECRET_KEY` (JWT), `DB_PASSWORD`.
+
+**Plan** :
+1. Créer 5 secrets dans **Google Secret Manager** : `karlia-api-key`, `chorus-client-secret`, `chorus-tech-password`, `jwt-secret-key`, `db-password`.
+2. Modifier `config.py` pour les lire via le client `google-cloud-secret-manager` (cache 5 min recommandé pour éviter le coût par accès).
+3. Modifier `chorus_service.get_chorus_service_from_params` pour ne plus lire les secrets depuis `parametres` mais directement depuis Secret Manager.
+4. **Conserver** dans `parametres` uniquement les paramètres **non secrets** : `chorus_client_id`, `chorus_tech_username`, `chorus_siret_emetteur`, `chorus_code_*`, `chorus_mode_qualification`, `derniere_synchro*`, `synchro_stats`.
+5. **Migration des valeurs** : exporter via script Python avant migration, importer dans Secret Manager, **vider** les colonnes secrètes en DB.
+6. **Audit** : ajouter un log Cloud Audit Logs sur chaque accès Secret Manager pour traçabilité.
+
+#### 8.4.4 Migration des fichiers — `storage/` → Cloud Storage
+
+**Volumétrie actuelle** : 688 KB total (modèles + documents générés). Tient sans difficulté dans 1 bucket GCS.
+
+**Plan** :
+1. Créer 1 bucket `gs://contrats-storage-{env}/` avec versioning activé (les modèles Word évoluent rarement, mais on garde l'historique).
+2. Sous-préfixes : `modeles/`, `documents-generes/`.
+3. Remplacer les `Path("/app/storage")` dans `document_service.py` par un client `google-cloud-storage`.
+4. Pour la génération Word : télécharger le template dans `/tmp`, générer, uploader le résultat — ou utiliser `python-docx` directement sur des `BytesIO` (préférable).
+5. Pour `GET /api/documents/telecharger/{id}` : générer une URL signée GCS (15 min de validité).
+6. Le `bind-mount` Docker `./storage:/app/storage` disparaît.
+
+#### 8.4.5 Scheduler — APScheduler → Cloud Scheduler
+
+L'`AsyncIOScheduler` in-process (`main.py:152`) est **incompatible** avec un déploiement Cloud Run (instances multiples, redémarrages fréquents). Plan :
+
+1. **Cron sync Karlia 02:00** : créer un **Cloud Scheduler job** qui appelle un endpoint dédié (par exemple `POST /api/synchro/lancer` avec un header secret).
+2. **Sync au boot** : à retirer complètement (anti-pattern). Le job Cloud Scheduler couvre la régénération du cache.
+3. **Authentification du Cloud Scheduler** : utiliser un service account avec rôle `Cloud Run Invoker` + signature OIDC du token.
+
+#### 8.4.6 Logs — `print()` → Cloud Logging structuré
+
+Migration recommandée :
+1. Remplacer tous les `print(...)` (`main.py:67,89,…`) par `logging.getLogger(__name__).info(...)`.
+2. Configurer le logger Python avec un handler JSON pour que Cloud Logging parse automatiquement les champs (`severity`, `message`, `httpRequest`, etc.).
+3. Ajouter `trace_id` propagé entre les services pour le tracing (utile pour les workflows multi-étapes Karlia/Chorus).
+
+#### 8.4.7 Conteneurisation et déploiement
+
+**Modifications à apporter à `backend/Dockerfile`** :
+- Retirer `--reload` dans la commande `uvicorn` (anti-pattern prod).
+- Utiliser un image multi-stage pour réduire la taille (actuellement `python:3.12-slim` = ~150 MB).
+- Activer `--workers 2 --worker-class uvicorn.workers.UvicornWorker` via Gunicorn pour utiliser tous les vCPU Cloud Run.
+- Exposer un endpoint `/healthz` pour Cloud Run health checks (existe déjà : `/api/health`).
+
+**Modifications côté frontend** :
+- Migrer **CRA → Vite** (cf. dette 8.3.4) : build 5× plus rapide, taille moindre.
+- Servir le build statique depuis **Cloud Storage + Cloud CDN** (plutôt que via nginx dans un conteneur).
+- Configurer un Load Balancer HTTP(S) pour router :
+  - `/` → bucket GCS
+  - `/api/*` → service Cloud Run backend
+
+**Le proxy nginx disparaît** au profit du Load Balancer GCP. Conséquences :
+- `CORS_ORIGINS` doit inclure le nouveau domaine GCP.
+- Le timeout proxy 300s doit être paramétré via les annotations Cloud Run (`run.googleapis.com/timeout: 300`).
+
+#### 8.4.8 Variables d'environnement et configuration
+
+Migration du `.env` → Cloud Run env vars + Secret Manager :
+
+| Variable actuelle | Cible GCP |
+|---|---|
+| `DATABASE_URL` | Cloud Run env var (avec Cloud SQL Connector) |
+| `KARLIA_API_KEY` | Secret Manager `karlia-api-key` → monté en env var via Cloud Run |
+| `SECRET_KEY` | Secret Manager `jwt-secret-key` |
+| `CORS_ORIGINS` | env var Cloud Run |
+| `DB_PASSWORD` | Secret Manager `db-password` |
+| `TZ` | env var Cloud Run `TZ=Europe/Paris` |
+
+#### 8.4.9 CI/CD recommandé
+
+Bascule recommandée :
+1. **Cloud Build** : trigger sur push GitHub → build de l'image Docker → déploiement Cloud Run via blue/green.
+2. **Tests** : intégrer les tests Python (à créer — actuellement aucun test) et les tests frontend (à créer aussi).
+3. **Migrations DB** : Alembic exécuté par Cloud Build avant le déploiement de la nouvelle image (`alembic upgrade head`).
+4. **Sécurité** : scan d'images via Container Analysis (vulnérabilités Python/OS).
+
+#### 8.4.10 Estimation des coûts GCP indicatifs (mensuel)
+
+Volumétrie actuelle réaliste : 13 MB DB, ~700 Ko storage, ~100 req/jour max. La charge est négligeable.
+
+| Service | Plan | Coût estimé / mois |
+|---|---|---|
+| Cloud SQL PostgreSQL (db-f1-micro) | smallest tier | ~10 € |
+| Cloud Run backend | scale to 0, ~50 K req/mois | < 1 € |
+| Cloud Storage frontend + assets | < 1 GB | < 0,10 € |
+| Cloud Storage documents | < 1 GB | < 0,10 € |
+| Secret Manager | 5 secrets, < 10 K accès/mois | < 1 € |
+| Cloud Scheduler | 1 job | gratuit |
+| Cloud Logging | < 1 GB/mois | gratuit (free tier) |
+| **Total estimé** | | **< 15 €/mois** |
+
+**Comparaison VM Ubuntu actuelle** : selon le fournisseur ~5-15 €/mois pour la VM seule (sans backup automatique, sans monitoring, sans HA). La migration GCP **ne devrait pas augmenter significativement** les coûts d'infrastructure tout en apportant : backups automatiques, HA, scale, secrets managés, logs centralisés.
+
+#### 8.4.11 Risques et chemin recommandé
+
+**Étapes de migration suggérées (ordre)** :
+1. **Pré-migration interne** :
+   - Aligner `models.py` ↔ DB (résoudre divergences phase 2).
+   - Activer Alembic (créer une baseline migration `ad-hoc` représentant l'état actuel).
+   - Fixer le blocage Chorus Pro 403 (cf. § 7.2.3).
+   - Supprimer le code mort (lots fictif, NouveauContrat, calculer_montant_revise, etc.).
+   - Centraliser la clé API Karlia en une seule source.
+
+2. **Migration infrastructure** :
+   - Provisionner Cloud SQL + Cloud Storage + Secret Manager.
+   - Importer DB + secrets + fichiers.
+   - Déployer le backend sur Cloud Run.
+   - Déployer le frontend sur GCS + CDN.
+   - Configurer DNS + Load Balancer.
+
+3. **Coupure** :
+   - Geler les écritures côté legacy.
+   - Rejouer un dump différentiel.
+   - Basculer le domaine.
+   - Garder l'ancien backend en lecture seule pendant 30 jours.
+
+4. **Post-migration** :
+   - Migrer CRA → Vite (frontend).
+   - Migrer vers TypeScript (optionnel mais recommandé).
+   - Ajouter tests + Sentry.
+   - Activer le polling Chorus statut.
+
+**Durée estimée** : 4 à 6 semaines de travail effectif si une seule personne, dont 2 semaines de pré-migration (étape 1 critique).
+
+---
