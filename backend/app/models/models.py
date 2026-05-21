@@ -64,6 +64,7 @@ class ArticleCache(Base):
     created_at       = Column(DateTime(timezone=True), server_default=func.now())
 
 
+# TODO Chantier 1.4 Alembic : remplacer l'index UNIQUE date_publication par UNIQUE (annee, mois) — cf. CODING_RULES.md § 9. Voir AUDIT_REFONTE.md § 2.19 #2.
 class IndiceRevision(Base):
     """Historique des indices Syntec."""
     __tablename__ = "indices_revision"
