@@ -173,9 +173,11 @@ def valider_pre_emission(db: Session, plan: PlanFacturation) -> Dict:
         alertes.append(_alerte("ERREUR", "ARTICLE_PRINCIPAL_MANQUANT",
             "Aucun article rang 0", "La facture Karlia nécessite au moins une ligne produit"))
     elif not article_principal.article_karlia_id:
-        alertes.append(_alerte("ERREUR", "ID_PRODUCT_MANQUANT",
-            f"Article '{article_principal.designation}' sans id_product Karlia",
-            "Sans id_product, Karlia enregistre le montant à 0"))
+        alertes.append(_alerte("WARNING", "ID_PRODUCT_MANQUANT",
+            f"Article '{article_principal.designation}' sans id_product Karlia : "
+            "la facture utilisera un fallback description (vérifier mapping article catalogue Karlia)",
+            "Sans id_product, karlia_service.creer_facture utilise un fallback description "
+            "(la facture est correcte avec son montant, mais le produit n'est pas lié au catalogue Karlia)"))
 
     if not contrat.client_karlia_id:
         alertes.append(_alerte("ERREUR", "CLIENT_KARLIA_MANQUANT",
