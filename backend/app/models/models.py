@@ -215,23 +215,6 @@ class PlanFacturation(Base):
     indice_calcul = relationship("IndiceRevision", back_populates="factures_plan")
 
 
-class LotFacturation(Base):
-    """Historique des traitements en lot."""
-    __tablename__ = "lots_facturation"
-
-    id                    = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    annee_traitement      = Column(Integer, nullable=False)
-    indice_utilise_id     = Column(UUID(as_uuid=True), ForeignKey("indices_revision.id"), nullable=True)
-    declenche_par         = Column(String(100))
-    declenche_at          = Column(DateTime(timezone=True), server_default=func.now())
-    nb_contrats_traites   = Column(Integer, default=0)
-    nb_factures_emises    = Column(Integer, default=0)
-    nb_erreurs            = Column(Integer, default=0)
-    statut                = Column(String(20), default="EN_COURS")
-    termine_at            = Column(DateTime(timezone=True))
-    rapport_json          = Column(JSON)
-
-
 class DocumentGenere(Base):
     """Fichiers générés (Word + PDF) liés aux contrats."""
     __tablename__ = "documents_generes"

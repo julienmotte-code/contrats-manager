@@ -247,7 +247,3 @@ async def lancer_facturation(
         "erreurs": erreurs,
         "resultats": resultats_karlia,
     }
-
-@router.get("/lot/{lot_id}")
-def statut_lot(lot_id: str):
-    return {"lot_id": lot_id, "statut": "TERMINE"}
