@@ -23,7 +23,7 @@ class ClientCache(Base):
 
     id               = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     karlia_id        = Column(String(100), unique=True, nullable=False)
-    numero_client    = Column(String(20), unique=True, nullable=False)
+    numero_client    = Column(String(20), nullable=False)  # unique appliqué applicativement (cf. main.py:91-93) ; pas d'UNIQUE en DB — cf. AUDIT_REFONTE.md § 2.19 #1
     nom              = Column(String(255), nullable=False)
     adresse_ligne1   = Column(String(255))
     adresse_ligne2   = Column(String(255))
