@@ -191,3 +191,38 @@ print(p.valeur if p and p.valeur else '')
 
 ### Ne jamais hardcoder l'URL Karlia
 `KARLIA_API_URL` est dans `config.py` avec sa valeur par défaut — ne pas la dupliquer ailleurs.
+
+---
+
+## 12. MIGRATIONS DB — ALEMBIC OBLIGATOIRE
+
+### Règle absolue
+
+Tout changement de schéma DB (ALTER TABLE, CREATE TABLE, DROP TABLE, ADD COLUMN,
+DROP COLUMN, CREATE INDEX, CREATE CONSTRAINT, etc.) DOIT passer par une migration
+Alembic versionnée.
+
+Interdit :
+- Exécuter du SQL DDL manuel sur la DB de prod
+- Modifier `models.py` sans migration correspondante
+- Utiliser `db.execute(text("ALTER TABLE ..."))` dans le code applicatif
+- Utiliser `Base.metadata.create_all()` pour créer de nouvelles tables
+
+### Workflow
+
+Voir `backend/alembic/README.md` pour la procédure complète.
+
+Résumé :
+1. Modifier `models.py`
+2. Créer la migration MANUELLEMENT (autogenerate désactivé tant que la dette
+   `server_default` / `Index` / `comment` n'est pas traitée)
+3. Tester à blanc sur DB temporaire (upgrade + downgrade)
+4. Commit + PR
+5. Appliquer en prod avec `alembic upgrade head`
+
+### Pourquoi ?
+
+Avant le chantier 1.4 (mai 2026), toutes les évolutions de schéma se faisaient
+à la main, ce qui a produit 8 divergences `models.py` ↔ DB (cf. `AUDIT_REFONTE.md`
+§ 2.19). Alembic versionne désormais chaque changement et permet un rollback
+sûr en cas d'incident.
