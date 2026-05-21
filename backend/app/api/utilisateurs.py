@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from app.core.database import get_db
+from app.core.security import require_role
 from app.models.models import Utilisateur, Formateur
 from app.api.auth import get_current_user
 import bcrypt
@@ -20,11 +21,6 @@ DROITS = {
     "TECHNICIEN":   {"contrats_ecriture": False, "contrats_lecture": True,  "facturation": False, "indices": False, "commandes": False, "parametres": False, "utilisateurs": False, "formateurs": False, "toutes_prestations": False},
 }
 
-def require_admin(current_user: Utilisateur = Depends(get_current_user)):
-    if current_user.role != "ADMIN":
-        raise HTTPException(403, "Accès réservé aux administrateurs")
-    return current_user
-
 @router.get("/droits")
 def get_droits(current_user: Utilisateur = Depends(get_current_user)):
     """Retourne les droits de l'utilisateur connecté."""
@@ -39,7 +35,7 @@ def get_droits(current_user: Utilisateur = Depends(get_current_user)):
 @router.get("")
 def lister_utilisateurs(
     db: Session = Depends(get_db),
-    current_user: Utilisateur = Depends(require_admin)
+    current_user: Utilisateur = Depends(require_role("ADMIN"))
 ):
     """Liste tous les utilisateurs."""
     users = db.query(Utilisateur).order_by(Utilisateur.nom_complet).all()
@@ -71,7 +67,7 @@ def lister_utilisateurs(
 def creer_utilisateur(
     data: dict,
     db: Session = Depends(get_db),
-    current_user: Utilisateur = Depends(require_admin)
+    current_user: Utilisateur = Depends(require_role("ADMIN"))
 ):
     """Crée un nouvel utilisateur."""
     login = data.get("login", "").strip()
@@ -118,7 +114,7 @@ def modifier_utilisateur(
     user_id: str,
     data: dict,
     db: Session = Depends(get_db),
-    current_user: Utilisateur = Depends(require_admin)
+    current_user: Utilisateur = Depends(require_role("ADMIN"))
 ):
     """Modifie un utilisateur."""
     user = db.query(Utilisateur).filter(Utilisateur.id == user_id).first()
@@ -153,7 +149,7 @@ def modifier_utilisateur(
 def supprimer_utilisateur(
     user_id: str,
     db: Session = Depends(get_db),
-    current_user: Utilisateur = Depends(require_admin)
+    current_user: Utilisateur = Depends(require_role("ADMIN"))
 ):
     """Supprime un utilisateur."""
     if str(user_id) == str(current_user.id):
