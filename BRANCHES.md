@@ -175,6 +175,7 @@ Les autres tags du dépôt suivent un schéma de versioning :
 | 2026-05-21 | Alembic dans requirements mais jamais câblé | Alembic câblé, baseline 0001 stampée en prod, migration 0002 prête (non-appliquée) | — | Chantier 1.4 / PR `chore/alembic-setup` mergée en CLI (`--no-ff`). **Pas de tag** — le tag `v2.4.9-vague-1-complete` sera posé après le chantier de déploiement qui appliquera 0002. |
 | 2026-05-21 | `alembic_version=0001`, table `lots_facturation` présente, ancien UNIQUE `date_publication`, backend tournant avec ancien code en mémoire | `alembic_version=0002`, `lots_facturation` droppée, nouveau UNIQUE `(annee, mois)`, backend rebuildé avec code chantiers 1.3+1.4 | — | **Chantier de déploiement Vague 1** / migration `0002` appliquée en prod + rebuild backend, tag `v2.4.9-vague-1-complete` posé. |
 | 2026-05-21 | 94 endpoints backend, dont 7 routers totalement ouverts, 6 checks RBAC inline dispersés, dashboard public, anomalies #2/#4 audit pendantes | 94 endpoints **100 % gatés** via `app/core/security.py` (73 `require_role`, 17 `require_authenticated`, 2 `get_current_user` direct, 2 publics légitimes), 6 inline checks factorisés, dashboard authentifié (filtre par rôle reporté), helper `openPdfWithAuth` créé | — | **Chantier 2.1 Vague 2** / PR `feat/backend-rbac` mergée en CLI (`--no-ff`), 18 commits. **Pas de tag** — le tag `v2.5.0-vague-2-complete` sera posé après le chantier de déploiement complet de la Vague 2. **Code mergé sur main MAIS PAS encore déployé en prod** (rebuild backend prévu dans le chantier de déploiement Vague 2). |
+| 2026-05-21 | `/api/facturation/lancer` envoyait à Karlia sans validation pré-émission ; `valider_pre_emission` existait dans `validation_service.py:153` mais n'était jamais appelée (audit #9, Q9) ; `ID_PRODUCT_MANQUANT` classifié en ERREUR avec un commentaire obsolète ("Karlia enregistre à 0 €") | `valider_pre_emission` branché comme garde-fou dans `lancer_facturation` ; `ID_PRODUCT_MANQUANT` reclassifié WARNING après vérification que `karlia_service.creer_facture` a un fallback `description` ; 571 factures prod analysées, **0 à 0 €**, 1,2 M€ HT total ; hard blockers actifs : `DEJA_EMISE`, `NON_CALCULEE`, `MONTANT_NUL`, `ARTICLE_PRINCIPAL_MANQUANT`, `CLIENT_KARLIA_MANQUANT` | `v2.5.1-pre-emission-guard` | **Chantier 2.2 Vague 2** / PR `feat/facturation-pre-emission-guard` mergée en CLI (`--no-ff`), 1 commit (`5587392`). Tag `v2.5.1-pre-emission-guard` posé. **Code déjà en prod** via rebuild de test pendant le chantier (cf. convention rebuild=déploiement). Découverte annexe documentée dans TODO_REFONTE.md : 568 plans EMISE sont des imports historiques `2026-04-20 13:30:44` (jamais passés par le module Python), 4 contrats COSOLUCE seulement ont `article_karlia_id` rempli (chantier optionnel `feat/data-cleanup-article-karlia-id`, priorité faible). |
 
 ### Détail chantier 1.2 (2026-05-21)
 
@@ -387,4 +388,51 @@ Vérification post-merge (logs backend des 7 dernières heures) :
 Étant donné qu'un rebuild est un déploiement implicite, les chantiers 2.2 (`valider_pre_emission`), 2.3, 2.4 (`centralisation clé Karlia`) et 2.5 seront déployés au fur et à mesure de leurs validations, sans chantier de "déploiement Vague 2 complète" séparé. Chaque chantier posera son propre tag (`v2.5.X-<nom>`) à sa clôture, et le tag `v2.5.0-vague-2-complete` global sera réservé à la mise à jour finale de la Vague 2 (potentiellement incluant le fix prioritaire `feat/dashboard-filter-by-role`).
 
 **Statut** : chantier 2.1 complet, RBAC actif en prod. Prochain : 2.2 `valider_pre_emission`.
+
+### Détail chantier 2.2 — Pre-emission guard (2026-05-21)
+
+PR `feat/facturation-pre-emission-guard` mergée sur `main` via merge CLI `--no-ff` (la PR GitHub n'a pas été cliquée). Merge commit : **`2dbb994`**. Tag de release : **`v2.5.1-pre-emission-guard`**.
+
+**Objectif** : brancher la fonction `valider_pre_emission(db, plan)` (existante depuis longtemps dans `backend/app/services/validation_service.py:153` mais jamais appelée) comme garde-fou avant tout appel à `karlia.creer_facture` dans `/api/facturation/lancer`. Résolution de l'anomalie #9 / Q9 de l'audit.
+
+**1 commit applicatif intégré** :
+
+- `5587392` — `fix(facturation): branch valider_pre_emission + reclassify ID_PRODUCT_MANQUANT as WARNING`
+  - Import `from app.services.validation_service import valider_pre_emission` ajouté à `api/facturation.py`
+  - Logger module-level `logger = logging.getLogger(__name__)` ajouté
+  - Garde insérée dans `lancer_facturation` après le filtre statut, dans la boucle de construction de `factures_a_emettre`
+  - Filtre statut étendu de `["PLANIFIEE", "CALCULEE"]` à `["PLANIFIEE", "CALCULEE", "EMISE"]` pour que `DEJA_EMISE` soit visiblement détecté par la garde au lieu d'un skip silencieux. ERREUR reste skippé silencieusement.
+  - Logs distincts : `[PRE-EMISSION-WARN]` pour les WARNINGs, `[PRE-EMISSION-BLOCK]` pour les rejets bloquants
+  - `ID_PRODUCT_MANQUANT` reclassifié `ERREUR` → `WARNING` dans `validation_service.py:175` après investigation factuelle (cf. ci-dessous)
+  - Format de retour de `/lancer` enrichi : `resultats_karlia + resultats_rejets_pre_emission` mergés, compteur `erreurs` incrémenté en conséquence
+
+**Investigation factuelle qui a évité un mécanisme complexe inutile** :
+
+Un premier test isolation de `valider_pre_emission` sur 25 plans de prod a fait remonter que **100 % des plans (568/572 contrats EN_COURS)** sont en `ID_PRODUCT_MANQUANT`. Hypothèse initiale = blocage massif imminent → introduction d'un mécanisme `CODES_PRE_EMISSION_SOFT` côté API pour filtrer. **STOP demandé pour investigation avant action.**
+
+Vérification croisée du code Karlia + données prod :
+
+1. `karlia_service.creer_facture` ligne 193-199 a un **fallback `description`** : si `id_product` absent, le payload envoie `description` à la place. `price_without_tax` × `quantity` est **toujours envoyé**. **Karlia facture toujours le bon montant.**
+2. Les 571 factures EMISE en prod totalisent **1 196 275 €**, **0 facture à 0 €** constatée (min 79 €, max 16 650 €, moyenne 2 095 €).
+3. Sur les 571 EMISE : **568 ont `created_at = updated_at = 2026-04-20 13:30:44`** (timestamp identique à la seconde) → import en masse historique. **3 seulement** ont leur `facture_karlia_id` rempli (= vraiment passées par le code Python en mai 2026). Les 3 vraies émissions correspondent aux 4 contrats COSOLUCE qui ont `article_karlia_id` rempli.
+
+**Conclusion** : le commentaire original de `valider_pre_emission` ("Sans id_product, Karlia enregistre le montant à 0") était **obsolète** depuis l'introduction du fallback `description` dans `karlia_service`. La bonne action n'était pas un mécanisme `CODES_PRE_EMISSION_SOFT` complexe côté API, mais une **correction directe de la classification** dans `validation_service.py` (ERREUR → WARNING). Code restant simple : la garde côté API se contente de respecter `garde["ok"]` qui s'évalue à `True` si aucune alerte ERREUR.
+
+**Couverture finale après chantier 2.2** :
+
+- Hard blockers actifs (rejet `garde["ok"] = False`) : `DEJA_EMISE`, `NON_CALCULEE`, `MONTANT_NUL`, `ARTICLE_PRINCIPAL_MANQUANT`, `CLIENT_KARLIA_MANQUANT`
+- WARNINGs loggés mais non bloquants : `ID_PRODUCT_MANQUANT`, `TAUX_REVISION_ANORMAL`
+- Frontend non régressé : `TunnelContrat.js:373-378` appelle `/calculer` avant `/lancer` ; `Facturation.js:91-95` bloque le bouton "Émettre" si un plan PLANIFIEE est sélectionné
+
+**Tests effectués** :
+
+- Test isolation Python : 20 plans testés post-reclassification, **0 occurrence de `ID_PRODUCT_MANQUANT` en ERREUR**, toutes en WARNING (sanity check OK)
+- Test fonctionnel API : `POST /api/facturation/lancer` avec un plan EMISE → réponse `{"erreurs": 1, "resultats": [{"succes": false, "erreur": "Validation pré-émission échouée : Facture 2026 déjà émise (Karlia ID: 693663)"}]}`. Log correspondant `[PRE-EMISSION-BLOCK] ... ['DEJA_EMISE']`. **Aucun appel Karlia tenté**
+- Test RBAC (non-régression chantier 2.1) : ADMIN/GESTIO 200, TECH/FORM 403
+
+**Dette documentée dans `TODO_REFONTE.md`** : entrée _"Mapping article rang 0 ↔ catalogue Karlia"_ (priorité faible) — chantier optionnel `feat/data-cleanup-article-karlia-id` pour rattacher les 568 articles non mappés au catalogue Karlia. Aucun bug actif, juste donnée non optimale pour les analytics Karlia.
+
+**État backend prod** : code déjà déployé via le rebuild de test pendant le chantier (cf. convention `rebuild = déploiement`). Aucun rebuild explicite supplémentaire effectué après le merge.
+
+**Statut** : chantier 2.2 complet, pre-emission guard actif en prod. Prochain : 2.3.
 
