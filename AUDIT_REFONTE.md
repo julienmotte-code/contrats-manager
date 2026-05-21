@@ -1551,3 +1551,252 @@ Ce fichier **n'existe plus** dans `backend/app/services/` (cf. § 1.9 — l'arbr
 | 13 | `google_calendar_service` retiré mais schéma DB intact | confusion | moyenne |
 
 ---
+
+## 5. Frontend React
+
+> **Source de référence canonique** : `~/contrats/contrats-ui-src/src/` (versionnée). Le dossier `~/contrats/contrats-ui/build/` est le build embarqué dans l'image nginx via `Dockerfile.frontend`. **Ne pas modifier `~/contrats-ui/`** (en dehors du projet, hérité de l'historique — cf. § 1.9).
+
+### 5.1 Structure du dossier `src/`
+
+```
+contrats-ui-src/src/
+├── App.js                 (91 lignes)   — routes + auth provider + toaster
+├── index.js               — bootstrap React 19
+├── index.css              — Tailwind base
+├── components/
+│   └── Layout.js          (128 lignes)  — sidebar, menu, header utilisateur
+├── context/
+│   └── AuthContext.js     (87 lignes)   — user, droits, login/logout
+├── services/
+│   └── api.js             (47 lignes)   — axios instance + helpers typés
+└── pages/                 (21 fichiers, 6604 lignes)
+    ├── Login.js                        (34)
+    ├── Dashboard.js                    (232)  — refonte récente (v2.4.2)
+    ├── Contrats.js                     (230)  — liste avec onglets statut + filtre famille
+    ├── DetailContrat.js                (254)
+    ├── ModifierContrat.js              (219)
+    ├── NouveauContrat.js               (207)  — page obsolète remplacée par TunnelContrat ?
+    ├── TunnelContrat.js                (608)  — assistant 4 étapes (le plus gros écran)
+    ├── Renouvellements.js              (289)
+    ├── Facturation.js                  (305)
+    ├── Indices.js                      (183)
+    ├── Clients.js                      (321)
+    ├── Parametres.js                   (377)  — Karlia + Chorus + modèles Word
+    ├── Utilisateurs.js                 (264)
+    ├── Formateurs.js                   (280)
+    ├── MesPrestations.js               (432)  — vue formateur, sélection date + créneaux
+    ├── NouvellesCommandes.js           (503)
+    ├── CommandesAPlanifier.js          (431)  — affecte les formateurs
+    ├── CommandesPlanifiees.js          (308)
+    ├── CommandesTerminees.js           (234)
+    ├── ContratsACreer.js               (321)  — commandes avec necessite_contrat=true
+    └── ChorusProPage.js                (496)
+```
+
+**Total** : 6881 lignes JS (sans build). Aucun fichier `.test.js` malgré la présence de `@testing-library/*` dans les deps → **pas de tests frontend en place**.
+
+### 5.2 Routes — `App.js`
+
+22 routes déclarées. Toutes (sauf `/login`) passent par `<PrivateRoute>` qui gère la redirection :
+- pas d'utilisateur → `/login`
+- prédicat `allow` retournant `false` → `/mes-prestations` (si FORMATEUR) ou `/` (sinon)
+
+| Path | Composant | Restriction `allow` |
+|---|---|---|
+| `/login` | `Login` | public |
+| `/` | `Dashboard` | tout connecté |
+| `/contrats` | `Contrats` | `role !== 'FORMATEUR'` |
+| `/contrats/nouveau` | `NouveauContrat` | `role !== 'FORMATEUR'` |
+| `/contrats/tunnel` | `TunnelContrat` | `role !== 'FORMATEUR'` |
+| `/contrats/:id` | `DetailContrat` | `role !== 'FORMATEUR'` |
+| `/contrats/:id/modifier` | `ModifierContrat` | `role !== 'FORMATEUR'` |
+| `/renouvellements` | `Renouvellements` | `role !== 'FORMATEUR'` |
+| `/facturation` | `Facturation` | `role !== 'FORMATEUR'` |
+| `/indices` | `Indices` | `role !== 'FORMATEUR'` |
+| `/clients` | `Clients` | `role !== 'FORMATEUR'` |
+| `/parametres` | `Parametres` | `role !== 'FORMATEUR'` |
+| `/utilisateurs` | `Utilisateurs` | `role !== 'FORMATEUR'` |
+| `/commandes/nouvelles` | `NouvellesCommandes` | `role !== 'FORMATEUR'` |
+| `/commandes/a-planifier` | `CommandesAPlanifier` | `role !== 'FORMATEUR'` |
+| `/commandes/planifiees` | `CommandesPlanifiees` | `role !== 'FORMATEUR'` |
+| `/commandes/terminees` | `CommandesTerminees` | `role !== 'FORMATEUR'` |
+| `/contrats-a-creer` | `ContratsACreer` | `role !== 'FORMATEUR'` |
+| `/formateurs` | `Formateurs` | `role !== 'FORMATEUR'` |
+| `/mes-prestations` | `MesPrestations` | tout connecté |
+| `/chorus-pro` | `ChorusProPage` | `role !== 'FORMATEUR'` |
+| `*` (fallback) | `Navigate to="/"` | — |
+
+> **Limite du gating frontend** : seul le rôle `FORMATEUR` est filtré. Tous les autres rôles (`ADMIN`, `GESTIONNAIRE`, `TECHNICIEN`) ont accès à la même surface visuellement, et c'est l'objet `droits` (côté Layout) qui filtre le menu. Mais **les URLs restent atteignables** par saisie directe — le gating effectif dépend du backend, qui (cf. § 3) ne vérifie que rarement le rôle. C'est cohérent avec la limite déjà identifiée.
+
+### 5.3 Contexte d'authentification — `context/AuthContext.js`
+
+#### État exposé
+
+```javascript
+<AuthContext.Provider value={{ user, droits, loading, login, logout }}>
+```
+
+- `user` : `{ login, nom_complet, role, formateur_id }` ou `null`
+- `droits` : objet booléen (9 droits) — **dupliqué côté frontend** par `getDroitsByRole(role)`
+- `loading` : true tant que `authAPI.me()` n'a pas répondu au montage
+- `login(username, password)` : POST `/api/auth/login` → stocke `token` dans `localStorage`
+- `logout()` : `localStorage.removeItem('token')` + `window.location.href = '/login'`
+
+#### Le tableau `getDroitsByRole(role)` — `AuthContext.js:7-35`
+
+Reproduit **à l'identique** le tableau backend (`utilisateurs.py:17-22`). Quatre rôles : `ADMIN`, `GESTIONNAIRE`, `TECHNICIEN`, `FORMATEUR`. Par défaut, tout est `false`.
+
+> **Anti-pattern critique** : double définition des droits (backend Python + frontend JS). Une modification d'un côté sans l'autre désaligne le menu / la sécurité. La refonte devrait exposer un endpoint canonique `GET /api/utilisateurs/droits` (déjà existant côté backend) **comme seule source** — c'est presque le cas (`AuthContext.js:48` appelle `authAPI.me()`) mais le client recalcule localement plutôt que d'utiliser la réponse `/api/utilisateurs/droits`.
+
+#### Token JWT
+
+Stocké dans `localStorage` (vulnérable XSS en théorie, OK pour ce module interne) ; envoyé en `Authorization: Bearer ${token}` via l'intercepteur axios (`api.js:3-7`). En cas de 401, l'intercepteur efface le token et redirige vers `/login` (`api.js:8-11`).
+
+### 5.4 Couche réseau — `services/api.js`
+
+**Toute petite couche** (47 lignes). Une instance axios sans `baseURL` (les chemins commencent tous par `/api/...` et passent par le proxy nginx). 5 namespaces exportés :
+
+| Export | Fonctions | Note |
+|---|---|---|
+| `authAPI` | `login(username, password)`, `me()` | `login` envoie en `x-www-form-urlencoded` (compat OAuth2PasswordRequestForm) |
+| `clientsAPI` | `liste`, `recherche(q)`, `creer`, `synchro` | manque : `fiche`, `obtenir`, `numero-suivant` (appels directs) |
+| `contratsAPI` | `liste`, `detail`, `creer`, `valider`, `terminer`, `renouveler`, `renouvelerLot`, `renouvellements` | bien couvert |
+| `produitsAPI` | `liste` | minimaliste |
+| `indicesAPI` | `liste`, `creer`, `courant`, `supprimer` | manque : `modifier`, `verifier` |
+| `facturationAPI` | `apercu`, `lancer`, `lotStatut` | manque : `calculer` |
+| `dashboardAPI` | `stats()` | nouveauté v2.4.2 |
+| `default` (`api`) | l'instance axios brute | beaucoup de pages l'utilisent en direct |
+
+> **Anti-pattern** : ~50 % des pages utilisent `api.get/post/put/delete('/api/...')` en direct, ~50 % utilisent les helpers typés. **Inconsistant** — la refonte gagnerait à généraliser une approche (idéalement les helpers, ou un client RTK-Query / TanStack Query).
+
+> **Pas de gestion d'erreur transverse** au-delà du 401 dans l'intercepteur. Chaque page traite ses erreurs en local (souvent avec `toast.error`). Pas de telemetry, pas de Sentry.
+
+### 5.5 Pages — inventaire complet
+
+Tableau exhaustif des 21 pages, leur rôle, et les endpoints qu'elles appellent.
+
+| Page | Rôle métier | Endpoints appelés |
+|---|---|---|
+| `Login` | écran de login | `POST /api/auth/login` (via `useAuth`) |
+| `Dashboard` | tableau de bord global | `POST /api/synchro/lancer`, `GET /api/synchro/statut`, `GET /api/dashboard/stats`, `GET /api/indices/courant` |
+| `Contrats` | liste filtrable (statut, famille, recherche) | `GET /api/contrats` (via `contratsAPI.liste`) |
+| `DetailContrat` | détail contrat + actions | `GET /api/contrats/{id}`, `PUT`/`DELETE /api/contrats/{id}`, `POST /api/contrats/{id}/valider`, `POST /api/contrats/{id}/terminer`, `POST /api/contrats/{id}/renouveler`, `GET /api/documents/contrat/{id}`, `POST /api/documents/generer/{id}` |
+| `NouveauContrat` | ancien formulaire de création | `GET /api/indices/familles` — **probablement obsolète**, remplacé par `TunnelContrat` |
+| `ModifierContrat` | modification d'un brouillon | `GET /api/indices/familles` + endpoints contrats |
+| `TunnelContrat` | **assistant 4 étapes** (création/renouvellement) | `POST /api/contrats`, `POST /api/facturation/calculer`, `POST /api/facturation/lancer`, `GET /api/clients/search`, `GET /api/produits` |
+| `Renouvellements` | écran des renouvellements (multi-sélection) | `GET /api/contrats/renouvellements`, `POST /api/contrats/renouveler-lot`, `GET /api/indices/familles` |
+| `Facturation` | révision Syntec annuelle | `GET /api/facturation/apercu/{annee}`, `POST /api/facturation/calculer`, `POST /api/facturation/lancer`, `GET /api/indices/familles` |
+| `Indices` | gestion indices Syntec | `GET /api/indices`, `POST /api/indices`, `DELETE /api/indices/{id}` |
+| `Clients` | annuaire clients | `GET /api/clients/search` |
+| `Parametres` | configuration globale | `GET/PUT /api/parametres/*`, `POST /api/parametres/tester-connexion`, `POST /api/parametres/vider-cache`, `GET/PUT /api/parametres/chorus`, `POST /api/chorus/test-connexion`, `GET/POST/DELETE /api/documents/modeles*` |
+| `Utilisateurs` | gestion utilisateurs (ADMIN) | `GET/POST/PUT/DELETE /api/utilisateurs`, `GET /api/formateurs?actif_only=true` |
+| `Formateurs` | gestion formateurs | `GET/POST/PUT/DELETE /api/formateurs` (actif_only true/false) |
+| `MesPrestations` | vue formateur — agenda perso | `GET /api/prestations/formateur/{id}`, `POST /api/prestations/{id}/planifier`, `POST /api/prestations/{id}/realiser`, `GET /api/formateurs?actif_only=true` |
+| `NouvellesCommandes` | sync devis + traitement | `POST /api/commandes/sync`, `GET /api/commandes/nouvelles`, `GET /api/commandes/stats`, `POST /api/commandes/{id}/valider`, `GET /api/commandes/{id}/pdf` |
+| `CommandesAPlanifier` | affectation formateur + création prestations | `GET /api/commandes/a-planifier`, `GET /api/formateurs?actif_only=true`, `POST /api/prestations/from-commande/{id}` |
+| `CommandesPlanifiees` | suivi planifié | `GET /api/commandes/planifiees` |
+| `CommandesTerminees` | facturation des prestations terminées | `GET /api/commandes/terminees`, `POST /api/commandes/{id}/facturer` |
+| `ContratsACreer` | commandes nécessitant contrat | `GET /api/commandes/contrats-a-creer`, `POST /api/commandes/{id}/lier-contrat/{contrat_id}` |
+| `ChorusProPage` | dashboard Chorus | `POST /api/chorus/synchro-factures`, `GET /api/chorus/factures`, `POST /api/chorus/transmettre`, `POST /api/chorus/test-connexion`, `GET /api/chorus/statistiques`, `PUT /api/chorus/factures/{id}/siret` |
+
+#### Particularité — `Dashboard.js` (refonte v2.4.2)
+
+Avant le commit `2174640`, le Dashboard appelait plusieurs endpoints (`/api/contrats?statut=EN_COURS`, `/api/contrats/renouvellements`, `/api/commandes/stats`) puis agrégeait côté client. Désormais, **un seul appel** à `GET /api/dashboard/stats` retourne toutes les KPI.
+
+Composants internes : `KPI`, `FamilleCard`, `CommandeStatutCard`. Le mapping `FAMILLE_META` (icônes + couleurs) est **codé en dur** côté frontend, en plus du mapping `FAMILLE_LABELS` côté backend (`dashboard.py:19-28`) — **double source de vérité** des familles.
+
+> **Code legacy** : la sync Karlia est déclenchée au **montage du Dashboard** (`Dashboard.js:88-94`) via `POST /api/synchro/lancer`. C'est gênant : un utilisateur qui visite la page d'accueil déclenche silencieusement une sync clients + articles complète. À retirer ou rendre explicite.
+
+#### Particularité — `TunnelContrat.js` (608 lignes — le plus gros écran)
+
+Assistant en **4 étapes** (`ETAPES = ['Informations', 'Articles', 'Récapitulatif', 'Première facture']`) :
+
+1. **Informations** : recherche client (cache local), date début/fin, montant annuel HT, famille, prorata + demi-mois
+2. **Articles** : 1 article principal (rang 0) + jusqu'à 7 annexes — chaque ligne pointe vers un article Karlia (catalogue depuis `produitsAPI.liste`)
+3. **Récapitulatif** : prévisualisation avant POST `/api/contrats`
+4. **Première facture** : optionnelle, émet la facture an1 via `POST /api/facturation/calculer` puis `/lancer`
+
+État interne lourd : 18 `useState` indépendants (`form`, `articles`, `clientSelectionne`, `prorata`, `demiMois`, `contratParent`, `contratCree`, `factureCree`, `etape`, etc.) — gestion d'état artisanale qui mériterait un `useReducer` ou un store léger.
+
+#### Particularité — `MesPrestations.js` (vue formateur, 432 lignes)
+
+Page la plus utilisée par les FORMATEUR. Permet :
+- visualisation des prestations attribuées (statut, date prévue, planifiée)
+- bascule date/heure → `POST /api/prestations/{id}/planifier`
+- marquage réalisé → `POST /api/prestations/{id}/realiser`
+- changement de formateur visible (sélecteur, si `toutes_prestations=true` côté droits)
+
+> **À noter** : il n'y a aucune intégration calendrier (Google ou autre) malgré les colonnes DB `google_*` (cf. § 2.15). Tout passe par des inputs date/heure HTML natifs.
+
+### 5.6 Menus latéraux — `components/Layout.js`
+
+**3 menus distincts** selon le rôle :
+
+#### `MENU_COMPLET` (ADMIN / GESTIONNAIRE)
+
+23 entrées dont 4 séparateurs : `Tableau de bord` | **Commandes** (Nouvelles, À planifier, Planifiées, Terminées, Mes prestations) | **Contrats** (Liste, Nouveau, Contrats à créer, Renouvellements) | **Gestion** (Clients, Facturation, Indices Syntec, Chorus Pro) | **Administration** (Paramètres, Formateurs, Utilisateurs).
+
+#### `MENU_FORMATEUR`
+
+3 entrées : `Tableau de bord`, `Mes prestations`.
+
+#### `MENU_TECHNICIEN`
+
+5 entrées : `Tableau de bord`, `Mes prestations`, **Contrats** (`Contrats techniques`).
+
+Le filtrage applique `droits[item.droit]` pour le menu complet ; le cleanup retire les séparateurs orphelins.
+
+> **Observation UX** : le menu utilise des **emojis** (`📋`, `🆕`, `📅`, `✅`, `🏁`, `📋`, `🏢`, `💶`, `📈`, `📤`, `⚙️`, `👨‍🏫`, `👥`) comme icônes. C'est pratique en dev mais peu pro pour une production B2B SaaS. La présence de `lucide-react` en deps mais **jamais importée** (cf. § 5.7) suggère qu'un remplacement vers des SVG était prévu mais jamais terminé.
+
+### 5.7 Bibliothèques UI installées vs. utilisées
+
+| Lib | Version | Utilisée ? | Où |
+|---|---|---|---|
+| `react` + `react-dom` | 19.2.4 | ✓ | partout |
+| `react-router-dom` | 7.13.1 | ✓ | `App.js` + 11 pages |
+| `axios` | 1.13.6 | ✓ | `api.js` |
+| `tailwindcss` | 3.4.19 (dev) | ✓ | toutes les pages |
+| `date-fns` | 4.1.0 | ✓ | 11 pages (format `dd/MM/yyyy`) |
+| `react-hot-toast` | 2.6.0 | ✓ | 9 pages (`toast.success`, `toast.error`) |
+| `lucide-react` | 0.576.0 | **✗** | **jamais importée** |
+| `react-select` | 5.10.2 | **✗** | **jamais importée** |
+| `react-datepicker` | 9.1.0 | **✗** | **jamais importée** |
+| `@testing-library/*` | divers (dev) | **✗** | aucun test |
+| `web-vitals` | 2.1.4 | **✗** | aucun import |
+
+> **Conséquence build** : `lucide-react`, `react-select`, `react-datepicker` sont **dans le bundle final** sans servir. Tree-shaking imparfait ⇒ poids additionnel. Total potentiellement économisable : ~300 ko gzippés. À retirer en pré-refonte.
+
+### 5.8 Conventions et helpers récurrents
+
+#### Formatage de date
+
+D'après `CODING_RULES.md:32-39`, la règle est : `new Date(date + 'T12:00:00')` pour éviter les décalages timezone Paris. Vérifié dans plusieurs pages, mais **pas systématiquement appliqué**. Les nouvelles pages (Dashboard, ChorusProPage) utilisent `new Date(...)` sans suffixe → risque de décalage J-1 en timezone Paris.
+
+#### Pagination
+
+Les pages liste paginées (`Contrats`, `NouvellesCommandes`, `Renouvellements`, …) ont chacune leur **propre composant pagination interne** — pas d'helper partagé. Code dupliqué.
+
+#### Toast d'erreur
+
+`toast.error(e.response?.data?.detail || 'Erreur')` — pattern répété ~30 fois. Aucun helper `handleApiError(e)` centralisé.
+
+### 5.9 Points d'observation pour la refonte
+
+| # | Observation | Sévérité |
+|---|---|---|
+| 1 | CRA (Create React App) en mode maintenance depuis 2024 — migration Vite/Next recommandée | élevée |
+| 2 | Pas de tests frontend malgré `@testing-library/*` installé | élevée |
+| 3 | 3 bibliothèques UI installées **jamais utilisées** (lucide, react-select, react-datepicker) — ~300 ko inutiles | moyenne |
+| 4 | Double source de vérité **droits utilisateur** (backend + AuthContext) | élevée |
+| 5 | `Dashboard` lance une sync Karlia silencieuse au montage | moyenne |
+| 6 | Mélange `api.get` direct + helpers `xAPI.*` → inconsistance | moyenne |
+| 7 | 18 `useState` dans `TunnelContrat` → manque de `useReducer` ou store | moyenne |
+| 8 | Mapping famille (icônes/couleurs) dupliqué front + back | basse |
+| 9 | Emojis comme icônes — peu pro, prévoir migration `lucide-react` | basse |
+| 10 | Aucun composant `Pagination` partagé | basse |
+| 11 | `NouveauContrat.js` (207 lignes) probablement obsolète vs `TunnelContrat` | basse |
+| 12 | TZ Paris : règle `T12:00:00` documentée mais pas systématique | moyenne |
+| 13 | Aucun helper d'erreur API partagé | basse |
+| 14 | Pas de TypeScript | élevée si refonte ambitieuse |
+
+---
