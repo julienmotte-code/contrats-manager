@@ -172,6 +172,7 @@ Les autres tags du dépôt suivent un schéma de versioning :
 | 2026-05-21 | 22 branches origin | 9 branches origin | 12 | Chantier 1.1 / branche `audit/refonte-v2` |
 | 2026-05-21 | 10 fichiers, 4 commits | 4 fichiers cleanés (-427/+4 lignes) | — | Chantier 1.2 / PR `chore/dead-code-cleanup-v1` mergée en CLI (`--no-ff`), tag `v2.4.7-dead-code-cleanup` |
 | 2026-05-21 | 8 divergences models.py ↔ DB | 7/8 alignées (+31/-11 lignes sur `models.py`), #2 reportée chantier 1.4 | — | Chantier 1.3 / PR `chore/schema-alignment` mergée en CLI (`--no-ff`), tag `v2.4.8-schema-alignment` |
+| 2026-05-21 | Alembic dans requirements mais jamais câblé | Alembic câblé, baseline 0001 stampée en prod, migration 0002 prête (non-appliquée) | — | Chantier 1.4 / PR `chore/alembic-setup` mergée en CLI (`--no-ff`). **Pas de tag** — le tag `v2.4.9-vague-1-complete` sera posé après le chantier de déploiement qui appliquera 0002. |
 
 ### Détail chantier 1.2 (2026-05-21)
 
@@ -210,3 +211,27 @@ Merge commit : voir le `git log` du tag `v2.4.8-schema-alignment`.
 - Divergence #1 : décider si on ajoute UNIQUE en DB sur `clients_cache.numero_client` (0 doublon en prod, viable).
 - Divergence #3 : décider si on ajoute NOT NULL en DB sur `contrats.client_karlia_id` (0 NULL en prod, viable).
 - Point chantier 1.2 toujours valable : retirer le raw SQL `UPDATE lots_facturation` de `api/indices.py:139` au moment du drop de la table.
+
+### Détail chantier 1.4 (2026-05-21)
+
+PR `chore/alembic-setup` mergée sur `main` via merge CLI `--no-ff`. **Pas de tag** à ce stade : le tag `v2.4.9-vague-1-complete` sera posé après le chantier séparé de déploiement Vague 1.
+
+Commits intégrés (4) :
+
+1. `fd8bcd5` — `chore(alembic): initialize Alembic in backend/` — création manuelle de `alembic.ini`, `alembic/env.py`, `alembic/script.py.mako`, `alembic/versions/.gitkeep`. `prepend_sys_path = .` + `compare_type=True` + `compare_server_default=True` + `file_template = %%(rev)s_%%(slug)s`.
+2. `cf8c662` — `chore(alembic): baseline existing DB - empty no-op migration as version 0001` — baseline `0001` no-op (`upgrade=pass`, `downgrade=pass`) après échec de l'autogenerate (32 opérations parasites produites par `--autogenerate` sur la DB existante). `alembic stamp head` exécuté sur la DB de prod → création de la table `alembic_version` avec `version_num='0001'`. **Aucune autre table de prod n'a été modifiée.**
+3. `ded43e2` — `chore(alembic): migration 0002 - drop lots_facturation + indices_revision UNIQUE on (annee, mois)` — migration **manuelle** (autogenerate désactivé) avec 3 opérations strictes : `drop_table('lots_facturation')`, `drop_constraint('indices_revision_date_publication_key')`, `create_unique_constraint('uq_indices_revision_annee_mois', ['annee', 'mois'])`. `downgrade()` inverse strict (table recréée selon `\d` réel observé en DB). Modifs accompagnantes dans `models.py` (ajout `UniqueConstraint`, retrait TODO) et `api/indices.py` (retrait du raw SQL `UPDATE lots_facturation`). **Test à blanc validé** sur DB `contrats_test_migration` (upgrade + downgrade OK), DB temp supprimée. **Migration 0002 NON appliquée sur la DB de prod** — sera déployée au chantier suivant.
+4. `cc106fb` — `docs(alembic): workflow Alembic + bannissement SQL DDL manuel` — `backend/alembic/README.md` (workflow + template migration manuelle + procédure test à blanc + notes historiques sur la baseline 0001 et l'absence d'autogenerate) + `CODING_RULES.md § 12` (règle absolue : tout DDL passe par Alembic, plus de `db.execute(text("ALTER TABLE ..."))` ni `Base.metadata.create_all()`).
+
+Merge commit sur main : `cd348ca`.
+
+État DB de prod à la fin du chantier 1.4 :
+- Table `alembic_version` créée avec `version_num='0001'`
+- 17 tables métier inchangées (aucun `ALTER TABLE`, aucun `DROP`)
+- `alembic current` retourne `0001` (la migration `0002` est dans le repo mais pas dans la DB)
+
+**À traiter au chantier de déploiement Vague 1 (chantier suivant)** :
+- Appliquer la migration `0002` sur la DB de prod (`docker compose run --rm backend alembic upgrade head`)
+- Rebuild backend (intègre les changements chantiers 1.3 + 1.4)
+- Vérifications post-déploiement
+- Pose du tag `v2.4.9-vague-1-complete`
