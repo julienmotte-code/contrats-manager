@@ -298,8 +298,8 @@ class Commande(Base):
     montant_ttc         = Column(Numeric(15, 2))
     date_devis          = Column(Date)
     date_acceptation    = Column(Date)
-    date_import         = Column(DateTime(timezone=True), server_default=func.now())
-    date_validation     = Column(DateTime(timezone=True))
+    date_import         = Column(DateTime, server_default=func.now())  # timestamp without time zone en DB — cf. AUDIT_REFONTE.md § 2.19 #5
+    date_validation     = Column(DateTime)  # timestamp without time zone en DB
     statut              = Column(String(50), default='nouvelle')
     type_traitement     = Column(String(50))
     necessite_contrat   = Column(Boolean, default=False)
@@ -311,8 +311,8 @@ class Commande(Base):
     pdf_devis           = Column(LargeBinary)  # bytea en DB ; colonne actuellement non utilisée (cf. commit f71d223, AUDIT_REFONTE.md § 2.19 #4)
     pdf_devis_nom       = Column(String(255))
     pdf_url             = Column(Text)
-    created_at          = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at          = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    created_at          = Column(DateTime, server_default=func.now())  # timestamp without time zone en DB
+    updated_at          = Column(DateTime, server_default=func.now(), onupdate=func.now())  # timestamp without time zone en DB
     created_by          = Column(Integer)
     updated_by          = Column(Integer)
     formateur_id        = Column(Integer, ForeignKey("formateurs.id"))
@@ -342,7 +342,7 @@ class CommandeLigne(Base):
     montant_tva       = Column(Numeric(15, 2))
     montant_ttc       = Column(Numeric(15, 2))
     ordre             = Column(Integer, default=0)
-    created_at        = Column(DateTime(timezone=True), server_default=func.now())
+    created_at        = Column(DateTime, server_default=func.now())  # timestamp without time zone en DB — cf. AUDIT_REFONTE.md § 2.19 #5
 
     commande = relationship("Commande", back_populates="lignes")
     prestations = relationship("Prestation", back_populates="commande_ligne")
