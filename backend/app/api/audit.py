@@ -9,8 +9,8 @@ from sqlalchemy.orm import Session
 from typing import Optional
 
 from app.core.database import get_db
-from app.models.models import Contrat, Utilisateur
-from app.api.auth import get_current_user
+from app.core.security import require_role
+from app.models.models import Contrat
 from app.services.validation_service import valider_contrat, auditer_annee_facturation
 
 router = APIRouter()
@@ -20,7 +20,7 @@ router = APIRouter()
 def audit_contrat(
     contrat_id: str,
     db: Session = Depends(get_db),
-    current_user: Utilisateur = Depends(get_current_user),
+    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE")),
 ):
     contrat = db.query(Contrat).filter(Contrat.id == contrat_id).first()
     if not contrat:
@@ -33,7 +33,7 @@ def audit_facturation(
     annee: int,
     famille: Optional[str] = None,
     db: Session = Depends(get_db),
-    current_user: Utilisateur = Depends(get_current_user),
+    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE")),
 ):
     rapport = auditer_annee_facturation(db, annee)
     if famille:
@@ -48,7 +48,7 @@ def audit_facturation(
 @router.get("/global")
 def audit_global(
     db: Session = Depends(get_db),
-    current_user: Utilisateur = Depends(get_current_user),
+    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE")),
 ):
     contrats = db.query(Contrat).filter(Contrat.statut == "EN_COURS").all()
     resultats = []
