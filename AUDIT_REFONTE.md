@@ -1184,3 +1184,370 @@ GET /api/dashboard/stats
 > **Observation transverse** : **aucun endpoint d'écriture n'utilise de transaction explicite**. Tous reposent sur les `db.commit()` finaux et la session par requête. En cas d'erreur en milieu d'opération multi-étapes (ex : création contrat avec 8 articles puis échec sur la 6e ligne), la session reste sale jusqu'à un `db.rollback()` qui n'est pas systématique. À durcir dans la refonte.
 
 ---
+
+## 4. Services métier backend
+
+`backend/app/services/` contient **7 fichiers actifs** (un huitième, `google_calendar_service.py`, a été supprimé récemment — cf. § 9) pour un total de **2057 lignes** :
+
+| Service | Lignes | Rôle |
+|---|---|---|
+| `karlia_service.py` | 303 | Client Karlia v2 (clients, produits, factures) |
+| `karlia_devis_service.py` | 507 | Synchronisation devis acceptés Karlia (avec rate-limit) |
+| `chorus_service.py` | 373 | Client PISTE / Chorus Pro (OAuth2 + soumission facture) |
+| `contrat_service.py` | 193 | Calculs métier contrats (prorata, plan, numéro client) |
+| `revision_service.py` | 162 | Calculs Syntec et règles de famille |
+| `validation_service.py` | 268 | Garde-fous métier (pré-calcul, pré-émission, post-émission, audit) |
+| `document_service.py` | 251 | Génération de contrats Word par publipostage |
+| ~~`google_calendar_service.py`~~ | — | **Retiré récemment** (-44 lignes diff phase 0) |
+
+### 4.1 `karlia_service.py` — Client Karlia v2
+
+**Singleton global** : `karlia = KarliaService()` (`karlia_service.py:303`). Instance unique réutilisée par tous les routers via `from app.services.karlia_service import karlia`.
+
+#### Méthodes publiques
+
+| Méthode | Endpoint Karlia | Usage |
+|---|---|---|
+| `tester_connexion()` | `GET /company` | écran Paramètres + `POST /api/parametres/tester-connexion` |
+| `lister_clients(recherche, limit, offset)` | `GET /customers` | sync clients + recherche live |
+| `obtenir_client(karlia_id)` | `GET /customers/{id}` | fallback fiche client |
+| `creer_client(data)` | `POST /customers` | `POST /api/clients` |
+| `dernier_numero_client()` | `GET /customers?limit=500` | génération numéro suivant — **récupère 500 clients pour calculer le max** ⚠️ |
+| `lister_produits(recherche, limit=200)` | `GET /products` | sync articles + recherche |
+| `obtenir_produit(karlia_id)` | `GET /products/{id}` | non-utilisé en pratique |
+| `obtenir_prix_vente(karlia_id)` | `GET /products/{id}/sell-price` | non-utilisé en pratique |
+| `lister_types_documents()` | `GET /documents?limit=1` | utilitaire de debug |
+| `creer_facture(client_karlia_id, lignes, ref, date_echeance, montant_ht, description)` | `POST /documents` | facturation Syntec + facturation commande |
+| `obtenir_document(doc_id)` | `GET /documents/{id}` | utilitaire |
+| `lister_templates_documents()` | `GET /documents/templates` | utilitaire |
+| `traitement_lot_factures(factures, delai=0.8s)` | itère `creer_facture` | exclusivement `POST /api/facturation/lancer` |
+
+#### Configuration et clé API
+
+```python
+class KarliaService:
+    def __init__(self):
+        self.api_key = settings.KARLIA_API_KEY    # depuis .env
+        # ...
+```
+
+Mais à plusieurs endroits l'instance est **modifiée à chaud** :
+- `main.py:163-164` (au startup) : si une clé est trouvée en table `parametres`, surcharge `karlia.api_key`
+- `parametres.py:47` (`PUT /api/parametres/karlia-api-key`) : surcharge `karlia.api_key`
+- `main.py:60-62` (avant chaque synchro) : recharge depuis la DB
+
+> **Anti-pattern** : la clé est lue à 3 endroits différents (settings, DB via main.py, DB via parametres.py). En outre, `karlia_devis_service.py:45` et `clients.py:438` ne consultent pas l'instance globale `karlia` et lisent la clé séparément. **Une refonte devrait centraliser la lecture en un service d'accès unique** (cf. § 8).
+
+#### Gestion des erreurs
+
+`_handle_response()` (`karlia_service.py:60`) :
+- 200 → JSON
+- 401 → `KarliaError(401, "Clé API Karlia invalide ou expirée")`
+- 429 → `KarliaError(429, "Quota API Karlia dépassé (100 req/min)")` — **sans retry** dans ce service ; le retry n'existe que dans `karlia_devis_service.py`
+- autre → `KarliaError(status, "Erreur Karlia sur {endpoint}", detail=…)`
+
+#### Mapping TVA — `creer_facture`
+
+```python
+if tva >= 20: id_vat = "1"
+elif tva >= 10: id_vat = "2"
+elif tva >= 5:  id_vat = "3"
+else:           id_vat = "4"   # 0% / exonéré
+```
+
+Mapping codé en dur : `1=20%`, `2=10%`, `3=5.5%`, `4=0%`. Pas de TVA intermédiaire (8.5%, 2.1%). Si Karlia ajoute d'autres taux, ce mapping doit être maintenu manuellement.
+
+#### Payload facture Karlia (validé en production)
+
+```json
+{
+  "id_customer": 123,
+  "id_type": 4,
+  "id_status": 1,            // Brouillon — à valider manuellement
+  "reference": "CO-2025-001",
+  "date": "21/05/2026",
+  "date_end": "01/06/2026",
+  "description": "Facturation annuelle — Contrat CO-2025-001",
+  "products_list": [
+    {"id_product": "K42", "price_without_tax": 1500.0, "quantity": 1, "id_vat": "1"}
+  ]
+}
+```
+
+> **Évolution récente** (commits `34b2991` et `ed3f9d5`) : le `id_status` est passé de `2` (Envoyée — facturait directement) à `1` (Brouillon — validation manuelle), puis à `0` sur la branche `fix/karlia-facture-brouillon-v2` **non mergée**. La logique courante sur main = `id_status=1`. Cf. § 9.
+
+> **Rate-limit traitement_lot_factures** : `delai_entre_requetes=0.8s` codé en dur (`karlia_service.py:249`), ≈ 75 req/min. Aucune lecture de `settings.KARLIA_MAX_REQUESTS_PER_MINUTE`. **Pas de retry sur 429** — un quota dépassé fait échouer la facture (passée à `statut=ERREUR` côté plan).
+
+### 4.2 `karlia_devis_service.py` — Synchronisation devis Karlia
+
+**Singleton global** : `karlia_devis_service = KarliaDevisService()` (`karlia_devis_service.py:507`).
+
+**Particularité** : ce service **ne s'appuie pas sur `karlia`** (l'instance globale du § 4.1). Il refait sa propre couche HTTP avec retry custom, sa propre lecture de clé API en DB, sa propre instance `httpx.AsyncClient()`. **Duplication de code**.
+
+#### Constantes métier — `karlia_devis_service.py:33-39`
+
+```python
+KARLIA_TYPE_DEVIS              = 1   # type document = Devis
+KARLIA_TYPE_BON_COMMANDE       = 2   # documentaire (logs uniquement)
+KARLIA_STATUS_DEVIS_ACCEPTE    = 2   # status Karlia = Accepté
+KARLIA_FIELD_TRAITE_ID         = "66505"  # custom field "Traité" sur opportunité
+RATE_LIMIT_RETRY_BACKOFFS      = [5, 15, 30]   # backoffs successifs sur 429
+```
+
+#### Méthodes publiques
+
+| Méthode | Description |
+|---|---|
+| `sync_devis_acceptes(db, force_full=False)` | sync delta (par défaut) ou full ; appelé par `POST /api/commandes/sync` |
+| `get_devis_acceptes(depuis_date)` | liste paginée `GET /documents?type=1&id_status=2` |
+| `get_devis_detail(document_id)` | `GET /documents/{id}` — récupère le détail (download_url, products_list) |
+| `get_customer_detail(customer_id)` | `GET /customers/{id}` — enrichit infos client |
+| `_is_opportunity_traitee(client, opportunity_id)` | lit custom field 66505 sur `GET /opportunities/{id}` |
+| `_marquer_opportunity_traitee(client, opportunity_id)` | `POST /opportunities/{id}/custom-fields/66505 {field_value: 1}` |
+| `_get_with_retry(client, url, params, context)` | helper HTTP avec retry **5s → 15s → 30s** sur 429 |
+
+#### Flow de synchronisation `sync_devis_acceptes`
+
+```
+1. Lit derniere_synchro_devis dans parametres (sauf si force_full=True)
+2. GET /documents?type=1&id_status=2 paginé (limit=100, sleep 0.8s entre pages)
+3. Pour chaque devis :
+   a. sleep settings.KARLIA_SYNC_SLEEP_SECONDS (défaut 1.2s) en TÊTE d'itération
+   b. Rejeter si id_type != 1 (défense en profondeur)
+   c. Si has_opportunity : vérifier si opportunité déjà Traitée (skip si oui + nouveau devis)
+   d. Si commande existe en base : MAJ (méthode _update_commande)
+   e. Sinon : CRÉATION (méthode _create_commande) + marquer opportunité Traitée
+4. Sauve derniere_synchro_devis = now
+5. Retourne compteurs : nouveaux_devis, devis_mis_a_jour, devis_ignores, opportunites_marquees,
+   pdf_url_renseigne, pdf_url_absent, erreurs[]
+```
+
+#### Effets de bord critiques
+
+- **Marquage automatique des opportunités côté Karlia** comme "Traité" après import → évite la réimportation. Effet de bord externe **non réversible** sans intervention manuelle dans Karlia.
+- Création de `commandes` + `commande_lignes` (CASCADE) en DB locale.
+- Mise à jour de `parametres.derniere_synchro_devis`.
+
+#### Historique (cohérent avec le commit log)
+
+Le module a connu un **incident de production le 2026-05-20** : 108 devis sync en rafale, quota Karlia atteint, les `get_devis_detail()` ont été silencieusement avalés en 429, 106 commandes créées avec `pdf_url=None`. Le rattrapage a été fait via `scripts/rattrapage_pdf_url.py` (commit `8cf0cf3`), puis la prévention via les commits `6e4e714` (sleep 1.2s + retry) et `99c0d9b` (fix nom paramètre `id_type` → `type`). Diagnostic complet dans `docs/DIAGNOSTIC_PDF_COMMANDES.md`.
+
+> **Anti-pattern** : `_create_commande` exécute du SQL brut (`db.execute(text("UPDATE commandes SET karlia_opportunity_id = …"))` `karlia_devis_service.py:350-353`) au lieu de set l'attribut SQLAlchemy. Probablement parce que `karlia_opportunity_id` a été ajouté tardivement à la table sans être déclaré dans le modèle au moment du commit — c'est aujourd'hui dans le modèle (`models.py:305`) donc le raw SQL est devenu inutile. **Code à simplifier**.
+
+> **Lecture seule de la clé API** : `KarliaDevisService.__init__` lit `karlia_api_key` **une seule fois au démarrage** du conteneur (`karlia_devis_service.py:45`). Si l'admin met à jour la clé via `PUT /api/parametres/karlia-api-key`, ce service ne la prendra pas en compte tant que le conteneur n'aura pas redémarré. Bug latent.
+
+### 4.3 `chorus_service.py` — Client PISTE / Chorus Pro
+
+#### URLs hardcodées (`chorus_service.py:15-19`)
+
+```python
+PISTE_SANDBOX_OAUTH = "https://sandbox-oauth.piste.gouv.fr/api/oauth/token"
+PISTE_PROD_OAUTH    = "https://oauth.piste.gouv.fr/api/oauth/token"
+CHORUS_SANDBOX_API  = "https://sandbox-api.piste.gouv.fr/cpro/factures/v1"
+CHORUS_PROD_API     = "https://api.piste.gouv.fr/cpro/factures/v1"
+```
+
+Sélection sandbox vs prod via `mode_qualification` (paramètre DB `chorus_mode_qualification`).
+
+#### Méthodes publiques
+
+| Méthode | Endpoint PISTE | Description |
+|---|---|---|
+| `_get_access_token()` | `POST /api/oauth/token` | OAuth2 client_credentials + Basic Auth |
+| `tester_connexion()` | OAuth seul | bool |
+| `rechercher_structure_destinataire(siret)` | `POST /rechercher/structures` | recherche par SIRET |
+| `consulter_structure(id_structure)` | `POST /consulter/structure` | détails structure |
+| `rechercher_services_structure(id_structure)` | `POST /rechercher/services` | services d'une structure |
+| `soumettre_facture(destinataire_siret, …, lignes, montant_ht, …)` | `POST /soumettre` | **transmet une facture** |
+| `consulter_statut_facture(id_facture)` | `POST /consulter/facture` | suivi statut |
+| `rechercher_factures_emises(date_debut, date_fin, statut)` | `POST /rechercher/factures/fournisseur` | liste émises |
+
+#### Mécanique OAuth
+
+```python
+async def _get_access_token(self) -> str:
+    if self._access_token and self._token_expires:
+        if datetime.now() < self._token_expires:
+            return self._access_token              # cache mémoire
+    credentials = base64.b64encode(f"{tech_username}:{tech_password}".encode()).decode()
+    response = await client.post(self.oauth_url,
+        data={"grant_type": "client_credentials", "scope": "openid"},
+        headers={"Authorization": f"Basic {credentials}"},
+        auth=(self.client_id, self.client_secret))
+    # expires_in retour - 300s de marge
+```
+
+> **Particularité PISTE** : authentification à deux niveaux — `auth=(client_id, client_secret)` (HTTP Basic standard pour OAuth2) **plus** un `Authorization: Basic {tech_username:tech_password}` **dans le header**. Cette combinaison non standard est ce qui distingue PISTE Chorus Pro de l'OAuth2 classique. C'est probablement la source du blocage 403 noté en mémoire utilisateur ([[chorus_pro_blocage]]).
+
+#### Payload facture Chorus Pro
+
+Structure très lourde (`chorus_service.py:264-309`) avec `modeDepot`, `numeroFactureSaisi`, `destinataire`, `fournisseur`, `cadreDeFacturation`, `references`, `lignePoste[]`, `ligneRecapitulatifTVA[]`, `montantTotal`. **Champ `typeTva: "TVA_SUR_DEBIT"` codé en dur** — non configurable, problématique si la société passe en TVA sur encaissements.
+
+#### Factory
+
+```python
+def get_chorus_service_from_params(params: dict) -> Optional[ChorusProService]:
+    required = ['chorus_client_id', 'chorus_client_secret', 'chorus_tech_username',
+                'chorus_tech_password', 'chorus_siret_emetteur']
+    ...
+```
+
+Retourne `None` si un paramètre obligatoire est manquant ; `_get_chorus_service(db)` côté router lève alors une `HTTPException(400, "Configuration Chorus Pro incomplète…")` (`chorus.py:97`).
+
+### 4.4 `contrat_service.py` — Logique métier contrats
+
+| Fonction | Rôle | Notes |
+|---|---|---|
+| `calculer_prorata(date_debut, montant_annuel_ht, demi_mois=False)` | calcule prorata an1 selon la règle "≤15 du mois ou >15" | retourne dict `{prorate, nb_mois, montant_ht, detail, …}` |
+| `calculer_nombre_annees(date_debut, date_fin)` | `date_fin.year - date_debut.year + 1` | **calcul approximatif** — ne tient pas compte du jour/mois |
+| `generer_plan_facturation(contrat_id, date_debut, date_fin, montant_annuel_ht, prorata)` | génère N lignes (1 par année civile) | 1er janvier sauf an1 prorata |
+| `calculer_montant_revise(montant_an1, indice_recent, indice_ancien)` | formule simple Syntec ; **non utilisée** (recalcul dupliqué dans `revision_service`) | code mort à supprimer |
+| `generer_numero_client(nom, dernier_numero)` | 3 lettres du nom + numéro 3 chiffres (ex `DUM048`) | ignore les mots-clés `LE/LA/SARL/SAS/…` |
+| `calculer_statut_renouvellement(contrats_actifs, mois_alerte=1)` | ajoute `jours_avant_echeance` et `a_renouveler` aux contrats | **non utilisée** par le code actif (le router `renouvellements` requête directement) |
+
+#### Règle prorata détaillée
+
+```
+date_debut.day ≤ 15  →  facturation dès le mois courant (mois_debut = date_debut.month)
+date_debut.day > 15  →  facturation dès le mois suivant (mois_debut = date_debut.month + 1)
+nb_mois             =  13 - mois_debut
+montant_prorate     =  montant_annuel_ht × nb_mois / 12, arrondi à 0.01
+option demi_mois    →  bonus = montant_annuel_ht / 24
+cas spécial         →  date_debut == 01/01 ET pas de demi_mois → année complète, pas de prorata
+```
+
+> **Anti-pattern** : `calculer_nombre_annees` ne tient pas compte des dates exactes. Un contrat 01/03/2026 → 28/02/2027 retourne **2 années** (2026 et 2027) alors qu'en jours c'est 1 an pile. Le plan de facturation génère 2 lignes (an1 proraté + an2 année pleine). Question ouverte : est-ce bien le comportement attendu ?
+
+### 4.5 `revision_service.py` — Calculs Syntec
+
+#### Familles et règles
+
+```python
+FAMILLES_CONTRAT = [
+  {"code": "COSOLUCE",       "revision": "SYNTEC_AOUT"},     # Cosoluce
+  {"code": "CANTINE",        "revision": "SYNTEC_OCTOBRE"},  # Cantine de France
+  {"code": "DIGITECH",       "revision": "MANUELLE"},        # Digitech
+  {"code": "MAINTENANCE",    "revision": "SYNTEC_AOUT"},
+  {"code": "ASSISTANCE_TEL", "revision": "SYNTEC_AOUT"},
+  {"code": "KIWI_BACKUP",    "revision": "AUCUNE"},
+  {"code": "AUTRE",          "revision": "AUCUNE"},
+]
+```
+
+> **Note** : la famille `CITYWEB` apparaît dans `dashboard.py:27` (label) mais **n'est pas dans `FAMILLES_CONTRAT`** ici → incohérence. À vérifier si c'est une famille à supprimer ou à ajouter.
+
+#### Formule Syntec — `calculer_revision`
+
+```
+Pour facturer l'année N :
+  indice_ref  = indice mois M de l'année N-2     (ex: Août 2024 pour 2026)
+  indice_new  = indice mois M de l'année N-1     (ex: Août 2025 pour 2026)
+  taux        = indice_new / indice_ref          (arrondi 6 décimales HALF_UP)
+  montant_N   = montant_N-1 × taux               (arrondi 0.01 HALF_UP)
+```
+
+**Garde-fous** :
+- `regle == "AUCUNE"` → retourne `montant_precedent` inchangé, `taux=1.000000`
+- `regle == "MANUELLE"` → exige `nouveau_montant_manuel` ; calcule `taux` rétrospectivement
+- `indice_ref` ou `indice_new` absent → `{ok: False, message: "Indice Syntec {mois} {annee} manquant"}`
+
+> **Évolution historique** (commentaire `revision_service.py:78`) : la formule a été corrigée d'un usage `N-1 et N` vers `N-2 et N-1`. Avant correction, on facturait 2026 avec `Août 2025 / Août 2026` (incohérent car l'indice 2026 n'existe pas encore au moment de facturer 2026). C'est un bug critique passé silencieusement — voir si des factures émises avant correction sont à recalculer.
+
+### 4.6 `validation_service.py` — Garde-fous métier
+
+Quatre fonctions principales, chacune retourne `{ok: bool, alertes: [_alerte(niveau, code, message, detail)]}` :
+
+| Fonction | Quand l'appeler | Niveaux d'alerte |
+|---|---|---|
+| `valider_contrat(db, contrat)` | écran Audit | ERREUR si article rang 0 manquant, sans `id_product`, plan vide, doublon année plan, facture EMISE sans karlia_id, taux incohérent |
+| `valider_pre_calcul(db, plan, nouveau_montant?)` | avant `POST /api/facturation/calculer` | ERREUR si déjà EMISE, indices manquants, montant manuel requis pour Digitech, montant_référence nul |
+| `valider_pre_emission(db, plan)` | avant `POST /api/facturation/lancer` | ERREUR si déjà EMISE, statut PLANIFIEE (non calculée), montant nul, article principal manquant ou sans id_product, client_karlia_id manquant ; WARNING si taux ∉ [0.5, 2.0] |
+| `valider_post_emission(plan, resultat_karlia)` | après `karlia.creer_facture()` | ERREUR si Karlia a répondu succès sans id, statut non mis à jour, id Karlia non persisté |
+| `auditer_annee_facturation(db, annee)` | écran Audit | rapport global pour une année |
+
+> **Observation** : `valider_pre_emission` n'est **pas appelée** par `POST /api/facturation/lancer` aujourd'hui — seul `valider_pre_calcul` et `valider_post_emission` le sont. Il y a donc un trou : on ne vérifie pas les pré-conditions au moment d'émettre, on suppose qu'elles ont été validées lors du calcul. **Risque** si calcul et émission ne sont pas faits dans la même session.
+
+### 4.7 `document_service.py` — Génération de contrats Word
+
+#### Constantes
+
+```python
+STORAGE_DIR   = Path("/app/storage")            # bind-mount hôte
+MODELES_DIR   = STORAGE_DIR / "modeles"
+DOCUMENTS_DIR = STORAGE_DIR / "documents_generes"
+
+FAMILLE_MODELE = {                              # mapping famille → fichier par défaut
+    "COSOLUCE":       "Modele_Contrat_Cosoluce_et_Annexes.docx",
+    "CANTINE":        "Modele_Contrat_Cantine_de_France.docx",
+    "MAINTENANCE":    "Modele_Contrat_Maintenance_Systeme.docx",
+    "ASSISTANCE_TEL": "Modele_Contrat_Assistance_Cityweb.docx",
+}
+```
+
+> **Familles non couvertes** : `DIGITECH`, `KIWI_BACKUP`, `AUTRE`, `CITYWEB` n'ont **pas de modèle Word défini**. Si on génère un contrat de ces familles sans modèle uploadé en table `modeles_documents`, l'endpoint renvoie `{"success": False, "error": "Aucun modèle disponible…"}`.
+
+#### Mécanique de publipostage
+
+```
+1. _trouver_modele(famille, db) :
+   - cherche modeles_documents.actif=true le plus récent pour type CONTRAT_{famille}
+   - sinon fallback FAMILLE_MODELE[famille] dans /app/storage/modeles/
+2. Construit dict variables (27 champs) à partir du contrat + client cache
+3. Ouvre le .docx avec python-docx
+4. _traiter_document() :
+   - pour chaque paragraphe / tableau / cellule / sous-tableau / en-tête
+   - remplace «AliasName» (caractères \xab et \xbb = guillemets français) par la valeur
+   - 67 alias mappés vers 27 valeurs canoniques (NomClient, AdresseClient, …)
+   - regex _RE_REST supprime tout «...» non remplacé (nettoyage placeholders inconnus)
+5. Sauve dans /app/storage/documents_generes/ avec nom Contrat_{numero}_{client}_{YYYYMMDD}.docx
+6. Insère ligne dans documents_generes avec variables_json (audit)
+```
+
+#### Alias supportés
+
+27 champs canoniques, 67 alias au total. Exemples : `NomClient` accepte aussi `NomSite` ; `DateDoc` accepte `DateDuJour` ou `DatduJour` (faute de frappe historique). Cette table d'alias est très spécifique aux modèles Word legacy de l'entreprise — **à figer dans un schéma de modèle moderne** (ex : Jinja2 ou champs de fusion Word standard).
+
+> **Observation** : seul **1 document** est dans `documents_generes` (cf. § 2.9). La fonctionnalité existe mais n'est quasiment pas utilisée. Question ouverte : à conserver, à reprendre, ou à supprimer pour la refonte ?
+
+### 4.8 `google_calendar_service.py` — Service supprimé
+
+Ce fichier **n'existe plus** dans `backend/app/services/` (cf. § 1.9 — l'arbre du projet). Le diff phase 0 montre `-44 lignes`. Il a été retiré dans la période 18/05 → 21/05.
+
+**Conséquences** :
+- La table `prestations` garde **5 colonnes orphelines** liées à Google Calendar (§ 2.15).
+- La table `formateurs` garde le champ `email_google` (§ 2.16) — initialement pour authentifier vers Google.
+- Aucun appel à un quelconque service Google n'est plus présent dans le code backend.
+
+> **Question pour la refonte** : faut-il (a) **purger** les colonnes orphelines en DB, (b) **réactiver** le service avec un nouveau client Google, ou (c) basculer vers un autre fournisseur (Outlook, Apple) ?
+
+### 4.9 Dépendances externes par service
+
+| Service | API externe | Tables DB lues/écrites | Fichiers locaux |
+|---|---|---|---|
+| `karlia_service` | Karlia v2 (`/customers`, `/products`, `/documents`, `/company`) | — | — |
+| `karlia_devis_service` | Karlia v2 (`/documents`, `/customers`, `/opportunities`) | E: `commandes`, `commande_lignes`, `parametres` | — |
+| `chorus_service` | PISTE OAuth2 + Chorus Pro `/cpro/factures/v1` | — | — |
+| `contrat_service` | — | — | — |
+| `revision_service` | — | L: `indices_revision` | — |
+| `validation_service` | — | L: `contrats`, `plan_facturation`, `indices_revision` | — |
+| `document_service` | — | L: `modeles_documents`, contrats, clients_cache · E: `documents_generes` | R: `storage/modeles/*.docx` · W: `storage/documents_generes/*.docx` |
+
+### 4.10 Anti-patterns et redondances
+
+| # | Anti-pattern | Impact | Priorité refonte |
+|---|---|---|---|
+| 1 | Clé API Karlia lue à **5 endroits** (`settings`, `karlia.__init__`, `karlia_devis_service.__init__`, `main.py:163`, `parametres.py:47`, `clients.py:438`) | clé désynchronisée → 401/403 silencieux | **élevée** |
+| 2 | `karlia_devis_service` lit la clé **une seule fois** au démarrage container | bug latent | élevée |
+| 3 | `karlia_service.creer_facture` mappe la TVA à 4 codes uniquement (1/2/3/4) | TVA intermédiaires non couvertes | moyenne |
+| 4 | `karlia_service.traitement_lot_factures` : aucun retry sur 429 | quota atteint = échec définitif | moyenne |
+| 5 | `karlia_devis_service._create_commande` utilise `db.execute(text("UPDATE …"))` pour `karlia_opportunity_id` alors que la colonne est aujourd'hui dans le modèle | code obsolète | basse |
+| 6 | `contrat_service.calculer_montant_revise` et `revision_service.calculer_revision` font le même calcul de manière différente | code dupliqué | basse |
+| 7 | `contrat_service.calculer_statut_renouvellement` jamais appelée | code mort | basse |
+| 8 | Famille `CITYWEB` dans `dashboard.py` mais pas dans `FAMILLES_CONTRAT` | incohérence visuelle | basse |
+| 9 | `validation_service.valider_pre_emission` jamais appelée par `/api/facturation/lancer` | trou de garde-fou | **élevée** |
+| 10 | `chorus_service` : `typeTva: "TVA_SUR_DEBIT"` codé en dur | non configurable | moyenne |
+| 11 | `chorus_service` : double authentification (Basic + auth=) non documentée → suspect du blocage 403 | bloque la production | **élevée** |
+| 12 | Aucune transaction explicite, tous les commits intermédiaires en milieu de boucle | états incohérents possibles | élevée |
+| 13 | `google_calendar_service` retiré mais schéma DB intact | confusion | moyenne |
+
+---
