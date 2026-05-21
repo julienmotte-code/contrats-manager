@@ -171,6 +171,7 @@ Les autres tags du dépôt suivent un schéma de versioning :
 |---|---|---|---|---|
 | 2026-05-21 | 22 branches origin | 9 branches origin | 12 | Chantier 1.1 / branche `audit/refonte-v2` |
 | 2026-05-21 | 10 fichiers, 4 commits | 4 fichiers cleanés (-427/+4 lignes) | — | Chantier 1.2 / PR `chore/dead-code-cleanup-v1` mergée en CLI (`--no-ff`), tag `v2.4.7-dead-code-cleanup` |
+| 2026-05-21 | 8 divergences models.py ↔ DB | 7/8 alignées (+31/-11 lignes sur `models.py`), #2 reportée chantier 1.4 | — | Chantier 1.3 / PR `chore/schema-alignment` mergée en CLI (`--no-ff`), tag `v2.4.8-schema-alignment` |
 
 ### Détail chantier 1.2 (2026-05-21)
 
@@ -186,3 +187,26 @@ Commits intégrés (du plus ancien au plus récent) :
 Merge commit : voir le `git log` du tag `v2.4.7-dead-code-cleanup`.
 
 **Point à reporter au chantier 1.4** : `backend/app/api/indices.py:139` exécute encore un `UPDATE lots_facturation SET indice_utilise_id = NULL` en raw SQL. Quand la table sera dropée via Alembic, ce SQL devra être retiré.
+
+### Détail chantier 1.3 (2026-05-21)
+
+PR `chore/schema-alignment` mergée sur `main` via merge CLI `--no-ff`.
+
+Commits intégrés (1 par divergence, dans l'ordre #1 → #8) :
+
+1. `6f6713d` — `chore(schema): align clients_cache.numero_client uniqueness (#1)` — retire `unique=True` du modèle (DB n'a pas UNIQUE, 0 doublon en prod)
+2. `464b98a` — `chore(schema): document divergence #2 (indices_revision uniqueness) — defer to chantier 1.4` — TODO Python uniquement, pas de modif fonctionnelle (contradiction `CODING_RULES.md § 9` vs DB à arbitrer au chantier 1.4)
+3. `81e6532` — `chore(schema): align contrats.client_karlia_id nullability (#3)` — passe `nullable=True` côté modèle (DB autorise NULL, 0 NULL en prod)
+4. `0d9ae0a` — `chore(schema): align commandes.pdf_devis type (#4)` — `Text` → `LargeBinary` (DB est `bytea`, colonne vide)
+5. `bf6f1bc` — `chore(schema): align commandes/commande_lignes timestamps to without-tz (#5)` — retire `timezone=True` sur 5 colonnes
+6. `17cfb54` — `chore(schema): add commande_lignes.discount_* columns to model (#6)` — ajout `discount_type/value/percent` (déjà en DB, peuplé à 57 %)
+7. `af748eb` — `chore(schema): add agenda_formateur_id and google_* columns to Prestation (#7)` — ajout 5 colonnes + relations `formateur` / `agenda_formateur` (avec `foreign_keys` explicites)
+8. `f2c1fd4` — `chore(schema): add transmissions_chorus.is_test column to model (#8)` — ajout `Boolean default=False`
+
+Merge commit : voir le `git log` du tag `v2.4.8-schema-alignment`.
+
+**Points à reporter au chantier 1.4 (Alembic)** :
+- Divergence #2 : DROP UNIQUE `indices_revision_date_publication_key` + CREATE UNIQUE sur `(annee, mois)` + ajout `UniqueConstraint('annee', 'mois')` dans models. TODO actif au-dessus de la classe `IndiceRevision` dans `models.py`.
+- Divergence #1 : décider si on ajoute UNIQUE en DB sur `clients_cache.numero_client` (0 doublon en prod, viable).
+- Divergence #3 : décider si on ajoute NOT NULL en DB sur `contrats.client_karlia_id` (0 NULL en prod, viable).
+- Point chantier 1.2 toujours valable : retirer le raw SQL `UPDATE lots_facturation` de `api/indices.py:139` au moment du drop de la table.
