@@ -2,10 +2,9 @@
 Service métier — Gestion des contrats
 Logique de calcul : prorata, plan de facturation, révision par indice
 """
-from datetime import date, timedelta
+from datetime import date
 from decimal import Decimal, ROUND_HALF_UP
-from typing import List, Dict, Tuple, Optional
-import math
+from typing import List, Dict
 
 
 def calculer_prorata(date_debut: date, montant_annuel_ht: Decimal, demi_mois: bool = False) -> Dict:
@@ -103,32 +102,6 @@ def generer_plan_facturation(
     return plan
 
 
-def calculer_montant_revise(
-    montant_annuel_ht_an1: Decimal,
-    indice_recent: Decimal,
-    indice_ancien: Decimal,
-) -> Decimal:
-    """
-    Calcule le montant révisé selon la formule Syntec :
-    Montant révisé = Montant An1 × Indice récent ÷ Indice ancien
-
-    Args:
-        montant_annuel_ht_an1: Montant de référence (année 1 pleine, sans prorata)
-        indice_recent: Valeur du dernier indice Syntec publié
-        indice_ancien: Valeur de l'indice de référence initial du contrat
-
-    Returns:
-        Montant révisé arrondi à 2 décimales
-    """
-    if indice_ancien == 0:
-        raise ValueError("L'indice ancien ne peut pas être zéro")
-
-    montant_revise = (montant_annuel_ht_an1 * indice_recent / indice_ancien).quantize(
-        Decimal("0.01"), rounding=ROUND_HALF_UP
-    )
-    return montant_revise
-
-
 def generer_numero_client(nom: str, dernier_numero: int) -> str:
     """
     Génère le numéro client selon la règle :
@@ -166,28 +139,3 @@ def generer_numero_client(nom: str, dernier_numero: int) -> str:
     # Numéro incrémenté sur 3 chiffres
     nouveau_numero = dernier_numero + 1
     return f"{prefix}{nouveau_numero:03d}"
-
-
-def calculer_statut_renouvellement(contrats_actifs: List[Dict], mois_alerte: int = 1) -> List[Dict]:
-    """
-    Analyse les contrats actifs et identifie ceux à renouveler.
-    Un contrat est 'À renouveler' si sa date de fin est dans les {mois_alerte} mois.
-
-    Retourne la liste avec un champ 'jours_avant_echeance' et 'a_renouveler' ajoutés.
-    """
-    aujourd_hui = date.today()
-    resultats = []
-
-    for c in contrats_actifs:
-        date_fin = c.get("date_fin")
-        if isinstance(date_fin, str):
-            date_fin = date.fromisoformat(date_fin)
-
-        jours = (date_fin - aujourd_hui).days
-        mois = jours / 30.44  # Approximation
-
-        c["jours_avant_echeance"] = jours
-        c["a_renouveler"] = (0 <= mois <= mois_alerte)
-        resultats.append(c)
-
-    return resultats

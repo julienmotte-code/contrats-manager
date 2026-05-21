@@ -142,14 +142,6 @@ class KarliaService:
             params["quick_search"] = recherche
         return await self._get("/products", params)
 
-    async def obtenir_produit(self, karlia_id: str) -> dict:
-        """Récupère un produit par son ID Karlia."""
-        return await self._get(f"/products/{karlia_id}")
-
-    async def obtenir_prix_vente(self, karlia_id: str) -> dict:
-        """Récupère le prix de vente d'un produit."""
-        return await self._get(f"/products/{karlia_id}/sell-price")
-
     # ─────────────────────────────────────────────
     # DOCUMENTS (Factures dans Karlia)
     # ─────────────────────────────────────────────
@@ -223,10 +215,6 @@ class KarliaService:
     async def obtenir_document(self, doc_id: str) -> dict:
         """Récupère un document Karlia (facture, devis...) par son ID."""
         return await self._get(f"/documents/{doc_id}")
-
-    async def lister_templates_documents(self) -> dict:
-        """Liste les templates de documents disponibles dans Karlia."""
-        return await self._get("/documents/templates")
 
     # ─────────────────────────────────────────────
     # UTILITAIRES

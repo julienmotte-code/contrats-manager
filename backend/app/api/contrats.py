@@ -23,7 +23,7 @@ from app.core.database import get_db
 from app.models.models import Contrat, ContratArticle, PlanFacturation, IndiceRevision
 from app.services.contrat_service import (
     calculer_prorata, calculer_nombre_annees,
-    generer_plan_facturation, calculer_statut_renouvellement,
+    generer_plan_facturation,
 )
 
 logger = logging.getLogger(__name__)
