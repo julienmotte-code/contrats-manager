@@ -174,6 +174,7 @@ Les autres tags du dépôt suivent un schéma de versioning :
 | 2026-05-21 | 8 divergences models.py ↔ DB | 7/8 alignées (+31/-11 lignes sur `models.py`), #2 reportée chantier 1.4 | — | Chantier 1.3 / PR `chore/schema-alignment` mergée en CLI (`--no-ff`), tag `v2.4.8-schema-alignment` |
 | 2026-05-21 | Alembic dans requirements mais jamais câblé | Alembic câblé, baseline 0001 stampée en prod, migration 0002 prête (non-appliquée) | — | Chantier 1.4 / PR `chore/alembic-setup` mergée en CLI (`--no-ff`). **Pas de tag** — le tag `v2.4.9-vague-1-complete` sera posé après le chantier de déploiement qui appliquera 0002. |
 | 2026-05-21 | `alembic_version=0001`, table `lots_facturation` présente, ancien UNIQUE `date_publication`, backend tournant avec ancien code en mémoire | `alembic_version=0002`, `lots_facturation` droppée, nouveau UNIQUE `(annee, mois)`, backend rebuildé avec code chantiers 1.3+1.4 | — | **Chantier de déploiement Vague 1** / migration `0002` appliquée en prod + rebuild backend, tag `v2.4.9-vague-1-complete` posé. |
+| 2026-05-21 | 94 endpoints backend, dont 7 routers totalement ouverts, 6 checks RBAC inline dispersés, dashboard public, anomalies #2/#4 audit pendantes | 94 endpoints **100 % gatés** via `app/core/security.py` (73 `require_role`, 17 `require_authenticated`, 2 `get_current_user` direct, 2 publics légitimes), 6 inline checks factorisés, dashboard authentifié (filtre par rôle reporté), helper `openPdfWithAuth` créé | — | **Chantier 2.1 Vague 2** / PR `feat/backend-rbac` mergée en CLI (`--no-ff`), 18 commits. **Pas de tag** — le tag `v2.5.0-vague-2-complete` sera posé après le chantier de déploiement complet de la Vague 2. **Code mergé sur main MAIS PAS encore déployé en prod** (rebuild backend prévu dans le chantier de déploiement Vague 2). |
 
 ### Détail chantier 1.2 (2026-05-21)
 
@@ -304,4 +305,68 @@ Aucune ligne perdue, aucune ligne créée par erreur. Seule la table `lots_factu
 - `contrats-frontend-1` : inchangé, `Up 21 hours+`
 
 **Statut** : Vague 1 complète. Prête pour Vague 2.
+
+### Détail chantier 2.1 — RBAC backend (2026-05-21)
+
+PR `feat/backend-rbac` mergée sur `main` via merge CLI `--no-ff` (la PR GitHub n'a pas été cliquée). Merge commit : **`a0b439d`**.
+
+**Objectif** : appliquer un contrôle RBAC strict sur les 94 endpoints du backend FastAPI. État initial : 7 routers totalement ouverts (aucun `Depends(get_current_user)`), 6 checks inline `if current_user.role != "ADMIN"` dispersés (anomalie #2 audit), 1 bug `current_user: dict` (anomalie #4), 1 dashboard public retournant des données financières confidentielles, 1 pattern `window.open` cassant l'auth Bearer pour les PDF.
+
+**18 commits intégrés** (du plus ancien au plus récent) :
+
+1. `01d7f40` — `feat(rbac): add app/core/security.py with require_role factory + tests/rbac_check.sh` — création des helpers centraux `require_role(*roles)` et `require_authenticated`, + script de test RBAC pour les 4 rôles `test_*`
+2. `bf8c159` — `feat(rbac): apply require_role to contrats router` — 10 endpoints (2 reads TOUS_AUTH, 8 writes ADMIN+GESTIO)
+3. `fdec11c` — `feat(rbac): apply require_role to commandes router` — 14 endpoints ADMIN+GESTIO
+4. `ede8bee` — `fix(rbac): replace window.open by openPdfWithAuth helper for /api/commandes/{id}/pdf` — création `contrats-ui-src/src/services/pdfFetch.js` qui fetch avec Bearer puis ouvre via Blob URL ; 5 pages frontend modifiées pour utiliser le helper
+5. `01e60b1` — `feat(rbac): apply require_role to facturation router` — 3 endpoints ADMIN+GESTIO
+6. `54eb9a6` — `feat(rbac): apply require_role to chorus router + fix current_user dict bug` — 9 endpoints ADMIN+GESTIO + fix anomalie #4 ligne 390 (`current_user.get("login", "system")` → `current_user.login`, annotation `dict` retirée)
+7. `5ba3959` — `feat(rbac): apply require_role to clients router` — 7 endpoints ADMIN+GESTIO (router totalement ouvert avant)
+8. `4766369` — `feat(rbac): apply require_role to formateurs router` — 5 endpoints mixtes (2 reads TOUS_AUTH pour MesPrestations, 3 writes ADMIN)
+9. `8b88005` — `feat(rbac): apply require_role to prestations router with ownership filtering` — 10 endpoints, helpers `check_prestation_ownership` et `filter_prestations_for_user` ajoutés à `core/security.py`, TECH/FORM ne voient que leurs propres prestations (`formateur_id` ou `agenda_formateur_id` match)
+10. `512895f` — `feat(rbac): apply require_role to produits router` — 2 endpoints (1 read TOUS_AUTH, 1 sync ADMIN+GESTIO)
+11. `b4a3f04` — `feat(rbac): apply require_role to documents router + factorize inline ADMIN checks` — 7 endpoints, 3 checks inline supprimés (lignes 76, 98, 111). Pas de pattern `window.open` à corriger (DetailContrat.js:79 utilise déjà `fetch` avec Bearer)
+12. `5a1e9a4` — `feat(rbac): apply require_role to parametres router + factorize inline ADMIN checks` — 6 endpoints ADMIN strict, 3 checks inline supprimés (lignes 38, 76, 131)
+13. `ac91a9d` — `feat(rbac): apply require_role to indices router` — 7 endpoints (4 reads TOUS_AUTH dont `/courant` critique pour Dashboard tous rôles, 3 writes ADMIN+GESTIO). Logique DELETE (2 UPDATE ORM chantier 1.4) préservée intacte
+14. `1453583` — `feat(rbac): apply require_role to audit router` — 3 endpoints ADMIN+GESTIO
+15. `e2ee610` — `feat(rbac): apply require_authenticated to dashboard router` — 1 endpoint TOUS_AUTH. **Fuite de données financières documentée en HIGH priority dans `TODO_REFONTE.md`** (FORMATEUR/TECHNICIEN voient le CA total portefeuille — chantier `feat/dashboard-filter-by-role` à traiter dès Vague 2 mergée)
+16. `9252053` — `feat(rbac): apply gates to main.py root endpoints` — 3 endpoints : `/api/health` PUBLIC, `/api/synchro/statut` TOUS_AUTH, `/api/synchro/lancer` ADMIN+GESTIO. `auth.py` non touché (`/me` conserve `get_current_user` pour éviter un import circulaire `auth ↔ security`)
+17. `90ffacd` — `refactor(rbac): replace local require_admin by central require_role in utilisateurs router` — cleanup post-audit F.1, suppression du helper `require_admin` local de `utilisateurs.py` au profit de `require_role("ADMIN")` du module commun (source unique de vérité)
+18. `ab59a15` — `docs: recap chantier 2.1 backend RBAC (17 commits, 14 routers + main + cleanup utilisateurs)` — création de `CHANTIER_2_1_RECAP.md` (synthèse exhaustive)
+
+**Couverture finale (94 endpoints) — matrice live confirmée par tests `rbac_check.sh`** :
+
+| Gate | Endpoints | Description |
+|---|---|---|
+| `require_role("ADMIN", "GESTIONNAIRE")` | 57 | Données financières, opérations métier (chorus, clients, commandes, facturation, audit, contrats writes) |
+| `require_role("ADMIN")` | 16 | Administration système (parametres, formateurs writes, documents templates, utilisateurs CRUD) |
+| `require_authenticated` | 17 | Lectures catalogue/référentiel (dashboard, indices reads, produits read, prestations avec filtre métier ownership) |
+| `get_current_user` direct | 2 | `auth.py:/me` et `utilisateurs.py:/droits` (retour info utilisateur courant, pas de check de rôle) |
+| **PUBLIC légitime** | 2 | `GET /api/health` (Docker healthcheck), `POST /api/auth/login` (bootstrap auth) |
+| **Total** | **94** | **100 %** |
+
+**7 dettes documentées dans `TODO_REFONTE.md`** :
+
+- 🔴 **PRIORITÉ ÉLEVÉE** : `feat/dashboard-filter-by-role` — fuite CA portefeuille à FORMATEUR/TECHNICIEN (à traiter dès Vague 2 mergée, avant Vague 3)
+- 6 dettes priorité faible : endpoint commandes manquant, endpoints commandes/prestations orphelins (code mort frontend), gating frontend granulaire (`isNotFormateur` trop large), UX TECHNICIEN sur DetailContrat (section Documents silencieuse), bouton Synchroniser Dashboard visible pour FORM/TECH
+
+**Comptes `test_*` préservés** (4 rôles, conservés pour chantiers 2.2-2.4) :
+
+| Login | Rôle | `actif` | `formateur_id` |
+|---|---|---|---|
+| `test_admin` | ADMIN | ✅ | `None` |
+| `test_gestionnaire` | GESTIONNAIRE | ✅ | `None` |
+| `test_technicien` | TECHNICIEN | ✅ | `2` (Delphine) |
+| `test_formateur` | FORMATEUR | ✅ | `2` (Delphine) |
+
+Mot de passe commun : `Test123!`. Suppression à la clôture de la Vague 2.
+
+**État backend prod après merge** :
+
+- Code mergé sur `main` mais **PAS encore déployé en prod**.
+- Le backend Docker tourne toujours avec l'image du chantier de déploiement Vague 1 (tag `v2.4.9-vague-1-complete`).
+- Le rebuild backend interviendra dans le chantier de déploiement complet de la Vague 2 (qui inclura aussi 2.2 valider_pre_emission, 2.3, 2.4 centralisation clé Karlia, et le fix dashboard filter prioritaire).
+
+Référence détaillée : `~/contrats/CHANTIER_2_1_RECAP.md` (synthèse exhaustive avec liste des 18 commits, anomalies résolues, régressions évitées, tests effectués).
+
+**Statut** : chantier 2.1 complet. Prochain : 2.2 `valider_pre_emission`.
 
