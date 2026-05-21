@@ -10,6 +10,106 @@ Ce document est en **lecture seule** sur le code et la DB. Aucune modification, 
 
 ---
 
+## Table des matières
+
+- [1. Architecture générale et stack](#1-architecture-générale-et-stack)
+  - [1.1 Vue d'ensemble](#11-vue-densemble)
+  - [1.2 Services Docker — `docker-compose.yml`](#12-services-docker--docker-composeyml)
+  - [1.3 Topologie réseau et `nginx.conf`](#13-topologie-réseau-et-nginxconf)
+  - [1.4 Variables d'environnement — `.env` + `config.py`](#14-variables-denvironnement--env--configpy)
+  - [1.5 Stockage persistant](#15-stockage-persistant)
+  - [1.6 Stack Python — `backend/requirements.txt`](#16-stack-python--backendrequirementstxt)
+  - [1.7 Stack frontend — `contrats-ui-src/package.json`](#17-stack-frontend--contrats-ui-srcpackagejson)
+  - [1.8 Topologie de scheduling](#18-topologie-de-scheduling)
+  - [1.9 Arbre des dossiers (2 niveaux)](#19-arbre-des-dossiers-2-niveaux)
+  - [1.10 Historique git et tags](#110-historique-git-et-tags)
+  - [1.11 Documents complémentaires à la racine](#111-documents-complémentaires-à-la-racine)
+
+- [2. Modèle de données PostgreSQL](#2-modèle-de-données-postgresql)
+  - [2.1 Vue d'ensemble — 17 tables groupées par domaine](#21-vue-densemble--17-tables-groupées-par-domaine)
+  - [2.2 `clients_cache`](#22-clients_cache--cache-local-des-clients-karlia) → 2.18 `transmissions_chorus` (une section par table)
+  - [2.19 Synthèse des divergences `models.py` ↔ DB live](#219-synthèse-des-divergences-modelspy--db-live)
+  - [2.20 Diagramme texte des relations](#220-diagramme-texte-des-relations)
+  - [2.21 Notes sur les cascades de suppression](#221-notes-sur-les-cascades-de-suppression)
+
+- [3. API Backend (FastAPI)](#3-api-backend-fastapi)
+  - [3.1 Vue d'ensemble — montage des routers](#31-vue-densemble--montage-des-routers)
+  - [3.2 Authentification, JWT et gestion des droits](#32-authentification-jwt-et-gestion-des-droits)
+  - [3.3 Contrats — `api/contrats.py`](#33-contrats--apicontratspy)
+  - [3.4 Commandes — `api/commandes.py`](#34-commandes--apicommandespy)
+  - [3.5 Facturation (révision Syntec) — `api/facturation.py`](#35-facturation-révision-syntec--apifacturationpy)
+  - [3.6 Chorus Pro — `api/chorus.py`](#36-chorus-pro--apichoruspy)
+  - [3.7 Paramètres — `api/parametres.py`](#37-paramètres--apiparametrespy)
+  - [3.8 Clients — `api/clients.py`](#38-clients--apiclientspy)
+  - [3.9 Produits / Articles — `api/produits.py`](#39-produits--articles--apiproduitspy)
+  - [3.10 Indices Syntec — `api/indices.py`](#310-indices-syntec--apiindicespy)
+  - [3.11 Documents — `api/documents.py`](#311-documents--apidocumentspy)
+  - [3.12 Audit (cohérence métier) — `api/audit.py`](#312-audit-cohérence-métier--apiauditpy)
+  - [3.13 Dashboard — `api/dashboard.py` (nouveauté)](#313-dashboard--apidashboardpy-nouveauté)
+  - [3.14 Formateurs — `api/formateurs.py`](#314-formateurs--apiformateurspy)
+  - [3.15 Prestations — `api/prestations.py`](#315-prestations--apiprestationspy)
+  - [3.16 Routes globales — `main.py`](#316-routes-globales--mainpy)
+  - [3.17 Synthèse — effets de bord transverses](#317-synthèse--effets-de-bord-transverses)
+
+- [4. Services métier backend](#4-services-métier-backend)
+  - [4.1 `karlia_service.py` — Client Karlia v2](#41-karlia_servicepy--client-karlia-v2)
+  - [4.2 `karlia_devis_service.py` — Synchronisation devis Karlia](#42-karlia_devis_servicepy--synchronisation-devis-karlia)
+  - [4.3 `chorus_service.py` — Client PISTE / Chorus Pro](#43-chorus_servicepy--client-piste--chorus-pro)
+  - [4.4 `contrat_service.py` — Logique métier contrats](#44-contrat_servicepy--logique-métier-contrats)
+  - [4.5 `revision_service.py` — Calculs Syntec](#45-revision_servicepy--calculs-syntec)
+  - [4.6 `validation_service.py` — Garde-fous métier](#46-validation_servicepy--garde-fous-métier)
+  - [4.7 `document_service.py` — Génération de contrats Word](#47-document_servicepy--génération-de-contrats-word)
+  - [4.8 `google_calendar_service.py` — Service supprimé](#48-google_calendar_servicepy--service-supprimé)
+  - [4.9 Dépendances externes par service](#49-dépendances-externes-par-service)
+  - [4.10 Anti-patterns et redondances](#410-anti-patterns-et-redondances)
+
+- [5. Frontend React](#5-frontend-react)
+  - [5.1 Structure du dossier `src/`](#51-structure-du-dossier-src)
+  - [5.2 Routes — `App.js`](#52-routes--appjs)
+  - [5.3 Contexte d'authentification — `context/AuthContext.js`](#53-contexte-dauthentification--contextauthcontextjs)
+  - [5.4 Couche réseau — `services/api.js`](#54-couche-réseau--servicesapijs)
+  - [5.5 Pages — inventaire complet](#55-pages--inventaire-complet)
+  - [5.6 Menus latéraux — `components/Layout.js`](#56-menus-latéraux--componentslayoutjs)
+  - [5.7 Bibliothèques UI installées vs. utilisées](#57-bibliothèques-ui-installées-vs-utilisées)
+  - [5.8 Conventions et helpers récurrents](#58-conventions-et-helpers-récurrents)
+  - [5.9 Points d'observation pour la refonte](#59-points-dobservation-pour-la-refonte)
+
+- [6. Workflows métier de bout en bout](#6-workflows-métier-de-bout-en-bout)
+  - [Workflow 1 — Création d'un contrat via le tunnel 4 étapes](#workflow-1--création-dun-contrat-via-le-tunnel-4-étapes)
+  - [Workflow 2 — Renouvellement d'un contrat](#workflow-2--renouvellement-dun-contrat)
+  - [Workflow 3 — Révision Syntec annuelle (facturation N)](#workflow-3--révision-syntec-annuelle-facturation-n)
+  - [Workflow 4 — Devis → Commande → Prestation → Facture (cycle commandes)](#workflow-4--devis--commande--prestation--facture-cycle-commandes)
+  - [Workflow 5 — Génération du plan de facturation](#workflow-5--génération-du-plan-de-facturation)
+  - [Workflow 6 — Émission d'une facture vers Karlia](#workflow-6--émission-dune-facture-vers-karlia)
+  - [Workflow 7 — Import des factures Karlia → table `factures_karlia`](#workflow-7--import-des-factures-karlia--table-factures_karlia-préparation-chorus-pro)
+  - [Workflow 8 — Transmission Chorus Pro via PISTE (OAuth2)](#workflow-8--transmission-chorus-pro-via-piste-oauth2)
+  - [Workflow 9 — Synchronisation Karlia → DB locale (clients + articles)](#workflow-9--synchronisation-karlia--db-locale-clients--articles)
+  - [Workflow 10 — Cycle d'authentification (login → JWT → droits)](#workflow-10--cycle-dauthentification-login--jwt--droits)
+  - [Workflow 11 — Gestion des rôles](#workflow-11--gestion-des-rôles-droits-et-filtrage-daffichage)
+  - [Workflow 12 — Nouveaux workflows apparus depuis l'audit v2.3.0](#workflow-12--nouveaux-workflows-apparus-depuis-laudit-v230)
+
+- [7. Intégrations externes](#7-intégrations-externes)
+  - [7.1 Karlia CRM (api v2)](#71-karlia-crm-api-v2)
+  - [7.2 Chorus Pro via PISTE](#72-chorus-pro-via-piste)
+  - [7.3 Google Calendar — service retiré](#73-google-calendar--service-retiré)
+  - [7.4 Autres intégrations externes potentielles](#74-autres-intégrations-externes-potentielles)
+
+- [8. État des lieux et perspectives (préparation refonte / migration GCP)](#8-état-des-lieux-et-perspectives-préparation-refonte--migration-gcp)
+  - [8.1 Fonctionnalités complètement opérationnelles](#81-fonctionnalités-complètement-opérationnelles)
+  - [8.2 Fonctionnalités partielles ou hooks à compléter](#82-fonctionnalités-partielles-ou-hooks-à-compléter)
+  - [8.3 Dette technique identifiée](#83-dette-technique-identifiée)
+  - [8.4 Préparation à la migration GCP](#84-préparation-à-la-migration-gcp)
+
+- [9. Questions ouvertes pour la refonte](#9-questions-ouvertes-pour-la-refonte)
+
+- [10. Évolutions depuis l'audit v2.3.0 (18 mai 2026)](#10-évolutions-depuis-laudit-v230-18-mai-2026)
+  - [10.1 Commits postérieurs à l'audit (18 au total)](#101-commits-postérieurs-à-laudit-18-au-total)
+  - [10.2 Fichiers touchés (30 fichiers, +1256 / -3495)](#102-fichiers-touchés-30-fichiers-1256---3495)
+  - [10.3 Fonctionnalités nouvelles ou modifiées](#103-fonctionnalités-nouvelles-ou-modifiées)
+  - [10.4 Branches actives non mergées (à examiner pré-refonte)](#104-branches-actives-non-mergées-à-examiner-pré-refonte)
+
+---
+
 ## 1. Architecture générale et stack
 
 ### 1.1 Vue d'ensemble
@@ -3331,5 +3431,228 @@ Volumétrie actuelle réaliste : 13 MB DB, ~700 Ko storage, ~100 req/jour max. L
    - Activer le polling Chorus statut.
 
 **Durée estimée** : 4 à 6 semaines de travail effectif si une seule personne, dont 2 semaines de pré-migration (étape 1 critique).
+
+---
+
+## 9. Questions ouvertes pour la refonte
+
+Questions identifiées au fil de l'audit qui demandent une décision produit ou technique avant le démarrage de la refonte. Chaque question pointe vers la section qui l'a fait émerger.
+
+### Q1 — Statut Karlia des factures émises : `id_status=1` ou `id_status=0` ?
+
+Le code de `main` envoie `id_status=1` (Brouillon visible côté Karlia). La branche `fix/karlia-facture-brouillon-v2` (tag `v2.4.6.1`) bascule à `id_status=0` (Brouillon non finalisé) mais **n'est pas mergée**. Quel est l'état cible définitif ? Pourquoi la branche dort-elle ?
+→ § 4.1, § 7.1.5, § 8.4.11
+
+### Q2 — Limite dure à 8 lignes par contrat : à conserver ?
+
+`contrat_articles` est plafonné à `rang ∈ [0,7]` via une contrainte CHECK SQL et `UNIQUE (contrat_id, rang)`. Aucun contrat actuel ne semble dépasser. **Est-ce une règle métier voulue** (cohérence avec les modèles Word qui ont 1 principal + 7 annexes) ou un artefact de conception ?
+→ § 2.6
+
+### Q3 — Workflow prestations : à amplifier ou à retirer ?
+
+572 contrats, 142 commandes, **seulement 11 prestations** créées. La planification fine par formateur n'est quasiment pas utilisée — la majorité des commandes suit le raccourci `sans_planification`. Faut-il **investir** dans ce workflow (calendrier formateurs, notifications) ou **le retirer** au profit d'un suivi externe (Google Sheets, Calendly, etc.) ?
+→ § 2.15, workflow 4
+
+### Q4 — Génération de contrats Word : à promouvoir ou à supprimer ?
+
+Sur 572 contrats actifs, **1 seul** apparaît dans `documents_generes`. La fonctionnalité existe (`document_service.py`, 251 lignes, 9 modèles `.docx`, 67 alias) mais n'est pratiquement pas utilisée. Faut-il (a) **promouvoir** la génération automatique au moment de la validation du contrat, (b) **moderniser** (Jinja2, génération PDF), ou (c) **retirer** ?
+→ § 4.7, § 8.2
+
+### Q5 — Blocage Chorus Pro 403 : double authentification est-elle la cause ?
+
+L'analyse révèle que `httpx.auth=(client_id, client_secret)` écrase probablement le header `Authorization: Basic base64(tech_username:tech_password)` mis manuellement. Avant de pousser un correctif, **est-ce bien ce que retourne PISTE** dans les logs (en mode debug) ? Faut-il passer les credentials techniques dans un header custom (`X-Cpro-Account` ou similaire) ?
+→ § 4.10 #11, § 7.2.3, mémoire [[chorus_pro_blocage]]
+
+### Q6 — Google Calendar : réactivation, alternative ou abandon ?
+
+Le service a été retiré récemment (-44 lignes). 5 colonnes orphelines persistent dans `prestations` et `formateurs.email_google` est toujours rempli. Faut-il (a) **réactiver** Google Calendar avec un nouveau client OAuth2 (et faire la migration tokens vers Secret Manager), (b) **basculer** vers Outlook/CalDAV, (c) **fournir un export ICS** téléchargeable par formateur, ou (d) **abandonner définitivement** (purge des colonnes) ?
+→ § 4.8, § 7.3, § 8.2.2
+
+### Q7 — Centralisation de la clé API Karlia : refonte du chargement ?
+
+La clé est lue à **5 emplacements différents** (settings, `karlia.api_key`, `karlia_devis_service`, DB `parametres`, BackgroundTask `clients.py:438`). En cas de mise à jour, certains chemins ne sont pas rafraîchis (notamment `karlia_devis_service` qui exige un redémarrage container). Faut-il un service singleton `KarliaCredentialsProvider` qui relit la DB à chaque accès (avec cache 5 min) ?
+→ § 4.10 #1-2, § 7.1.2
+
+### Q8 — Rôle TECHNICIEN : surface fonctionnelle exacte ?
+
+Le rôle a été introduit en `v2.3.0` (commit `ad36a41`) en remplacement de `CONSULTANT`. Il a uniquement `contrats_lecture=true` et un menu spécifique ("Contrats techniques"). Mais aucune définition produit ne clarifie ce qu'est un "contrat technique" vs un contrat standard. Est-ce un filtrage par famille ? Par statut ? Par client ?
+→ § 5.6 (MENU_TECHNICIEN), workflow 11
+
+### Q9 — Validation pre_emission : pourquoi n'est-elle pas appelée ?
+
+`valider_pre_emission` (validation_service.py:153) est un garde-fou exhaustif (article rang 0, id_product Karlia, client_karlia_id, montant non nul, taux ∈ [0.5; 2.0]) mais **aucun endpoint ne l'appelle** dans le code de prod. Est-ce un oubli au moment du commit ou une décision volontaire (les autres garde-fous suffisent) ?
+→ § 4.10 #9, § 4.6
+
+### Q10 — Tables et endpoints fantômes : à supprimer ?
+
+- `lots_facturation` : 0 ligne, endpoint stub `{statut:"TERMINE"}`
+- `pages/NouveauContrat.js` : 207 lignes probablement remplacée par `TunnelContrat`
+- `commandes.statut = 'terminee'` : code path mais jamais en liste
+- `obtenir_produit`, `obtenir_prix_vente`, `lister_templates_documents` : déclarés jamais utilisés
+- `calculer_montant_revise`, `calculer_statut_renouvellement` : dupliqués / jamais appelés
+
+Faut-il les supprimer en bloc en pré-refonte ?
+→ § 8.2.1
+
+### Q11 — Polling automatique Chorus Pro et Karlia : à mettre en place ?
+
+Aucun mécanisme ne met à jour `factures_karlia.statut_chorus` après le passage à `TRANSMISE` (vers `ACCEPTEE`/`REJETEE`). Idem côté Karlia : aucune détection qu'une facture Brouillon a été validée et envoyée. Faut-il **deux jobs Cloud Scheduler quotidiens** pour rafraîchir ces statuts ?
+→ § 8.2.2
+
+### Q12 — Alembic : baseline directe ou refonte du schéma ?
+
+Le module n'a jamais utilisé Alembic. Au moment de l'introduire, deux options : (a) **baseline immédiate** sur l'état actuel et ne migrer que les changements futurs (rapide mais fige les divergences phase 2), (b) **refonte du schéma** en alignant `models.py` et la DB, puis baseline (propre mais plus long, risque sur les colonnes orphelines Google Calendar et discount_* commande_lignes).
+→ § 1.6, § 2.19, § 8.3.1, § 8.4.11
+
+---
+
+## 10. Évolutions depuis l'audit v2.3.0 (18 mai 2026)
+
+Synthèse précise des changements entre le commit `73648f4` (HEAD de l'audit v2.3.0) et le commit `f0d4c22` (HEAD `main` au moment de cet audit, tag `v2.4.6`).
+
+### 10.1 Commits postérieurs à l'audit (18 au total)
+
+| Date | Commit | Tag | Sujet |
+|---|---|---|---|
+| 21/05 | `f0d4c22` | `v2.4.6` | Merge: nettoyage code mort pdf_devis (base64 jamais utilisé) |
+| 21/05 | `d48f005` | — | Merge: diagnostic pdf_url manquants sur nouvelles commandes |
+| 21/05 | `3009e41` | — | Merge: tri colonnes date devis et date acceptation |
+| 21/05 | `f71d223` | — | chore(commandes): nettoyage code mort pdf_devis |
+| 20/05 | `9a7fede` | `v2.4.5` | Merge fix/sync-karlia-rate-limit : sleep + retry 429 |
+| 20/05 | `6e4e714` | — | fix(sync): sleep 1.2s + retry 429 sur get_devis_detail |
+| 20/05 | `8af5023` | — | Merge fix/rattrapage-pdf-url-commandes : 106 pdf_url manquants |
+| 20/05 | `8cf0cf3` | — | fix(commandes): script rattrapage one-shot des pdf_url manquants |
+| 20/05 | `030933e` | — | diag(commandes): analyse PDF manquants nouvelles commandes |
+| 20/05 | `5887188` | — | feat(commandes): tri sur date devis et date acceptation |
+| 19/05 | `a3e4ecd` | `v2.4.2` | Merge feat/dashboard-stats-endpoint : Dashboard refondu |
+| 19/05 | `2174640` | — | feat(dashboard): nouvel endpoint /api/dashboard/stats + UI refondue |
+| 19/05 | `a63795c` | `v2.4.1` | Merge fix/karlia-factures-brouillon : factures Karlia en brouillon |
+| 19/05 | `34b2991` | — | fix(karlia): création des factures en statut Brouillon (id_status=1) |
+| 19/05 | `1530552` | `v2.3.2` | Merge fix/sync-karlia-filter-id-type |
+| 19/05 | `99c0d9b` | — | fix(karlia-sync): id_type → type (filtre Karlia v2) |
+| 19/05 | `2f0a215` | `v2.3.1` | Merge fix/cleanup-bc-commandes |
+| 19/05 | `1045343` | — | fix(commandes): suppression 66 bons de commande importés à tort |
+
+**3 tags publiés** : `v2.3.1`, `v2.3.2`, `v2.4.0`, `v2.4.1`, `v2.4.2`, `v2.4.5`, `v2.4.6` (note : sauts volontaires `v2.4.2 → v2.4.5` cf. mémoire [[versioning_baseline]]).
+
+**1 tag en attente** : `v2.4.6.1` sur la branche `fix/karlia-facture-brouillon-v2` non mergée (passe `id_status=1 → 0`).
+
+### 10.2 Fichiers touchés (30 fichiers, +1256 / -3495)
+
+#### 10.2.1 Backend modifié
+
+| Fichier | Lignes diff | Évolution |
+|---|---|---|
+| `backend/app/api/chorus.py` | -237 (~refonte) | reformatage et nettoyage |
+| `backend/app/api/commandes.py` | +53 | tri date_devis/date_acceptation, validate type_traitement |
+| `backend/app/api/dashboard.py` | +146 | **nouvel endpoint `/api/dashboard/stats`** |
+| `backend/app/api/parametres.py` | -4 | cleanup mineur |
+| `backend/app/api/prestations.py` | -62 | cleanup mineur |
+| `backend/app/core/config.py` | +6 | ajout `KARLIA_SYNC_SLEEP_SECONDS` |
+| `backend/app/main.py` | +2 | mineur |
+| `backend/app/models/models.py` | +17 | ajout colonnes opportunity_id, formateur_id, facture_karlia_*, prestations.* |
+| `backend/app/services/chorus_service.py` | -204 (~refonte) | refonte mineure (formattage) |
+| `backend/app/services/google_calendar_service.py` | **-44 (suppression)** | **fichier supprimé** |
+| `backend/app/services/karlia_devis_service.py` | +282 | rate-limit + retry + compteurs PDF + défense en profondeur sur id_type |
+| `backend/app/services/karlia_service.py` | +9 | mineur |
+
+#### 10.2.2 Frontend modifié
+
+| Fichier | Lignes diff | Évolution |
+|---|---|---|
+| `contrats-ui-src/src/pages/ChorusProPage.js` | -118 (~refonte) | cleanup |
+| `contrats-ui-src/src/pages/Contrats.js` | +64 | filtre famille via query param |
+| `contrats-ui-src/src/pages/Dashboard.js` | **+299 (refonte complète)** | nouveau Dashboard avec endpoint unique |
+| `contrats-ui-src/src/pages/MesPrestations.js` | +39 | améliorations mineures |
+| `contrats-ui-src/src/pages/NouvellesCommandes.js` | +71 | tri date_devis/acceptation + bouton sync |
+| `contrats-ui-src/src/pages/Parametres.js` | +47 | retouches Chorus |
+| `contrats-ui-src/src/services/api.js` | +3 | ajout `dashboardAPI.stats()` |
+
+#### 10.2.3 Documents et scripts
+
+| Fichier | Évolution |
+|---|---|
+| `AUDIT_MODULE_v2.3.0.md` | **supprimé de main** (existe sur branche `audit/module-v2.3.0` uniquement) |
+| `CLAUDE.md` | **supprimé de main** |
+| `CODING_RULES.md` | +4 (ajustements mineurs) |
+| `PROJECT_CONTEXT.md` | +4 |
+| `README.md` | +4 |
+| `docs/CHORUS_PRO_RACCORDEMENT.md` | **-140 (supprimé)** |
+| `docs/DIAGNOSTIC_PDF_COMMANDES.md` | **+261 (nouveau)** |
+| `scripts/cleanup_bc_commandes.py` | **+100 (nouveau)** |
+| `scripts/rattrapage_pdf_url.py` | **+203 (nouveau)** |
+| `backups/deleted_bc_ids_20260520_164326.txt` | **+66 (nouveau)** |
+| `.gitignore` | +1 (`backups/*.sql`) |
+
+### 10.3 Fonctionnalités nouvelles ou modifiées
+
+#### 10.3.1 Dashboard refondu (commit `2174640`, tag `v2.4.2`)
+
+- **Backend** : nouveau endpoint `GET /api/dashboard/stats` (146 lignes) qui agrège : `total_contrats`, `ca_annuel_ht`, `a_renouveler_ce_mois`, `contrats_par_famille[]`, `commandes_par_statut{}`.
+- **Frontend** : refonte complète de `Dashboard.js` (+299/-? ≈ refonte), 3 composants internes (`KPI`, `FamilleCard`, `CommandeStatutCard`), mapping `FAMILLE_META` codé en dur.
+- **Impact** : 1 seul aller-retour serveur au lieu de 3-4 précédemment. Plus rapide, mais introduit une double source de vérité sur les libellés/icônes des familles (cf. dette technique 8.3.4).
+
+#### 10.3.2 Sync Karlia robuste (commits `99c0d9b`, `6e4e714`, `9a7fede`, tags `v2.3.2`, `v2.4.5`)
+
+- **Fix `id_type → type`** : Karlia v2 ignorait silencieusement le filtre `id_type=1` côté serveur. Le filtre `type=1` est désormais utilisé. Cf. § 4.2.
+- **Rate-limit** : `KARLIA_SYNC_SLEEP_SECONDS=1.2` (config.py) + `_get_with_retry()` avec backoffs `5/15/30s` sur 429 et erreurs réseau.
+- **Défense en profondeur** : rejet côté Python des documents `id_type != 1` même si Karlia filtre déjà.
+- **Compteurs étendus** : `pdf_url_renseigne`, `pdf_url_absent`, `documents_rejetes_par_type`.
+- **Origine** : incident production du 20/05 (108 devis sync → quota dépassé → 106 commandes sans `pdf_url`), documenté dans `docs/DIAGNOSTIC_PDF_COMMANDES.md`.
+
+#### 10.3.3 Factures Karlia en Brouillon (commit `34b2991`, tag `v2.4.1`)
+
+- **Avant** : `id_status=2` (Envoyée) → la facture partait directement au client.
+- **Après** : `id_status=1` (Brouillon) → validation manuelle requise dans Karlia.
+- **Suite** : la branche `fix/karlia-facture-brouillon-v2` (tag `v2.4.6.1`, **non mergée**) bascule à `id_status=0` (Brouillon "non finalisé") sur **tous les chemins** de facturation. Statut courant sur main = `1`.
+
+#### 10.3.4 Cleanup BC commandes (commit `1045343`, tag `v2.3.1`)
+
+- **Contexte** : 66 documents `BC*` (Bons de Commande, `id_type=2`) importés à tort comme `commandes`.
+- **Cause racine** : Karlia v2 ignore silencieusement le paramètre `id_type` (corrigé par le commit `99c0d9b`).
+- **Action** : script `scripts/cleanup_bc_commandes.py`, backup SQL préalable, liste des IDs supprimés conservée (`backups/deleted_bc_ids_*.txt`).
+
+#### 10.3.5 Tri date_devis / date_acceptation (commit `5887188`, tag `v2.4.5`)
+
+- Page `NouvellesCommandes` accepte un tri par `date_devis` et `date_acceptation` (en plus du `date_import` par défaut).
+- Côté backend : à vérifier, le paramètre `sort` n'apparaît pas explicitement dans `GET /api/commandes/nouvelles` — possiblement traité côté frontend uniquement.
+
+#### 10.3.6 Service Google Calendar retiré (-44 lignes)
+
+- **Fichier supprimé** : `backend/app/services/google_calendar_service.py`
+- **Traces persistantes** : 5 colonnes orphelines dans `prestations`, `formateurs.email_google` toujours géré
+- **Branche source historique** : `feature/google-agenda-planning` existe sur origin, non mergée
+
+#### 10.3.7 Cleanup pdf_devis Base64 (commit `f71d223`, tag `v2.4.6`)
+
+- Le champ `commandes.pdf_devis` (déclaré `Text` dans `models.py` mais `bytea` en DB) recevait historiquement le PDF du devis encodé en base64.
+- Mécanisme remplacé depuis longtemps par `commandes.pdf_url` qui pointe vers Karlia.
+- Le commit retire le code mort qui manipulait base64.
+- **Reste à corriger** : la divergence type `models.py:Text` ↔ DB `bytea` (cf. § 2.19 #4).
+
+### 10.4 Branches actives non mergées (à examiner pré-refonte)
+
+| Branche | Sujet | Statut suggéré |
+|---|---|---|
+| `fix/karlia-facture-brouillon-v2` | `id_status=0` pour les factures Karlia | merger ou abandonner (Q1) |
+| `feature/google-agenda-planning` | Service Google Calendar (probable origine du fichier retiré) | conserver pour référence ou supprimer (Q6) |
+| `feature/chorus-pro` | Implémentation Chorus Pro initiale (mergée via autres branches) | candidat suppression |
+| `feature/dashboard-refonte` | Refonte dashboard (probable précurseur de v2.4.2) | candidat suppression (mergée) |
+| `feature/ecran-clients` | Écran clients | candidat suppression si mergée |
+| `feature/generation-contrats-word` | Génération Word | mergée |
+| `feature/gestion-commandes` | Module commandes (mergée v1.5.0) | candidat suppression |
+| `feature/gestion-formateurs` | Module formateurs | candidat suppression |
+| `feature/renouvellements-multi-selection` | Renouv multi (mergée) | candidat suppression |
+| `feature/seed-test-data` | Scripts seed (mergée) | candidat suppression |
+| `feature/sync-devis-opportunites-traitees` | Sync devis avec opportunités (mergée) | candidat suppression |
+| `feature/contrats-onglets-statut` | Onglets statut | à vérifier (origin uniquement) |
+| `fix/chorus-payload-v5-01` | Fix payload Chorus V5.01 | possiblement obsolète (mergée ?) |
+| `fix/chorus-payload-v5-01-clean` | Nettoyage du précédent | possiblement obsolète |
+| `fix/karlia-api-key-centralisation` | Centralisation de la clé (cf. Q7) | **à examiner sérieusement** |
+| `diag/karlia-facture-statut` | Diagnostic Karlia | conserver si diagnostic non terminé |
+| `feat/stabilisations-v2.3.1` | Stabilisations v2.3.1 (mergée) | candidat suppression |
+| `audit/module-v2.3.0` | **Audit précédent (18 mai)** | **conserver pour traçabilité** |
+
+> **Recommandation** : passer en revue ces 18 branches en équipe et conserver uniquement celles ayant un intérêt actif. Les autres devraient être supprimées ou taggées avec un message explicite (`legacy/...`) avant la refonte pour réduire le bruit.
 
 ---
