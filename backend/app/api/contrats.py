@@ -20,6 +20,7 @@ import uuid
 import logging
 
 from app.core.database import get_db
+from app.core.security import require_authenticated, require_role
 from app.models.models import Contrat, ContratArticle, PlanFacturation, IndiceRevision
 from app.services.contrat_service import (
     calculer_prorata, calculer_nombre_annees,
@@ -82,6 +83,7 @@ def lister_contrats(
     offset: int = 0,
     familles: Optional[str] = Query(None, description="Familles séparées par virgule"),
     db: Session = Depends(get_db),
+    current_user = Depends(require_authenticated),
 ):
     """Liste les contrats avec filtres."""
     q = db.query(Contrat)
@@ -117,6 +119,7 @@ def contrats_a_renouveler(
     annee: Optional[int] = Query(None, description="Année, défaut = année en cours"),
     famille: Optional[str] = Query(None, description="Famille de contrat (ex: COSOLUCE)"),
     db: Session = Depends(get_db),
+    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE")),
 ):
     """Liste les contrats dont la date de fin est dans le mois spécifié."""
     aujourd_hui = date.today()
@@ -148,7 +151,11 @@ def contrats_a_renouveler(
 
 
 @router.post("")
-def creer_contrat(data: ContratCreate, db: Session = Depends(get_db)):
+def creer_contrat(
+    data: ContratCreate,
+    db: Session = Depends(get_db),
+    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE")),
+):
     """
     Crée un nouveau contrat en statut BROUILLON.
     Calcule le prorata et génère le plan de facturation prévisionnaire.
@@ -234,7 +241,11 @@ def creer_contrat(data: ContratCreate, db: Session = Depends(get_db)):
 
 
 @router.get("/{contrat_id}")
-def obtenir_contrat(contrat_id: str, db: Session = Depends(get_db)):
+def obtenir_contrat(
+    contrat_id: str,
+    db: Session = Depends(get_db),
+    current_user = Depends(require_authenticated),
+):
     """Retourne le détail complet d'un contrat avec articles et plan de facturation."""
     contrat = _get_or_404(contrat_id, db)
     d = _contrat_to_dict(contrat)
@@ -270,7 +281,11 @@ def obtenir_contrat(contrat_id: str, db: Session = Depends(get_db)):
 
 
 @router.post("/{contrat_id}/valider")
-def valider_contrat(contrat_id: str, db: Session = Depends(get_db)):
+def valider_contrat(
+    contrat_id: str,
+    db: Session = Depends(get_db),
+    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE")),
+):
     """
     Valide un contrat BROUILLON → EN_COURS.
     Déclenche la génération des documents (asynchrone).
@@ -292,7 +307,11 @@ def valider_contrat(contrat_id: str, db: Session = Depends(get_db)):
 
 
 @router.delete("/{contrat_id}")
-def supprimer_contrat(contrat_id: str, db: Session = Depends(get_db)):
+def supprimer_contrat(
+    contrat_id: str,
+    db: Session = Depends(get_db),
+    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE")),
+):
     """Supprime un contrat en statut BROUILLON uniquement."""
     contrat = _get_or_404(contrat_id, db)
     if contrat.statut != "BROUILLON":
@@ -302,7 +321,12 @@ def supprimer_contrat(contrat_id: str, db: Session = Depends(get_db)):
     return {"message": f"Contrat {contrat.numero_contrat} supprimé"}
 
 @router.put("/{contrat_id}")
-def modifier_contrat(contrat_id: str, data: dict, db: Session = Depends(get_db)):
+def modifier_contrat(
+    contrat_id: str,
+    data: dict,
+    db: Session = Depends(get_db),
+    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE")),
+):
     """Modifie un contrat en statut BROUILLON uniquement."""
     from app.models.models import ContratArticle, PlanFacturation
     contrat = _get_or_404(contrat_id, db)
@@ -386,7 +410,12 @@ def modifier_contrat(contrat_id: str, data: dict, db: Session = Depends(get_db))
     return {"message": "Contrat mis à jour", "id": str(contrat.id)}
 
 @router.post("/{contrat_id}/terminer")
-def terminer_contrat(contrat_id: str, motif: Optional[str] = None, db: Session = Depends(get_db)):
+def terminer_contrat(
+    contrat_id: str,
+    motif: Optional[str] = None,
+    db: Session = Depends(get_db),
+    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE")),
+):
     """Passe un contrat en statut TERMINE — plus aucune facture ne sera émise."""
     contrat = _get_or_404(contrat_id, db)
     contrat.statut = "TERMINE"
@@ -401,6 +430,7 @@ def renouveler_contrat(
     contrat_id: str,
     action: RenouvellementAction,
     db: Session = Depends(get_db),
+    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE")),
 ):
     """
     Gère le renouvellement d'un contrat selon 3 cas :
@@ -586,6 +616,7 @@ class RenouvellementLotAction(BaseModel):
 def renouveler_lot(
     action: RenouvellementLotAction,
     db: Session = Depends(get_db),
+    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE")),
 ):
     """
     Renouvelle plusieurs contrats d'un coup.
