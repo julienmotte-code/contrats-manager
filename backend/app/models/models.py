@@ -64,7 +64,6 @@ class ArticleCache(Base):
     created_at       = Column(DateTime(timezone=True), server_default=func.now())
 
 
-# TODO Chantier 1.4 Alembic : remplacer l'index UNIQUE date_publication par UNIQUE (annee, mois) — cf. CODING_RULES.md § 9. Voir AUDIT_REFONTE.md § 2.19 #2.
 class IndiceRevision(Base):
     """Historique des indices Syntec."""
     __tablename__ = "indices_revision"
@@ -79,6 +78,10 @@ class IndiceRevision(Base):
     source_url       = Column(String(500))
     created_by       = Column(String(100))
     created_at       = Column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint('annee', 'mois', name='uq_indices_revision_annee_mois'),
+    )
 
     factures_plan    = relationship("PlanFacturation", back_populates="indice_calcul")
 

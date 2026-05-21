@@ -133,10 +133,8 @@ def supprimer_indice(
     if not indice:
         raise HTTPException(404, "Indice non trouvé")
     # Délier toutes les références avant suppression
-    from sqlalchemy import text
     db.query(Contrat).filter(Contrat.indice_reference_id == indice_id).update({"indice_reference_id": None})
     db.query(PlanFacturation).filter(PlanFacturation.indice_calcul_id == indice_id).update({"indice_calcul_id": None})
-    db.execute(text("UPDATE lots_facturation SET indice_utilise_id = NULL WHERE indice_utilise_id = :id"), {"id": indice_id})
     db.commit()
     db.delete(indice)
     db.commit()
