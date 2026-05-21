@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from typing import Optional
 from app.core.database import get_db
+from app.core.security import require_authenticated, require_role
 from app.models.models import ArticleCache
 from app.services.karlia_service import karlia, KarliaError
 
@@ -14,6 +15,7 @@ async def lister_produits(
     recherche: Optional[str] = Query(None),
     source: str = Query("cache"),
     db: Session = Depends(get_db),
+    current_user = Depends(require_authenticated),
 ):
     if source == "karlia":
         try:
@@ -35,7 +37,10 @@ async def lister_produits(
 
 
 @router.post("/synchro")
-async def synchroniser_produits(db: Session = Depends(get_db)):
+async def synchroniser_produits(
+    db: Session = Depends(get_db),
+    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE")),
+):
     try:
         result = await karlia.lister_produits(limit=500)
         count = 0
