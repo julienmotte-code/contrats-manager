@@ -49,3 +49,14 @@ Chaque entrée précise la référence code, la raison du report, et la priorit�
 - **Identifié pendant** : chantier 2.1 (RBAC backend), grep cohérence frontend ↔ backend sur le router prestations.
 - **Décision** : à investiguer. Soit pages UI prévues mais non implémentées (modification générale, édition admin), soit résidus à supprimer. Ne pas toucher tant qu'on n'a pas confirmation.
 - **Priorité** : faible.
+
+---
+
+## UX TECHNICIEN sur DetailContrat — section Documents vide silencieuse
+
+- **Référence frontend** : `contrats-ui-src/src/pages/DetailContrat.js:29` (appel `GET /api/documents/contrat/{id}`), `contrats-ui-src/src/components/Layout.js:37-43` (`MENU_TECHNICIEN` → "Contrats techniques").
+- **Description** : DetailContrat est accessible à TECHNICIEN via son menu "Contrats techniques" (lien vers `/contrats`). Avec le RBAC du chantier 2.1, l'API `GET /api/documents/contrat/{id}` retourne 403 pour TECHNICIEN, mais le frontend masque l'erreur via `.catch(() => {})` silencieux. Résultat : la section "Documents générés" apparaît vide pour TECHNICIEN sans aucune explication ni indication que c'est un manque de droits.
+- **Identifié pendant** : chantier 2.1 (RBAC backend), commit `b4a3f04` (router documents).
+- **Amélioration suggérée** : masquer carrément la section "Documents générés" si `current_user.role` n'est pas dans `('ADMIN', 'GESTIONNAIRE')`, plutôt que d'afficher une section vide. Ou afficher un message explicite "Réservé aux administrateurs et gestionnaires".
+- **Chantier proposé** : à intégrer au futur `feat/frontend-rbac-granular` (cf. entrée plus haut).
+- **Priorité** : faible (cosmétique, pas de fuite d'info, pas de bug fonctionnel).
