@@ -89,7 +89,7 @@ class Contrat(Base):
 
     id                    = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     numero_contrat        = Column(String(100), unique=True, nullable=False)
-    client_karlia_id      = Column(String(100), nullable=False)
+    client_karlia_id      = Column(String(100))  # NULL toléré côté DB (cf. AUDIT_REFONTE.md § 2.19 #3) ; contrôle applicatif via API
     client_numero         = Column(String(20))
     client_nom            = Column(String(255))
 
