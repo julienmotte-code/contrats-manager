@@ -173,6 +173,7 @@ Les autres tags du dépôt suivent un schéma de versioning :
 | 2026-05-21 | 10 fichiers, 4 commits | 4 fichiers cleanés (-427/+4 lignes) | — | Chantier 1.2 / PR `chore/dead-code-cleanup-v1` mergée en CLI (`--no-ff`), tag `v2.4.7-dead-code-cleanup` |
 | 2026-05-21 | 8 divergences models.py ↔ DB | 7/8 alignées (+31/-11 lignes sur `models.py`), #2 reportée chantier 1.4 | — | Chantier 1.3 / PR `chore/schema-alignment` mergée en CLI (`--no-ff`), tag `v2.4.8-schema-alignment` |
 | 2026-05-21 | Alembic dans requirements mais jamais câblé | Alembic câblé, baseline 0001 stampée en prod, migration 0002 prête (non-appliquée) | — | Chantier 1.4 / PR `chore/alembic-setup` mergée en CLI (`--no-ff`). **Pas de tag** — le tag `v2.4.9-vague-1-complete` sera posé après le chantier de déploiement qui appliquera 0002. |
+| 2026-05-21 | `alembic_version=0001`, table `lots_facturation` présente, ancien UNIQUE `date_publication`, backend tournant avec ancien code en mémoire | `alembic_version=0002`, `lots_facturation` droppée, nouveau UNIQUE `(annee, mois)`, backend rebuildé avec code chantiers 1.3+1.4 | — | **Chantier de déploiement Vague 1** / migration `0002` appliquée en prod + rebuild backend, tag `v2.4.9-vague-1-complete` posé. |
 
 ### Détail chantier 1.2 (2026-05-21)
 
@@ -235,3 +236,72 @@ Merge commit sur main : `cd348ca`.
 - Rebuild backend (intègre les changements chantiers 1.3 + 1.4)
 - Vérifications post-déploiement
 - Pose du tag `v2.4.9-vague-1-complete`
+
+### Détail chantier de déploiement Vague 1 (2026-05-21)
+
+Mise en production des chantiers 1.2 (code mort), 1.3 (alignement schéma) et 1.4 (Alembic). Procédure en 5 étapes séquencées avec point de validation à chaque étape.
+
+**Tag de release** : `v2.4.9-vague-1-complete` posé sur le commit `80f079b` (HEAD main avant déploiement) et poussé sur origin.
+
+**Étape 1 — Backup pré-déploiement (filet de sécurité)** :
+
+- Fichier : `~/contrats/backups/backup_pre_vague1_20260521-171929.dump`
+- Format : PostgreSQL custom (`pg_dump --format=custom`)
+- Taille : 250 662 octets (~245 Ko)
+- sha256 : `5a8fe976fd7cfafe669de1ada48b4c6887c2e57669f056d86e50d69b7430faa5`
+- TOC : 119 entries, 18 tables (17 métier + `alembic_version`)
+- Sanity check `pg_restore --list` OK
+- Utilisable pour rollback complet via `pg_restore` (cf. procédure ROLLBACK R2 du chantier de déploiement)
+
+**Étape 2 — Migration Alembic 0001 → 0002 sur DB de prod** :
+
+- `alembic upgrade head` exécuté, sortie nominale : `Running upgrade 0001 -> 0002`
+- Aucun warning, aucun rollback transactionnel
+- `SELECT version_num FROM alembic_version` → `0002`
+- Table `lots_facturation` **droppée** (`Did not find any relation`)
+- Contrainte `indices_revision_date_publication_key` **supprimée**
+- Contrainte `uq_indices_revision_annee_mois UNIQUE (annee, mois)` **créée**
+- 0 doublon `(annee, mois)` constaté sur les 6 indices existants — la contrainte est immédiatement satisfaite
+- Volumétries préservées (cf. ci-dessous)
+
+**Étape 3 — Rebuild + restart backend uniquement (frontend + db inchangés)** :
+
+- `docker compose build backend` puis `docker compose up -d backend`
+- Conteneur recréé en 18 secondes, boot complet (`Application startup complete` + hooks `[CONFIG]`/`[SYNCHRO]`/`[SCHEDULER]`)
+- Aucun TRACEBACK SQLAlchemy au boot
+- Tous les nouveaux attributs ORM chargent : `CommandeLigne.discount_*`, `Prestation.agenda_formateur_id/google_*`, `TransmissionChorus.is_test`, `IndiceRevision.UniqueConstraint('annee','mois')`
+- Code rebuildé ne contient plus le raw SQL `UPDATE lots_facturation` (vérifié via `inspect.getsource`)
+
+**Étape 4 — Vérifications fonctionnelles complètes (5/5 endpoints + 3/3 sanity checks)** :
+
+- `/api/health` → 200 OK
+- `/api/contrats` → 572 contrats, format `{total, data}`
+- `/api/indices` → 6 indices (2023/2024/2025 × AOUT/OCTOBRE)
+- `/api/facturation/apercu/2026` → 1 plan calculé sans erreur SQL
+- `/api/dashboard/stats` → 572 contrats répartis sur 7 familles (CITYWEB absente comme attendu après chantier 1.2), CA 1 174 405 € HT
+- Lecture ORM des colonnes nouvelles : ligne 369 de `commande_lignes` confirme `discount_type='percent', percent=46.0` (matche l'audit) ; 5 prestations sur 11 ont `agenda_formateur_id` + `google_sync_status='pending_google_integration'` ; 4 transmissions Chorus toutes `is_test=False`
+
+**Volumétries préservées en prod (post-déploiement)** :
+
+| Table | Lignes |
+|---|---|
+| `contrats` | 572 |
+| `plan_facturation` | 1150 |
+| `indices_revision` | 6 |
+| `commandes` | 142 |
+| `commande_lignes` | 196 |
+| `factures_karlia` | 15 |
+| `prestations` | 11 |
+| `transmissions_chorus` | 4 |
+| `utilisateurs` | 8 |
+
+Aucune ligne perdue, aucune ligne créée par erreur. Seule la table `lots_facturation` (0 lignes en prod) a été supprimée.
+
+**Containers en prod après déploiement** :
+
+- `contrats-backend-1` : rebuildé, `Up` avec nouveau code
+- `contrats-db-1` : inchangé, `Up 7 weeks (healthy)`, désormais à `alembic_version=0002`
+- `contrats-frontend-1` : inchangé, `Up 21 hours+`
+
+**Statut** : Vague 1 complète. Prête pour Vague 2.
+
