@@ -89,3 +89,15 @@ Chaque entrée précise la référence code, la raison du report, et la priorit�
 - **Amélioration suggérée** : masquer carrément la section "Documents générés" si `current_user.role` n'est pas dans `('ADMIN', 'GESTIONNAIRE')`, plutôt que d'afficher une section vide. Ou afficher un message explicite "Réservé aux administrateurs et gestionnaires".
 - **Chantier proposé** : à intégrer au futur `feat/frontend-rbac-granular` (cf. entrée plus haut).
 - **Priorité** : faible (cosmétique, pas de fuite d'info, pas de bug fonctionnel).
+
+---
+
+## Bouton "Synchroniser maintenant" Dashboard visible pour FORMATEUR/TECHNICIEN
+
+- **Référence frontend** : `contrats-ui-src/src/pages/Dashboard.js:155` (bouton), `Dashboard.js:107-118` (fonction `lancerSynchro`).
+- **Description** : le bouton "🔄 Synchroniser maintenant" du bandeau synchro Karlia est affiché sans condition de rôle, donc visible aux 4 rôles. Avec le RBAC du chantier 2.1 (`POST /api/synchro/lancer` restreint à ADMIN+GESTIO), un FORMATEUR ou TECHNICIEN qui clique voit le spinner "⏳ Synchronisation..." un instant, puis le bouton redevient cliquable sans aucun feedback (l'erreur 403 est avalée par `console.error` ligne 114). Aucun toast d'erreur.
+- **Note importante** : l'appel `useEffect` automatique au mount (lignes 89-93) gère **correctement** le 403 via fallback vers `GET /api/synchro/statut` — donc pas de problème pour la consultation passive. Le bug ne concerne que l'action manuelle.
+- **Identifié pendant** : chantier 2.1 (RBAC backend), commit `<main.py sha>`.
+- **Amélioration suggérée** : masquer le bouton si `current_user.role` n'est pas dans `('ADMIN', 'GESTIONNAIRE')`, ou afficher un `toast.error('Réservé aux administrateurs et gestionnaires')` dans le catch.
+- **Chantier proposé** : à intégrer au futur `feat/frontend-rbac-granular`.
+- **Priorité** : faible (cosmétique, fonctionnellement bloqué par backend = pas de risque, juste UX dégradée).

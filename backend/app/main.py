@@ -2,7 +2,7 @@
 Module Gestion des Contrats — Backend FastAPI
 Point d'entrée principal
 """
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -10,6 +10,7 @@ from datetime import datetime
 from app.api import clients, produits, contrats, facturation, indices, documents, auth, parametres, utilisateurs, audit, commandes, chorus, formateurs, prestations, dashboard
 from app.core.config import settings
 from app.core.database import engine, Base, SessionLocal
+from app.core.security import require_authenticated, require_role
 from app.services.karlia_service import karlia
 from app.models.models import ClientCache, ArticleCache, Parametre
 
@@ -173,7 +174,9 @@ def health():
     return {"status": "ok", "version": "1.0.0"}
 
 @app.get("/api/synchro/statut")
-async def statut_synchro():
+async def statut_synchro(
+    current_user = Depends(require_authenticated),
+):
     db = SessionLocal()
     try:
         p1 = db.query(Parametre).filter(Parametre.cle == "derniere_synchro").first()
@@ -186,7 +189,9 @@ async def statut_synchro():
         db.close()
 
 @app.post("/api/synchro/lancer")
-async def lancer_synchro():
+async def lancer_synchro(
+    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE")),
+):
     await synchro_karlia()
     db = SessionLocal()
     try:
