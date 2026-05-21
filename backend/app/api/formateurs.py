@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel, EmailStr
 
 from app.core.database import get_db
+from app.core.security import require_authenticated, require_role
 from app.models.models import Formateur, Commande, Prestation
 
 router = APIRouter(tags=["formateurs"])
@@ -53,7 +54,8 @@ class FormateurListResponse(BaseModel):
 @router.get("", response_model=FormateurListResponse)
 async def list_formateurs(
     actif_only: bool = True,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user = Depends(require_authenticated),
 ):
     """Liste tous les formateurs."""
     query = db.query(Formateur)
@@ -87,7 +89,8 @@ async def list_formateurs(
 @router.post("", response_model=FormateurResponse)
 async def create_formateur(
     data: FormateurCreate,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user = Depends(require_role("ADMIN")),
 ):
     """Crée un nouveau formateur."""
     existing = db.query(Formateur).filter(Formateur.email == data.email).first()
@@ -123,7 +126,8 @@ async def create_formateur(
 @router.get("/{formateur_id}", response_model=FormateurResponse)
 async def get_formateur(
     formateur_id: int,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user = Depends(require_authenticated),
 ):
     """Récupère un formateur par son ID."""
     formateur = db.query(Formateur).filter(Formateur.id == formateur_id).first()
@@ -154,7 +158,8 @@ async def get_formateur(
 async def update_formateur(
     formateur_id: int,
     data: FormateurUpdate,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user = Depends(require_role("ADMIN")),
 ):
     """Met à jour un formateur."""
     formateur = db.query(Formateur).filter(Formateur.id == formateur_id).first()
@@ -209,7 +214,8 @@ async def update_formateur(
 @router.delete("/{formateur_id}")
 async def delete_formateur(
     formateur_id: int,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user = Depends(require_role("ADMIN")),
 ):
     """Désactive un formateur (soft delete)."""
     formateur = db.query(Formateur).filter(Formateur.id == formateur_id).first()
