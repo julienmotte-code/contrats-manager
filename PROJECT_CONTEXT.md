@@ -34,7 +34,7 @@
 - Familles de contrats : COSOLUCE, CANTINE, DIGITECH, MAINTENANCE, ASSISTANCE_TEL, KIWI_BACKUP
 - Révision annuelle : Syntec Août, Syntec Octobre, Manuelle, Prix fixe
 - Plan de facturation prévisionnel avec calcul prorata première année
-- Émission factures dans Karlia (statut Brouillon via id_status:1, validation manuelle dans Karlia)
+- Émission factures dans Karlia (statut Brouillon via id_status:0, validation manuelle dans Karlia)
 - Gestion indices Syntec (Août/Octobre) par année
 - Page facturation : sélection multi-contrats, contrôle indices, blocage années futures
 
@@ -51,7 +51,7 @@ Tables principales :
 ## API Karlia
 - URL : https://karlia.fr/app/api/v2
 - Auth : Bearer token (stocké en base table parametres, clé "karlia_api_key")
-- Factures : POST /documents avec id_type:4, id_status:1 (Brouillon), products_list avec id_product obligatoire
+- Factures : POST /documents avec id_type:4, id_status:0 (Brouillon), products_list avec id_product obligatoire
 - DNS Docker configuré : /etc/docker/daemon.json → 8.8.8.8
 
 ## Commandes utiles
