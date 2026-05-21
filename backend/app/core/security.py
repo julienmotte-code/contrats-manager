@@ -61,3 +61,56 @@ def require_role(*roles: str):
         return current_user
 
     return _check
+
+
+def check_prestation_ownership(prestation, current_user: Utilisateur) -> None:
+    """Vérifie qu'un utilisateur a le droit d'agir sur une prestation.
+
+    ADMIN et GESTIONNAIRE : accès total.
+    TECHNICIEN et FORMATEUR : ownership obligatoire — la prestation doit lui être
+    assignée via `formateur_id` ou `agenda_formateur_id`.
+
+    Lève HTTPException 403 si non autorisé.
+    """
+    if current_user.role in ("ADMIN", "GESTIONNAIRE"):
+        return
+
+    if not current_user.formateur_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Aucun formateur_id associé à votre compte",
+        )
+
+    owns = (
+        prestation.formateur_id == current_user.formateur_id
+        or prestation.agenda_formateur_id == current_user.formateur_id
+    )
+    if not owns:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Cette prestation ne vous est pas attribuée",
+        )
+
+
+def filter_prestations_for_user(query, current_user: Utilisateur):
+    """Applique le filtre métier de visibilité des prestations selon le rôle.
+
+    ADMIN et GESTIONNAIRE : query inchangée (visibilité totale).
+    TECHNICIEN et FORMATEUR : filtre sur `formateur_id` ou `agenda_formateur_id`.
+    TECHNICIEN/FORMATEUR sans `formateur_id` : query vide.
+    """
+    from sqlalchemy import or_
+    from app.models.models import Prestation
+
+    if current_user.role in ("ADMIN", "GESTIONNAIRE"):
+        return query
+
+    if not current_user.formateur_id:
+        return query.filter(False)
+
+    return query.filter(
+        or_(
+            Prestation.formateur_id == current_user.formateur_id,
+            Prestation.agenda_formateur_id == current_user.formateur_id,
+        )
+    )

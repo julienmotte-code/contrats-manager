@@ -8,7 +8,13 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel
 
 from app.core.database import get_db
-from app.models.models import Prestation, Commande, CommandeLigne, Formateur
+from app.core.security import (
+    require_authenticated,
+    require_role,
+    check_prestation_ownership,
+    filter_prestations_for_user,
+)
+from app.models.models import Prestation, Commande, CommandeLigne, Formateur, Utilisateur
 
 router = APIRouter(tags=["prestations"])
 
@@ -110,18 +116,20 @@ async def list_prestations(
     formateur_id: Optional[int] = None,
     commande_id: Optional[int] = None,
     statut: Optional[str] = None,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: Utilisateur = Depends(require_authenticated),
 ):
     """Liste les prestations avec filtres optionnels."""
     query = db.query(Prestation)
-    
+    query = filter_prestations_for_user(query, current_user)
+
     if formateur_id:
         query = query.filter(Prestation.formateur_id == formateur_id)
     if commande_id:
         query = query.filter(Prestation.commande_id == commande_id)
     if statut:
         query = query.filter(Prestation.statut == statut)
-    
+
     prestations = query.order_by(Prestation.date_planifiee.asc().nullsfirst(), Prestation.id).all()
     
     result = [_prestation_to_response(p, db) for p in prestations]
@@ -143,9 +151,16 @@ async def list_prestations(
 async def list_prestations_formateur(
     formateur_id: int,
     statut: Optional[str] = None,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: Utilisateur = Depends(require_authenticated),
 ):
     """Liste les prestations d'un formateur."""
+    if current_user.role in ("FORMATEUR", "TECHNICIEN"):
+        if not current_user.formateur_id:
+            raise HTTPException(status_code=403, detail="Aucun formateur_id associé à votre compte")
+        if current_user.formateur_id != formateur_id:
+            raise HTTPException(status_code=403, detail="Accès non autorisé aux prestations d'un autre formateur")
+
     formateur = db.query(Formateur).filter(Formateur.id == formateur_id).first()
     if not formateur:
         raise HTTPException(status_code=404, detail="Formateur non trouvé")
@@ -175,7 +190,8 @@ async def list_prestations_formateur(
 @router.post("", response_model=PrestationResponse)
 async def create_prestation(
     data: PrestationCreate,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE")),
 ):
     """Crée une nouvelle prestation."""
     commande = db.query(Commande).filter(Commande.id == data.commande_id).first()
@@ -204,7 +220,8 @@ async def create_prestation(
 async def create_prestations_from_commande(
     commande_id: int,
     formateur_id: Optional[int] = None,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE")),
 ):
     """Crée automatiquement les prestations depuis les lignes de commande."""
     commande = db.query(Commande).filter(Commande.id == commande_id).first()
@@ -249,13 +266,16 @@ async def create_prestations_from_commande(
 @router.get("/{prestation_id}", response_model=PrestationResponse)
 async def get_prestation(
     prestation_id: int,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: Utilisateur = Depends(require_authenticated),
 ):
     """Récupère une prestation par son ID."""
     prestation = db.query(Prestation).filter(Prestation.id == prestation_id).first()
     if not prestation:
         raise HTTPException(status_code=404, detail="Prestation non trouvée")
-    
+
+    check_prestation_ownership(prestation, current_user)
+
     return _prestation_to_response(prestation, db)
 
 
@@ -263,7 +283,8 @@ async def get_prestation(
 async def update_prestation(
     prestation_id: int,
     data: PrestationUpdate,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE")),
 ):
     """Met à jour une prestation."""
     prestation = db.query(Prestation).filter(Prestation.id == prestation_id).first()
@@ -284,13 +305,16 @@ async def update_prestation(
 async def planifier_prestation(
     prestation_id: int,
     data: PrestationPlanifier,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: Utilisateur = Depends(require_authenticated),
 ):
     """Planifie une prestation (définit la date)."""
     prestation = db.query(Prestation).filter(Prestation.id == prestation_id).first()
     if not prestation:
         raise HTTPException(status_code=404, detail="Prestation non trouvée")
-    
+
+    check_prestation_ownership(prestation, current_user)
+
     prestation.date_planifiee = data.date_planifiee
     prestation.heure_debut = data.heure_debut
     prestation.heure_fin = data.heure_fin
@@ -315,13 +339,16 @@ async def planifier_prestation(
 @router.post("/{prestation_id}/realiser", response_model=PrestationResponse)
 async def realiser_prestation(
     prestation_id: int,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: Utilisateur = Depends(require_authenticated),
 ):
     """Marque une prestation comme réalisée."""
     prestation = db.query(Prestation).filter(Prestation.id == prestation_id).first()
     if not prestation:
         raise HTTPException(status_code=404, detail="Prestation non trouvée")
-    
+
+    check_prestation_ownership(prestation, current_user)
+
     prestation.statut = 'realisee'
     prestation.updated_at = datetime.utcnow()
     db.commit()
@@ -340,7 +367,8 @@ async def realiser_prestation(
 @router.delete("/{prestation_id}")
 async def delete_prestation(
     prestation_id: int,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE")),
 ):
     """Supprime une prestation."""
     prestation = db.query(Prestation).filter(Prestation.id == prestation_id).first()
@@ -357,7 +385,8 @@ async def delete_prestation(
 async def reattribuer_prestations_commande(
     commande_id: int,
     formateur_id: int,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE")),
 ):
     """Réattribue toutes les prestations d'une commande à un autre formateur."""
     commande = db.query(Commande).filter(Commande.id == commande_id).first()
