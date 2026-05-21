@@ -423,6 +423,7 @@ class TransmissionChorus(Base):
     # Métadonnées
     transmis_par      = Column(String(100))
     transmis_at       = Column(DateTime(timezone=True), server_default=func.now())
+    is_test           = Column(Boolean, default=False)  # marqueur transmission de test vs réelle — cf. AUDIT_REFONTE.md § 2.19 #8
 
     # Relation
     facture           = relationship("FactureKarlia", back_populates="transmissions")
