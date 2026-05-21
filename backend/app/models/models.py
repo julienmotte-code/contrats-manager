@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime, date
 from sqlalchemy import (
     Column, String, Integer, Numeric, Boolean, Date, DateTime, Time,
-    Text, ForeignKey, CheckConstraint, UniqueConstraint, JSON
+    Text, LargeBinary, ForeignKey, CheckConstraint, UniqueConstraint, JSON
 )
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship
@@ -308,7 +308,7 @@ class Commande(Base):
     intervenant_nom     = Column(String(255))
     notes_planification = Column(Text)
     contrat_id          = Column(UUID(as_uuid=True), ForeignKey("contrats.id", ondelete="SET NULL"))
-    pdf_devis           = Column(Text)  # Base64 encoded
+    pdf_devis           = Column(LargeBinary)  # bytea en DB ; colonne actuellement non utilisée (cf. commit f71d223, AUDIT_REFONTE.md § 2.19 #4)
     pdf_devis_nom       = Column(String(255))
     pdf_url             = Column(Text)
     created_at          = Column(DateTime(timezone=True), server_default=func.now())
