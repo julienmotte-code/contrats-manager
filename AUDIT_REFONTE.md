@@ -852,3 +852,335 @@ Source : `models.py:415-440` / DB live : **12 colonnes** (models : 11) / 4 ligne
 > **Risque opérationnel** : la combinaison `documents_generes` sans CASCADE + `utilisateurs.formateur_id` sans CASCADE = blocages potentiels lors de cleanups manuels.
 
 ---
+
+## 3. API Backend (FastAPI)
+
+### 3.1 Vue d'ensemble — montage des routers
+
+`backend/app/main.py:33-46` monte **15 routers** sous le préfixe `/api/*` :
+
+| Router | Préfixe | Fichier | Lignes | Endpoints |
+|---|---|---|---|---|
+| auth | `/api/auth` | `auth.py` | 70 | 2 |
+| clients | `/api/clients` | `clients.py` | 452 | 7 |
+| produits | `/api/produits` | `produits.py` | 75 | 2 |
+| contrats | `/api/contrats` | `contrats.py` | 644 | 10 |
+| facturation | `/api/facturation` | `facturation.py` | 253 | 4 |
+| indices | `/api/indices` | `indices.py` | 154 | 7 |
+| utilisateurs | `/api/utilisateurs` | `utilisateurs.py` | 166 | 5 |
+| documents | `/api/documents` | `documents.py` | 121 | 7 |
+| parametres | `/api/parametres` | `parametres.py` | 162 | 6 |
+| audit | `/api/audit` | `audit.py` | 84 | 3 |
+| commandes | `/api/commandes` | `commandes.py` | 462 | 14 |
+| formateurs | `/api/formateurs` | `formateurs.py` | 223 | 5 |
+| prestations | `/api/prestations` | `prestations.py` | 385 | 10 |
+| chorus | `/api/chorus` (préfixé en interne) | `chorus.py` | 544 | 8 |
+| dashboard | `/api/dashboard` | `dashboard.py` | 142 | 1 |
+| **(racine main.py)** | `/api/*` | `main.py` | — | 3 (`/health`, `/synchro/statut`, `/synchro/lancer`) |
+
+**Total : 3937 lignes de routers, ~94 endpoints HTTP.**
+
+> **Particularité Chorus** : `chorus.py:22` déclare `router = APIRouter(prefix="/chorus")` **et** `main.py:46` monte `chorus.router` avec `prefix="/api"`. Le résultat final est `/api/chorus/...`. Tous les autres routers exposent leur préfixe via le `include_router(prefix="/api/<nom>")` sans doublon. C'est une incohérence stylistique mineure.
+
+### 3.2 Authentification, JWT et gestion des droits
+
+#### Endpoints
+
+| Méthode | Path | Rôle requis | Description |
+|---|---|---|---|
+| POST | `/api/auth/login` | public | login + password → JWT |
+| GET | `/api/auth/me` | tout connecté | infos de l'utilisateur connecté |
+| GET | `/api/utilisateurs/droits` | tout connecté | rôle + tableau de droits + formateur_id |
+| GET | `/api/utilisateurs` | ADMIN | liste des comptes (avec nom_formateur résolu) |
+| POST | `/api/utilisateurs` | ADMIN | crée un utilisateur (login/email/password/role) |
+| PUT | `/api/utilisateurs/{id}` | ADMIN | modifie un utilisateur (interdit de se rétrograder soi-même) |
+| DELETE | `/api/utilisateurs/{id}` | ADMIN | supprime un utilisateur (interdit de se supprimer soi-même) |
+
+#### Mécanique
+
+- **Hash mots de passe** : `bcrypt.checkpw()` côté login, `bcrypt.gensalt()` côté création (`auth.py:20`, `utilisateurs.py:12`).
+- **JWT** : `python-jose`, algo HS256, signé avec `SECRET_KEY` du `.env` (`auth.py:24-26`).
+- **Durée du token** : **24h codées en dur** dans `creer_token` (`auth.py:24`) ; le `Settings.ACCESS_TOKEN_EXPIRE_MINUTES=480` (8h) **n'est pas utilisé**. C'est une incohérence à corriger.
+- **Payload JWT** : `{sub: login, role, id, formateur_id, exp}`.
+- **Dépendance d'auth** : `get_current_user()` décode le token, recharge l'utilisateur en DB, vérifie `actif=True`. Réutilisée par tous les routers via `Depends(get_current_user)`.
+
+#### Tableau des droits — `utilisateurs.py:17-22`
+
+| Droit | ADMIN | GESTIONNAIRE | FORMATEUR | TECHNICIEN |
+|---|---|---|---|---|
+| contrats_ecriture | ✓ | ✓ | ✗ | ✗ |
+| contrats_lecture | ✓ | ✓ | ✗ | ✓ |
+| facturation | ✓ | ✓ | ✗ | ✗ |
+| indices | ✓ | ✓ | ✗ | ✗ |
+| commandes | ✓ | ✓ | ✗ | ✗ |
+| parametres | ✓ | ✗ | ✗ | ✗ |
+| utilisateurs | ✓ | ✗ | ✗ | ✗ |
+| formateurs | ✓ | ✓ | ✗ | ✗ |
+| toutes_prestations | ✓ | ✓ | ✗ | ✗ |
+
+> **Observations sur les droits** :
+> 1. Les droits sont **purement applicatifs** côté frontend (cf. § 5.3). Le backend ne vérifie systématiquement que `require_admin` pour les écritures sensibles (utilisateurs, paramètres). Beaucoup d'endpoints **n'ont aucune vérification de rôle**, par exemple `/api/contrats POST` ou `/api/facturation/lancer`.
+> 2. Le rôle `FORMATEUR` n'a aucun droit listé → c'est volontaire (il accède uniquement à ses prestations via filtrage frontend), mais aucun garde-fou backend ne l'empêche d'appeler les endpoints sensibles s'il connaît leurs URLs.
+> 3. Le rôle `TECHNICIEN` a `contrats_lecture` mais pas `contrats_ecriture` — pourtant l'endpoint `PUT /api/contrats/{id}` ne contrôle pas le rôle.
+
+### 3.3 Contrats — `api/contrats.py`
+
+| Méthode | Path | Rôle requis | Description |
+|---|---|---|---|
+| GET | `/api/contrats` | aucun | liste paginée, filtres `statut`, `recherche`, `annee`, `familles`, `limit`/`offset` |
+| GET | `/api/contrats/renouvellements` | aucun | contrats à renouveler dans un mois donné (filtre famille) |
+| POST | `/api/contrats` | aucun | crée un contrat en `BROUILLON` + calcule prorata + génère plan de facturation |
+| GET | `/api/contrats/{id}` | aucun | détail complet (articles + plan) |
+| PUT | `/api/contrats/{id}` | aucun | modifie un contrat uniquement si `BROUILLON` ; remplace les articles, regénère le plan |
+| POST | `/api/contrats/{id}/valider` | aucun | passe `BROUILLON → EN_COURS` après contrôles (articles, prorata validé) |
+| DELETE | `/api/contrats/{id}` | aucun | supprime uniquement un `BROUILLON` |
+| POST | `/api/contrats/{id}/terminer` | aucun | passe en `TERMINE` (motif facultatif) |
+| POST | `/api/contrats/{id}/renouveler` | aucun | 3 modes : `SPONTANE` (prolonge 1 an + ajoute ligne plan), `NOUVEAU_CONTRAT` (archive + crée + copie articles + fusionne avenants), `FIN` |
+| POST | `/api/contrats/renouveler-lot` | aucun | renouvellement en lot, modes `SPONTANE` ou `FIN` uniquement |
+
+#### Effets de bord critiques
+
+| Endpoint | Tables impactées | Commits DB | Appels externes |
+|---|---|---|---|
+| `POST /api/contrats` | `contrats`, `contrat_articles` (N), `plan_facturation` (N) | 1 commit final | aucun |
+| `PUT /api/contrats/{id}` | `contrats`, `contrat_articles` (DELETE + N INSERT), `plan_facturation` (DELETE + N INSERT) | 1 commit final | aucun |
+| `POST /api/contrats/{id}/renouveler` (NOUVEAU_CONTRAT) | crée 1 contrat + N articles + N plan ; archive l'ancien et **tous ses avenants** | 1 commit final | aucun |
+| `POST /api/contrats/renouveler-lot` | itère et commit pour **chaque** contrat | 1 commit par contrat → **pas de transaction globale** | aucun |
+
+> **Anti-pattern à noter** : `renouveler-lot` (`contrats.py:600-637`) fait un `db.commit()` par contrat. Si un contrat du lot échoue, ceux déjà traités sont déjà engagés en DB → impossible de retomber dans un état initial. La gestion d'erreur fait `db.rollback()` mais c'est tardif.
+
+### 3.4 Commandes — `api/commandes.py`
+
+| Méthode | Path | Description |
+|---|---|---|
+| POST | `/api/commandes/sync` | sync devis acceptés Karlia (delta ou full) |
+| GET | `/api/commandes/stats` | compteurs (nouvelles, à_planifier, planifiées, contrats_à_créer, total) |
+| GET | `/api/commandes/nouvelles` | liste statut `nouvelle` paginée |
+| GET | `/api/commandes/a-planifier` | liste statut `a_planifier` paginée |
+| GET | `/api/commandes/planifiees` | liste statut `planifiee` paginée |
+| GET | `/api/commandes/terminees` | liste statut `deployee` paginée (note : alias backend → "terminées" front) |
+| GET | `/api/commandes/contrats-a-creer` | nécessite_contrat=true et contrat_id=null |
+| GET | `/api/commandes/{id}` | détail + lignes + formateur + comptes prestations |
+| POST | `/api/commandes/{id}/valider` | `nouvelle → a_planifier` (si `type_traitement='a_planifier'`) **ou** `nouvelle → deployee` (si `'sans_planification'`) |
+| POST | `/api/commandes/{id}/planifier` | `a_planifier → planifiee` + date/intervenant/notes |
+| POST | `/api/commandes/{id}/terminer` | `* → terminee` (note : statut `terminee` jamais en DB actuellement) |
+| POST | `/api/commandes/{id}/lier-contrat/{contrat_id}` | renseigne `commandes.contrat_id` |
+| GET | `/api/commandes/{id}/pdf` | redirige vers `pdf_url` Karlia |
+| POST | `/api/commandes/{id}/facturer` | crée une facture Karlia à partir des lignes de la commande |
+
+#### Effets de bord et état
+
+- Statuts utilisés en code : `nouvelle`, `a_planifier`, `planifiee`, `deployee`, `terminee`, `facturee`. **Pas de contrainte CHECK** côté DB (cf. § 2.13).
+- **Incohérence terminologique** : `/terminees` retourne le statut **`deployee`** (code `commandes.py:267`), pas `terminee`. Le frontend appelle `/terminees` ce qui charge en réalité les commandes `deployee`. Le statut `terminee` est isolé (jamais affiché en liste).
+- `POST /api/commandes/{id}/facturer` appelle directement `karlia.creer_facture()` et stocke `facture_karlia_id` / `facture_karlia_ref` sur la commande. Le statut Karlia créé est **`Brouillon` (id_status=1)** depuis le fix `34b2991` (puis `id_status=0` sur la branche non-mergée `fix/karlia-facture-brouillon-v2`, cf. § 9).
+
+### 3.5 Facturation (révision Syntec) — `api/facturation.py`
+
+| Méthode | Path | Rôle requis | Description |
+|---|---|---|---|
+| GET | `/api/facturation/apercu/{annee}` | aucun | liste les plans `PLANIFIEE`/`CALCULEE` de l'année + indice OK + facturable (booléen "année future") |
+| POST | `/api/facturation/calculer` | tout connecté | calcule les montants révisés Syntec (avec garde `valider_pre_calcul`) ; supporte montants manuels pour `DIGITECH` |
+| POST | `/api/facturation/lancer` | tout connecté | **émet réellement les factures Karlia** ; supporte révision proportionnelle par article ; ajustement d'arrondi sur la dernière ligne |
+| GET | `/api/facturation/lot/{lot_id}` | aucun | endpoint stub — retourne toujours `{statut: "TERMINE"}` |
+
+#### Effets de bord — `POST /api/facturation/lancer`
+
+```
+1. lit chaque plan PLANIFIEE/CALCULEE filtré par plan_ids[]
+2. récupère les articles du contrat (rang ASC)
+3. construit N lignes, applique taux_revision sur unit_price
+4. ajustement d'arrondi sur la dernière ligne (cumul == montant_ht_decimal)
+5. appelle karlia.traitement_lot_factures(factures_a_emettre)  ← APPEL EXTERNE
+6. pour chaque résultat Karlia :
+   - succès → plan.statut = "EMISE", maj facture_karlia_id, montant_annuel_precedent
+   - échec → plan.statut = "ERREUR", erreur_message
+7. lance validation post-émission (valider_post_emission) avec log si ERREUR
+8. commit après chaque plan
+```
+
+> **Garde-fous métier** : `valider_pre_calcul` bloque le calcul si l'indice n'est pas disponible ou si le contrat est en erreur. `valider_post_emission` ne bloque pas mais log les incohérences (montant Karlia ≠ montant attendu).
+
+> **Anti-pattern** : `lot_id` est un UUID généré localement, **jamais persisté** (la table `lots_facturation` reste vide). Le GET `/lot/{lot_id}` retourne un statut fictif. Le mécanisme de "lot" est incomplet.
+
+### 3.6 Chorus Pro — `api/chorus.py`
+
+| Méthode | Path | Rôle requis | Description |
+|---|---|---|---|
+| GET | `/api/chorus/test-connexion` | tout connecté | OAuth2 PISTE → ping company info |
+| POST | `/api/chorus/synchro-factures` | tout connecté | importe les factures Karlia (type=4, status=2) dans `factures_karlia` |
+| GET | `/api/chorus/factures` | tout connecté | liste paginée (filtres statut, recherche) |
+| GET | `/api/chorus/factures/{id}` | tout connecté | détail facture |
+| PUT | `/api/chorus/factures/{id}/siret` | tout connecté | met à jour le SIRET destinataire (override avant transmission) |
+| POST | `/api/chorus/transmettre` | tout connecté | transmet 1-N factures vers Chorus Pro via PISTE |
+| GET | `/api/chorus/factures/{id}/transmissions` | tout connecté | historique des tentatives |
+| POST | `/api/chorus/rechercher-structure` | tout connecté | recherche destinataire par SIRET dans Chorus Pro |
+| GET | `/api/chorus/statistiques` | tout connecté | comptage par statut + montant total |
+
+#### Effets de bord — `POST /api/chorus/transmettre`
+
+```
+1. instancie ChorusProService avec params DB (chorus_*)
+2. pour chaque facture_id :
+   - vérifie pas déjà transmise
+   - vérifie SIRET destinataire renseigné
+   - crée TransmissionChorus(statut=EN_COURS)
+   - bascule FactureKarlia.statut_chorus = EN_COURS
+   - commit
+   - appel service.soumettre_facture(...)  ← APPEL EXTERNE PISTE
+   - mise à jour transmission + facture selon succès/échec
+3. commit par facture (pas de transaction globale)
+```
+
+> **Mémoire utilisateur** : ce flux est **bloqué en production** par un 403 PISTE non résolu ([[chorus_pro_blocage]]). Une seule facture a transmis avec succès (cf. § 2.17).
+
+### 3.7 Paramètres — `api/parametres.py`
+
+| Méthode | Path | Rôle requis | Description |
+|---|---|---|---|
+| GET | `/api/parametres/` | tout connecté | liste tous les paramètres + masque `karlia_api_key` (8 premiers chars + `...`) |
+| PUT | `/api/parametres/karlia-api-key` | ADMIN | met à jour la clé API et l'instance `karlia` en mémoire |
+| POST | `/api/parametres/tester-connexion` | tout connecté | teste la clé Karlia courante (`karlia.tester_connexion()`) |
+| POST | `/api/parametres/vider-cache` | ADMIN | supprime `clients_cache` + `articles_cache` + reset stats synchro |
+| GET | `/api/parametres/chorus` | tout connecté | renvoie les 8 paramètres Chorus, **masque** `chorus_client_secret` et `chorus_tech_password` (`••••••••`) |
+| PUT | `/api/parametres/chorus` | ADMIN | met à jour les paramètres Chorus (ignore les valeurs `••••••••`) |
+
+> **Sécurité — masquage** : le masquage est appliqué à la lecture mais le `valeur` brut reste accessible par n'importe quel utilisateur connecté via `GET /api/parametres/` pour les paramètres NON masqués (par exemple `chorus_client_id`). Le pattern n'est pas robuste : tout secret futur devra être explicitement ajouté à la liste de masquage.
+
+### 3.8 Clients — `api/clients.py`
+
+| Méthode | Path | Description |
+|---|---|---|
+| GET | `/api/clients` | liste cache local (défaut) ou Karlia direct via `source=karlia` |
+| GET | `/api/clients/search` | recherche multi-termes dans cache (nom, numéro, ville, SIRET, email) |
+| GET | `/api/clients/numero-suivant` | interroge Karlia pour prochain numéro client incrémental |
+| POST | `/api/clients` | crée client dans Karlia + cache + tâche de fond `_creer_contact_karlia` |
+| GET | `/api/clients/{karlia_id}/fiche` | détail enrichi : contrats actifs, terminés, factures |
+| GET | `/api/clients/{karlia_id}` | détail cache local, fallback Karlia si absent |
+| POST | `/api/clients/synchro` | resync complet cache depuis Karlia (boucle paginée) |
+
+> **Effet de bord** : `POST /api/clients` lance une `BackgroundTask` qui rappelle l'API Karlia avec une `httpx.AsyncClient()` créée à la volée, **utilisant `settings.KARLIA_API_KEY` du `.env`** (et non la clé courante de l'instance `karlia` global). Si la clé a été modifiée via `PUT /api/parametres/karlia-api-key`, la tâche de fond utilisera quand même la clé du `.env`. C'est une incohérence (cf. § 7.1).
+
+### 3.9 Produits / Articles — `api/produits.py`
+
+| Méthode | Path | Description |
+|---|---|---|
+| GET | `/api/produits` | liste cache local (filtre actif=true) ou direct Karlia (`source=karlia`) |
+| POST | `/api/produits/synchro` | resync complet articles depuis Karlia (jusqu'à 500) |
+
+### 3.10 Indices Syntec — `api/indices.py`
+
+| Méthode | Path | Rôle requis | Description |
+|---|---|---|---|
+| GET | `/api/indices/familles` | aucun | renvoie le mapping `FAMILLES_CONTRAT` (cf. revision_service) |
+| GET | `/api/indices` | aucun | liste indices (filtre mois, année), ordre annee DESC |
+| GET | `/api/indices/courant` | aucun | dernier indice AOUT |
+| POST | `/api/indices` | tout connecté | crée un indice (vérif doublon mois+année) |
+| PUT | `/api/indices/{id}` | tout connecté | modifie valeur/commentaire |
+| DELETE | `/api/indices/{id}` | tout connecté | supprime un indice |
+| GET | `/api/indices/verifier/{famille}/{annee}` | aucun | vérifie disponibilité indices pour calcul (`verifier_indices_disponibles`) |
+
+### 3.11 Documents — `api/documents.py`
+
+| Méthode | Path | Rôle requis | Description |
+|---|---|---|---|
+| GET | `/api/documents/contrat/{id}` | tout connecté | liste les documents d'un contrat |
+| POST | `/api/documents/generer/{id}` | tout connecté | génère le `.docx` via `python-docx` (template de la famille du contrat) |
+| GET | `/api/documents/telecharger/{doc_id}` | tout connecté | renvoie le `.docx` en `FileResponse` |
+| GET | `/api/documents/modeles` | tout connecté | liste les modèles disponibles |
+| POST | `/api/documents/modeles/upload` | ADMIN | upload `.docx` + désactive les modèles précédents du même type |
+| PATCH | `/api/documents/modeles/{id}/activer` | ADMIN | bascule l'actif sur ce modèle (un seul actif par type) |
+| DELETE | `/api/documents/modeles/{id}` | ADMIN | supprime fichier disque + ligne DB |
+
+> **Effet de bord** : `POST /api/documents/modeles/upload` désactive **tous** les modèles du même `type_document` avant l'insertion. Les fichiers physiques précédents ne sont **pas supprimés** du disque — `storage/modeles/` peut accumuler des versions obsolètes.
+
+### 3.12 Audit (cohérence métier) — `api/audit.py`
+
+| Méthode | Path | Rôle requis | Description |
+|---|---|---|---|
+| GET | `/api/audit/contrat/{id}` | tout connecté | rapport `valider_contrat` (alertes ERREUR/WARNING/INFO) |
+| GET | `/api/audit/facturation/{annee}` | tout connecté | rapport global année (filtre famille) |
+| GET | `/api/audit/global` | tout connecté | audit complet des contrats EN_COURS, tri par sévérité |
+
+> **Note** : cet endpoint produit le rapport métier visible dans la page Audit (frontend) ; il n'a pas d'effet de bord.
+
+### 3.13 Dashboard — `api/dashboard.py` (nouveauté)
+
+Un seul endpoint, ajouté au commit `2174640` (tag `v2.4.2`) :
+
+```
+GET /api/dashboard/stats
+→ {
+    total_contrats: int,                          # contrats EN_COURS
+    ca_annuel_ht: float,                          # somme montant_annuel_ht
+    a_renouveler_ce_mois: int,                    # date_fin dans le mois courant
+    contrats_par_famille: [{code, label, total, montant_annuel_ht}],
+    commandes_par_statut: {total, nouvelles, a_planifier, planifiees, facturees}
+  }
+```
+
+> **Avant** : le dashboard appelait **plusieurs endpoints** (`/api/contrats?statut=EN_COURS`, `/api/contrats/renouvellements`, `/api/commandes/stats`) côté frontend. La refonte du commit `2174640` les a unifiés en un seul aller-retour serveur. Le mapping `FAMILLE_LABELS` est **codé en dur** dans `dashboard.py:19-28` — ces libellés devraient venir d'une table ou d'un fichier de config.
+
+### 3.14 Formateurs — `api/formateurs.py`
+
+| Méthode | Path | Description |
+|---|---|---|
+| GET | `/api/formateurs?actif_only=true` | liste avec compteurs (nb_commandes, nb_prestations_a_planifier) |
+| POST | `/api/formateurs` | crée un formateur (email unique) |
+| GET | `/api/formateurs/{id}` | détail |
+| PUT | `/api/formateurs/{id}` | modifie (tout sauf id) |
+| DELETE | `/api/formateurs/{id}` | supprime (cf. § 2.21 sur les FK bloquantes) |
+
+> **Pas de garde-fou rôle** sur ces endpoints — n'importe quel utilisateur connecté peut créer/modifier/supprimer un formateur.
+
+### 3.15 Prestations — `api/prestations.py`
+
+| Méthode | Path | Description |
+|---|---|---|
+| GET | `/api/prestations` | liste avec filtres formateur_id, commande_id, statut |
+| GET | `/api/prestations/formateur/{id}` | prestations d'un formateur (utilisée par les vues "Mes prestations") |
+| POST | `/api/prestations` | crée une prestation (commande_id obligatoire) |
+| POST | `/api/prestations/from-commande/{id}` | **crée automatiquement** N prestations depuis les lignes de la commande (1 par ligne) |
+| GET | `/api/prestations/{id}` | détail |
+| PUT | `/api/prestations/{id}` | modification |
+| POST | `/api/prestations/{id}/planifier` | passe `a_planifier → planifiee` + date/heures/lieu ; **effet de bord** : passe la commande à `planifiee` si toutes ses prestations le sont |
+| POST | `/api/prestations/{id}/realiser` | passe `planifiee → realisee` ; **effet de bord** : passe la commande à `deployee` si toutes ses prestations sont `realisee` |
+| DELETE | `/api/prestations/{id}` | supprime |
+| POST | `/api/prestations/reattribuer-commande/{commande_id}?formateur_id=X` | réattribue toutes les prestations d'une commande à un autre formateur (+ met à jour `commandes.formateur_id`) |
+
+> **Cascade implicite — sensible** : `planifier_prestation` et `realiser_prestation` ont des effets de cascade sur le statut de la commande mère. Si une seule prestation est créée et planifiée, la commande bascule à `planifiee`. Cette mécanique est documentée nulle part hors du code.
+
+### 3.16 Routes globales — `main.py`
+
+| Méthode | Path | Description |
+|---|---|---|
+| GET | `/api/health` | `{status: "ok", version: "1.0.0"}` — endpoint de healthcheck |
+| GET | `/api/synchro/statut` | lit `derniere_synchro` + `synchro_stats` dans la table `parametres` |
+| POST | `/api/synchro/lancer` | déclenche `synchro_karlia()` à la demande |
+
+> **Note de versioning** : `version` du FastAPI est `"1.0.0"` (`main.py:18`) — **pas synchronisée** avec les tags git `v2.4.6`.
+
+### 3.17 Synthèse — effets de bord transverses
+
+| Endpoint | Tables impactées (E = écriture) | Appels externes | Garde-fou métier |
+|---|---|---|---|
+| `POST /api/contrats` | `contrats` (E), `contrat_articles` (E), `plan_facturation` (E) | — | unicité numéro_contrat, date_fin > date_debut |
+| `PUT /api/contrats/{id}` | idem + DELETE total des articles/plan | — | seul `BROUILLON` modifiable |
+| `POST /api/contrats/{id}/valider` | `contrats` (E `statut`) | — | articles existent, prorate_validated si annee1 |
+| `POST /api/contrats/{id}/renouveler NOUVEAU_CONTRAT` | crée nouveau contrat + articles + plan ; archive ancien + avenants | — | nouveau_numero obligatoire |
+| `POST /api/contrats/renouveler-lot` | itère + N commits | — | mode SPONTANE/FIN seulement |
+| `POST /api/commandes/sync` | `commandes` (E), `commande_lignes` (E) | **GET Karlia /documents**, **GET /devis_detail** | quota 80 req/min |
+| `POST /api/commandes/{id}/facturer` | `commandes` (E facture_karlia_id) | **POST Karlia /documents** | client_karlia_id requis, statut deployee requis |
+| `POST /api/facturation/calculer` | `plan_facturation` (E `montant_revise_ht`, `taux_revision`, `statut`) | — | indice disponible, montant_precedent connu |
+| `POST /api/facturation/lancer` | `plan_facturation` (E `statut`, `facture_karlia_*`) | **POST Karlia /documents** par contrat | annee ≤ annee_courante |
+| `POST /api/chorus/synchro-factures` | `factures_karlia` (E) | **GET Karlia /documents** filtré type=4 | — |
+| `POST /api/chorus/transmettre` | `transmissions_chorus` (E), `factures_karlia` (E `statut_chorus`) | **POST PISTE /factures** | SIRET destinataire requis |
+| `POST /api/parametres/karlia-api-key` | `parametres` (E) | — | ADMIN |
+| `POST /api/parametres/vider-cache` | `clients_cache` (DEL), `articles_cache` (DEL), `parametres` (DEL) | — | ADMIN |
+| `POST /api/documents/generer/{id}` | `documents_generes` (E), fichier disque `storage/documents_generes/` | — | client existe |
+| `POST /api/documents/modeles/upload` | `modeles_documents` (E), fichier disque `storage/modeles/` | — | ADMIN, `.docx` uniquement |
+| `POST /api/clients` | `clients_cache` (E), `parametres` lecture indirecte | **POST Karlia /customer-suppliers**, **POST Karlia /contacts** en background | — |
+| `POST /api/synchro/lancer` | `clients_cache` (E), `articles_cache` (E), `parametres` (E `derniere_synchro`) | **GET Karlia paginé (clients + produits)** | — |
+
+> **Observation transverse** : **aucun endpoint d'écriture n'utilise de transaction explicite**. Tous reposent sur les `db.commit()` finaux et la session par requête. En cas d'erreur en milieu d'opération multi-étapes (ex : création contrat avec 8 articles puis échec sur la 6e ligne), la session reste sale jusqu'à un `db.rollback()` qui n'est pas systématique. À durcir dans la refonte.
+
+---
