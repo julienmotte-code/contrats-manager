@@ -2568,3 +2568,437 @@ C'est la **double authentification** notée comme suspect dans anti-pattern phas
 **Impact résiduel** : la divergence type `models.py:Text` vs `DB:bytea` persiste (cf. divergence #4 phase 2).
 
 ---
+
+## 7. Intégrations externes
+
+> **Cette phase n'avait jamais été traitée dans l'audit v2.3.0**. Elle consolide toutes les intégrations externes du module avec un niveau de détail suffisant pour reconstruire chaque intégration en pré-refonte.
+
+### 7.1 Karlia CRM (api v2)
+
+#### 7.1.1 Identité de l'API
+
+- **Base URL** : `https://karlia.fr/app/api/v2` (codée en dur dans `settings.KARLIA_API_URL`)
+- **Version** : v2 (consommée par le module)
+- **Authentification** : Bearer token statique (clé API personnelle générée dans Karlia)
+- **Format** : JSON (`Content-Type: application/json`)
+- **Documentation** : non publique côté Karlia, validation par essai/erreur en pré-prod
+- **Quota** : **100 req/min** (signalé en code mais non documenté côté Karlia officiellement)
+
+#### 7.1.2 Mécanisme de chargement de la clé API
+
+La clé peut résider à **5 emplacements** différents :
+
+| Source | Lieu | Priorité | Type |
+|---|---|---|---|
+| Fichier `.env` | `KARLIA_API_KEY=…` | défaut au boot | clé "fallback" |
+| Pydantic Settings | `settings.KARLIA_API_KEY` (`config.py:13`) | défaut au boot | exposé à l'app |
+| Table `parametres` | `karlia_api_key` (taille 34 chars en prod) | **canonique** | clé "live" |
+| Instance globale | `karlia.api_key` (`karlia_service.py:34`) | mémoire | au boot puis surchargé par main.py |
+| Variable locale | `karlia_devis_service.api_key` (`karlia_devis_service.py:45`) | mémoire | lu **une fois au boot** |
+
+**Logique effective** :
+1. `KarliaService.__init__` lit `settings.KARLIA_API_KEY` (depuis `.env`).
+2. `main.py:155-164` au startup → relit depuis `parametres` et surcharge `karlia.api_key`.
+3. `PUT /api/parametres/karlia-api-key` met à jour la DB **et** réécrit `karlia.api_key` en mémoire.
+4. **MAIS** `KarliaDevisService.__init__` (`karlia_devis_service.py:43-45`) lit la DB une seule fois et **ne re-lit pas** lors d'une mise à jour live.
+5. `clients.py:438` (BackgroundTask création contact) lit `settings.KARLIA_API_KEY` directement → ne reflète pas la clé courante.
+
+**Conséquence** : une mise à jour de clé via `/api/parametres/karlia-api-key` :
+- ✓ instantanée pour les workflows passant par l'instance `karlia` (facturation, sync clients, etc.)
+- ✗ **pas prise en compte** par `karlia_devis_service` jusqu'à redémarrage du conteneur
+- ✗ **pas prise en compte** par la création de contact en background (clients.py)
+
+#### 7.1.3 Endpoints consommés
+
+Le module appelle **10 endpoints distincts** Karlia :
+
+| Endpoint | Méthode | Consommateur | Fréquence |
+|---|---|---|---|
+| `/company` | GET | `tester_connexion()` | manuelle |
+| `/customers` | GET | sync clients (boot + cron + manuel) | 1 fois / 100 clients |
+| `/customers/{id}` | GET | fallback détail, sync devis | rare |
+| `/customers` | POST | création client | rare |
+| `/products` | GET | sync articles + recherche live | sync ≈ 1×/jour |
+| `/products/{id}` | GET | déclaré, **non utilisé** | — |
+| `/products/{id}/sell-price` | GET | déclaré, **non utilisé** | — |
+| `/documents` | GET | sync factures (Chorus) + sync devis | manuel |
+| `/documents/{id}` | GET | détail devis dans sync | par devis |
+| `/documents` | POST | **émission facture** (Syntec + commande) | sur action utilisateur |
+| `/documents/templates` | GET | déclaré, **non utilisé** | — |
+| `/opportunities/{id}` | GET | check opportunity "Traité" | par devis avec opp |
+| `/opportunities/{id}/custom-fields/66505` | POST | marquage "Traité" | par nouveau devis |
+| `/contacts` | POST | création contact principal (background) | par création client |
+
+#### 7.1.4 Rate-limit et gestion des erreurs
+
+| Service | Stratégie 429 | Stratégie autres erreurs |
+|---|---|---|
+| `karlia_service` (générique) | aucun retry → `KarliaError(429, "Quota dépassé")` | `KarliaError(status, detail)` |
+| `karlia_service.traitement_lot_factures` | `delai_entre_requetes=0.8s` codé en dur (~75 req/min), pas de retry | `KarliaError` capturée, plan en `ERREUR` |
+| `karlia_devis_service` | `_get_with_retry` : 3 retries 5s/15s/30s sur 429 et erreurs réseau | log error + `return None` (non bloquant) |
+| `main.py::synchro_karlia` (sync clients/articles) | aucun retry, catch global `print("Erreur : …")` | journal stdout |
+
+**Garde-fous applicatifs** :
+- `settings.KARLIA_MAX_REQUESTS_PER_MINUTE = 80` (config.py:30) — **constante déclarée mais jamais utilisée** dans le code (probablement vestige).
+- `settings.KARLIA_SYNC_SLEEP_SECONDS = 1.2` (config.py:32) — utilisé **uniquement** par `karlia_devis_service`.
+
+#### 7.1.5 Format payload facture — exemple validé en production
+
+```json
+{
+  "id_customer": 12345,
+  "id_type": 4,
+  "id_status": 1,
+  "reference": "CO-2025-001",
+  "date": "21/05/2026",
+  "date_end": "31/05/2026",
+  "description": "Facturation 2026 — Contrat CO-2025-001",
+  "products_list": [
+    {
+      "id_product": "K42",
+      "price_without_tax": 1500.00,
+      "quantity": 1,
+      "id_vat": "1"
+    },
+    {
+      "description": "Maintenance complémentaire (ligne libre)",
+      "price_without_tax": 250.00,
+      "quantity": 2,
+      "id_vat": "1"
+    }
+  ]
+}
+```
+
+Caractéristiques :
+- `id_customer` : entier (pas string) — converti par `int(client_karlia_id)`
+- `id_type` : codes documents Karlia
+  - `1` = Devis
+  - `2` = Bon de commande
+  - `4` = **Facture** (utilisé)
+  - autres : utilisés selon le contexte mais non documentés
+- `id_status` :
+  - `0` = Brouillon non finalisé (cible cible v2.4.6.1, branche non mergée)
+  - `1` = Brouillon (état actuel sur main, depuis v2.4.1)
+  - `2` = Envoyée (ancien comportement avant v2.4.1)
+- `date`, `date_end` : format **dd/MM/yyyy** (français), pas ISO
+- `products_list` : array de lignes, chacune avec **soit** `id_product` (Karlia affiche le nom du catalogue automatiquement), **soit** `description` (fallback ligne libre)
+
+Retour Karlia :
+
+```json
+{
+  "id": 678901,
+  "reference": "F2026-0042",
+  "id_customer": 12345,
+  ...
+}
+```
+
+Le module persiste `karlia_doc_id = id`, `karlia_doc_ref = reference` (`karlia_service.py:278-279`).
+
+#### 7.1.6 Codes `id_vat` Karlia
+
+```python
+# karlia_service.py:192-195
+if tva >= 20: id_vat = "1"   # 20%
+elif tva >= 10: id_vat = "2" # 10%
+elif tva >= 5: id_vat = "3"  # 5.5%
+else: id_vat = "4"           # 0% / exonéré
+```
+
+**Limites** :
+- TVA 8.5%, 2.1% (DOM-TOM, presse) → mappent toutes sur `id_vat=4` (faux)
+- Si Karlia ajoute un `id_vat=5` (taux intermédiaire), il faudra le coder manuellement
+
+#### 7.1.7 Mapping local ↔ Karlia
+
+| Entité locale | Champ pivot | Champ Karlia |
+|---|---|---|
+| `clients_cache.karlia_id` | `Customer.id` (entier en string) | identifiant client |
+| `clients_cache.numero_client` | `Customer.client_number` | numéro métier (ex `DUM048`) |
+| `articles_cache.karlia_id` | `Product.id` (entier en string) | identifiant article |
+| `contrat_articles.article_karlia_id` | `Product.id` | référence catalogue |
+| `commandes.karlia_document_id` | `Document.id` (Devis) | id devis Karlia |
+| `commandes.karlia_customer_id` | `Document.id_customer_supplier` | id client lié au devis |
+| `commandes.karlia_opportunity_id` | `Document.id_opportunity` | opportunité commerciale |
+| `commande_lignes.karlia_product_id` | `Product.id` | ligne devis |
+| `plan_facturation.facture_karlia_id` | `Document.id` (Facture) | facture émise |
+| `plan_facturation.facture_karlia_ref` | `Document.reference` | référence facture |
+| `factures_karlia.karlia_document_id` | `Document.id` (Facture) | facture importée |
+| `commandes.facture_karlia_id/ref` | idem | facture commande |
+
+#### 7.1.8 Champs Karlia notables
+
+- **Custom field `66505`** sur l'objet `Opportunity` = case à cocher "Traité" utilisée par le module pour marquer qu'un devis a été importé. **Hardcodé** dans `karlia_devis_service.py:36`.
+- `Customer.address_list` : array d'adresses, le module ne lit que celle de `type="main"`.
+- `Product.sell_price.price` : prix HT — le module passe par `obtenir_prix_vente` jamais utilisé en pratique, lit directement `sell_price.price` dans la sync.
+
+### 7.2 Chorus Pro via PISTE
+
+#### 7.2.1 Identité de l'API
+
+- **URLs OAuth** :
+  - Sandbox : `https://sandbox-oauth.piste.gouv.fr/api/oauth/token`
+  - Production : `https://oauth.piste.gouv.fr/api/oauth/token`
+- **URLs API Chorus** :
+  - Sandbox : `https://sandbox-api.piste.gouv.fr/cpro/factures/v1`
+  - Production : `https://api.piste.gouv.fr/cpro/factures/v1`
+- **Bascule sandbox/prod** : via paramètre DB `chorus_mode_qualification` (booléen string `'true'`/`'false'`)
+- **Format** : JSON (`application/json`)
+- **Standard** : Norme Factur-X / Chorus Pro API v1
+
+#### 7.2.2 Compte technique et credentials
+
+Les 8 paramètres stockés en table `parametres` (cf. § 2.12) :
+
+| Clé | Rôle | Type | Masquage frontend |
+|---|---|---|---|
+| `chorus_client_id` | Client ID OAuth2 PISTE | UUID 36 chars | non |
+| `chorus_client_secret` | Client Secret OAuth2 PISTE | secret 36 chars | **`••••••••`** |
+| `chorus_tech_username` | Login compte technique Chorus Pro | format `TECH_1_xxx@cpro.fr` | non |
+| `chorus_tech_password` | Mot de passe compte technique | secret 13 chars (court !) | **`••••••••`** |
+| `chorus_siret_emetteur` | SIRET de la structure émettrice | 14 chiffres | non |
+| `chorus_code_service` | Code service fournisseur (optionnel) | texte | non |
+| `chorus_code_banque` | Code coordonnées bancaires (optionnel) | texte | non |
+| `chorus_mode_qualification` | Sandbox actif | `'true'`/`'false'` | non |
+
+> **Sécurité — observation critique** : le `chorus_tech_password` constaté en prod ne fait que **13 caractères**. Si c'est bien la valeur réelle, c'est en deçà des recommandations PISTE (12+ recommandés, mais souvent 16+ pour les comptes techniques). À durcir.
+
+> **Sécurité — stockage** : tous ces paramètres sont stockés **en clair** dans la table `parametres.valeur` (TEXT). En cas de fuite de la DB, le compte technique Chorus Pro est compromis. À migrer vers un gestionnaire de secrets (Secret Manager GCP).
+
+#### 7.2.3 Flux OAuth2 — particularité PISTE
+
+**Le mécanisme d'authentification de PISTE est non standard** et c'est ce qui distingue Chorus Pro des autres API OAuth2 classiques :
+
+```python
+# chorus_service.py:76-92
+credentials = base64.b64encode(f"{tech_username}:{tech_password}".encode()).decode()
+
+response = await client.post(
+    self.oauth_url,
+    data={
+        "grant_type": "client_credentials",
+        "scope": "openid",
+    },
+    headers={
+        "Content-Type": "application/x-www-form-urlencoded",
+        "Authorization": f"Basic {credentials}",     # ← (1) header Basic
+    },
+    auth=(self.client_id, self.client_secret)        # ← (2) httpx Basic auth
+)
+```
+
+**Deux authentifications simultanées** :
+1. **Header `Authorization: Basic base64(tech_username:tech_password)`** → identifie l'**utilisateur Chorus Pro** qui va déposer la facture
+2. **httpx `auth=(client_id, client_secret)`** → équivaut à `Authorization: Basic base64(client_id:client_secret)` (mais httpx écrase le header précédent normalement…)
+
+⚠️ **Anomalie probable** : `httpx` applique normalement `auth=` en réécrivant le header `Authorization`. Donc **seul (2) part dans la requête réelle** et `(1)` est écrasé. C'est probablement le bug à la source du blocage 403 noté en mémoire ([[chorus_pro_blocage]]).
+
+**Vérification recommandée** : passer les credentials techniques dans un autre header (custom comme `X-Cpro-Username` ou `Cpro-Account`), comme demandé par la spec PISTE.
+
+#### 7.2.4 Endpoints PISTE consommés
+
+| Endpoint | Méthode | Usage |
+|---|---|---|
+| `/api/oauth/token` | POST | obtenir access_token (cache 55 min) |
+| `/cpro/factures/v1/rechercher/structures` | POST | recherche structure destinataire par SIRET |
+| `/cpro/factures/v1/consulter/structure` | POST | détails structure |
+| `/cpro/factures/v1/rechercher/services` | POST | services d'une structure |
+| `/cpro/factures/v1/soumettre` | POST | **soumission facture** |
+| `/cpro/factures/v1/consulter/facture` | POST | suivi statut facture |
+| `/cpro/factures/v1/rechercher/factures/fournisseur` | POST | listing factures émises |
+
+#### 7.2.5 Format payload `/soumettre` — analyse détaillée
+
+```json
+{
+  "modeDepot": "SAISIE_API",
+  "numeroFactureSaisi": "8918",
+  "destinataire": {
+    "codeDestinataire": "21620195400015",
+    "codeServiceExecutant": null
+  },
+  "fournisseur": {
+    "typeIdentifiantFournisseur": "SIRET",
+    "identifiantFournisseur": "11111111111111",
+    "codeServiceFournisseur": null,
+    "codeCoordonneesBancairesFournisseur": null
+  },
+  "cadreDeFacturation": {
+    "codeCadreFacturation": "A1_FACTURE_FOURNISSEUR",
+    "codeStructureValideur": null
+  },
+  "references": {
+    "deviseFacture": "EUR",
+    "typeFacture": "FACTURE",
+    "typeTva": "TVA_SUR_DEBIT",
+    "motifExonerationTva": null,
+    "numeroMarche": null,
+    "numeroEngagement": null,
+    "numeroBonCommande": null,
+    "numeroFactureOrigine": null,
+    "modePaiement": "VIREMENT",
+    "dateFacture": "2026-05-21"
+  },
+  "lignePoste": [
+    {
+      "lignePosteNumero": 1,
+      "lignePosteReference": "GLOBAL",
+      "lignePosteDenomination": "Facture 8918",
+      "lignePosteQuantite": 1,
+      "lignePosteUnite": "lot",
+      "lignePosteMontantUnitaireHT": 1500.0,
+      "lignePosteMontantRemiseHT": 0,
+      "lignePosteTauxTva": 20.0,
+      "lignePosteTauxTvaManuel": null
+    }
+  ],
+  "ligneRecapitulatifTVA": [
+    {
+      "ligneRecapTvaTauxManuel": null,
+      "ligneRecapTvaTaux": 20.0,
+      "ligneRecapTvaMontantBaseHtParTaux": 1500.0,
+      "ligneRecapTvaMontantTvaParTaux": 300.0
+    }
+  ],
+  "montantTotal": {
+    "montantHtTotal": 1500.0,
+    "montantTvaTotal": 300.0,
+    "montantTtcTotal": 1800.0,
+    "montantRemiseGlobaleTTC": 0,
+    "motifRemiseGlobaleTTC": null,
+    "montantAPayer": 1800.0,
+    "montantAcompte": 0
+  },
+  "commentaire": "Facture 8918"
+}
+```
+
+**Constats** :
+- `modeDepot: "SAISIE_API"` — dépôt manuel via API (vs `IMPORT_PDF` ou `IMPORT_XML_CHORUS`)
+- `cadreDeFacturation: "A1_FACTURE_FOURNISSEUR"` — cadre obligatoire (facture simple sans marché)
+- `typeTva: "TVA_SUR_DEBIT"` **codé en dur** — n'autorise pas la TVA sur encaissements
+- `modePaiement: "VIREMENT"` **codé en dur**
+- Le payload courant **n'envoie qu'une seule ligne** récapitulative (20 %), même si la facture a plusieurs taux TVA → bug à corriger pour les factures mixtes
+
+#### 7.2.6 Statuts factures (états Chorus Pro)
+
+##### Côté DB locale (`factures_karlia.statut_chorus`)
+
+CHECK constraint : `IN ('NON_TRANSMISE', 'EN_COURS', 'TRANSMISE', 'ACCEPTEE', 'REJETEE', 'ERREUR')`.
+
+| Statut | Sens | Transition vers |
+|---|---|---|
+| `NON_TRANSMISE` | Importée depuis Karlia, jamais transmise | → `EN_COURS` (lors du POST `/transmettre`) |
+| `EN_COURS` | Transmission en cours | → `TRANSMISE` (succès) ou `ERREUR` |
+| `TRANSMISE` | Acceptée par PISTE (numeroFluxDepot reçu) | → `ACCEPTEE` ou `REJETEE` (à terme, par polling — pas en place) |
+| `ACCEPTEE` | Acceptée par la collectivité destinataire | terminal |
+| `REJETEE` | Rejetée par la collectivité destinataire | terminal |
+| `ERREUR` | Échec technique (réseau, 4xx, 5xx) | manuel : retry possible |
+
+##### Côté DB locale (`transmissions_chorus.statut`)
+
+CHECK constraint : `IN ('EN_ATTENTE', 'EN_COURS', 'SUCCES', 'ECHEC', 'ANNULE')`.
+
+| Statut | Sens |
+|---|---|
+| `EN_ATTENTE` | Créée mais pas encore tentée |
+| `EN_COURS` | Appel API en cours |
+| `SUCCES` | Réponse 200 PISTE avec `numeroFluxDepot` |
+| `ECHEC` | Erreur HTTP ou exception |
+| `ANNULE` | Annulation manuelle (non implémentée à ce jour) |
+
+#### 7.2.7 Snapshot DB Chorus en production (21/05/2026)
+
+```
+factures_karlia (15 lignes) :
+  NON_TRANSMISE : 13
+  TRANSMISE     :  1
+  ERREUR        :  1
+
+transmissions_chorus (4 lignes) :
+  ECHEC | code_retour=0   | "idFournisseur manquant — paramètre 'chorus_id_fournisseur' vide en base"  | 2026-05-16
+  ECHEC | code_retour=400 | "Erreur sur /soumettre"                                                   | 2026-04-23
+  ECHEC | code_retour=400 | "Erreur sur /soumettre"                                                   | 2026-04-22
+  ECHEC | code_retour=400 | "Erreur sur /soumettre"                                                   | 2026-04-22
+```
+
+> **Observation forte** : aucune transmission `SUCCES` n'est enregistrée dans `transmissions_chorus`, mais 1 facture est en `TRANSMISE` côté `factures_karlia`. **Désynchronisation** des deux tables — probablement parce que la facture a été marquée TRANSMISE manuellement en DB ou via une version antérieure du code qui ne créait pas systématiquement la trace `TransmissionChorus`. La messagerie d'erreur `idFournisseur manquant` confirme que la configuration n'est pas complète (cf. `chorus_id_fournisseur` vide dans `parametres`).
+
+#### 7.2.8 Masquage frontend
+
+Le frontend (`pages/Parametres.js`) :
+- **Affiche en clair** : `chorus_client_id`, `chorus_tech_username`, `chorus_siret_emetteur`, `chorus_code_service`, `chorus_code_banque`, `chorus_mode_qualification`
+- **Affiche `••••••••`** : `chorus_client_secret`, `chorus_tech_password`
+- À l'enregistrement, si la valeur envoyée vaut `••••••••`, le backend **ignore** le champ (cf. `parametres.py:140-142`) → l'utilisateur n'écrase pas accidentellement un secret.
+
+> **Limite** : tout utilisateur connecté (pas seulement ADMIN) peut **lire** les valeurs non masquées via `GET /api/parametres/chorus` (cf. § 3.7). Seul l'écriture est restreinte à ADMIN.
+
+### 7.3 Google Calendar — service retiré
+
+#### 7.3.1 État actuel
+
+- **Service backend** : `backend/app/services/google_calendar_service.py` → **fichier supprimé** (diff phase 0 montre `-44 lignes`).
+- **Endpoints API** : aucun endpoint actif dans `backend/app/api/`.
+- **Branche source historique** : `feature/google-agenda-planning` existe sur origin mais n'a jamais été mergée.
+- **Configuration `.env`** : aucune variable `GOOGLE_*` n'apparaît dans `.env` ni dans `config.py`.
+
+#### 7.3.2 Traces résiduelles
+
+##### Schéma DB
+
+5 colonnes dans `prestations` (cf. § 2.15) :
+- `prestations.google_event_id` — ID de l'événement Google Calendar
+- `prestations.google_calendar_id` — ID du calendrier (DB only, pas dans models.py)
+- `prestations.google_sync_status` — statut sync (DB only)
+- `prestations.google_sync_error` — message d'erreur (DB only)
+- `prestations.google_synced_at` — date dernière sync (DB only)
+
+1 colonne dans `formateurs` :
+- `formateurs.email_google` — email du compte Google associé au formateur (gérée par `formateurs.py` et `Formateurs.js`)
+
+##### Code orphelin
+- `models.py:482` : `google_event_id = Column(String(255))` — déclaration ORM
+- `prestations.py:60-100` : `google_event_id` dans la response Pydantic
+- `formateurs.py:20,38,76,…` : `email_google` dans tous les schémas Pydantic
+- `Formateurs.js` : champ `email_google` dans le formulaire de création/édition de formateur
+
+#### 7.3.3 Périmètre supposé de l'ancien service (déduit du schéma)
+
+Le service supprimé semblait :
+1. **OAuth2 Google** : autoriser le module à publier dans le calendrier de chaque formateur (scope `https://www.googleapis.com/auth/calendar.events`)
+2. **Stockage des tokens** : probablement dans la table `parametres` (clé hypothétique `google_oauth_token`) ou dans un fichier local — **aucune trace en DB aujourd'hui**.
+3. **Synchronisation des prestations** : pour chaque prestation `planifiee`, créer un événement Google Calendar dans le calendrier du formateur (date_planifiee + heure_debut/heure_fin + lieu), stocker l'ID retourné dans `google_event_id`.
+4. **Mise à jour bidirectionnelle** : peut-être un endpoint pour modifier/supprimer l'événement quand la prestation change.
+
+#### 7.3.4 Questions ouvertes pour la refonte
+
+- Faut-il **purger** les colonnes `google_*` et `email_google` du schéma DB ?
+- Faut-il **réactiver** la sync Google Calendar avec un nouveau client OAuth2 ?
+- Faut-il **basculer** vers un autre fournisseur de calendrier (Outlook Graph API, CalDAV, calendrier interne du module) ?
+- Faut-il **abandonner** la planification calendrier au profit d'un export ICS téléchargeable par formateur (solution low-tech) ?
+
+### 7.4 Autres intégrations externes potentielles
+
+#### 7.4.1 Cloudflare Tunnel
+
+Le module est accessible depuis l'extérieur via un Cloudflare Tunnel (mentionné dans le commit `a8690b7`, tag `v2.4.0` : "accès externe via Cloudflare Tunnel — CORS ajouté"). Cette intégration est **infrastructure**, pas applicative — aucun code du module ne dialogue avec Cloudflare. Le seul impact côté code est la liste `CORS_ORIGINS` qui inclut `https://gestion.sginformatique.fr`.
+
+#### 7.4.2 INSEE / Syntec
+
+Les indices Syntec sont **saisis manuellement** dans `/indices` (`pages/Indices.js`). Le champ `IndiceRevision.source_url` permet de stocker l'URL INSEE de référence (publié sur l'INSEE) mais aucune intégration automatique n'existe. À envisager pour la refonte : sync automatique depuis les pages INSEE Syntec.
+
+#### 7.4.3 Email / Notifications
+
+Aucun service d'envoi d'email ne fait partie du module. Pas de SMTP, pas d'API SendGrid/Mailgun/etc. Les notifications sont **uniquement** affichées via `react-hot-toast` côté UI. Pour une refonte : envisager les notifications pour facturation, renouvellements, ou alertes Chorus Pro.
+
+#### 7.4.4 Stockage objet (S3 / GCS)
+
+Pas de stockage objet. Les fichiers (modèles Word, documents générés, PDF devis Karlia) sont stockés :
+- Sur bind-mount disque (`storage/modeles/`, `storage/documents_generes/`)
+- Sur Karlia côté distant (URLs `pdf_url` pour devis)
+
+Pour la migration GCP, prévoir une bascule vers GCS pour la durabilité et la scalabilité (cf. § 8).
+
+---
