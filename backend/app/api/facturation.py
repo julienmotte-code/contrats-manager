@@ -8,11 +8,14 @@ from app.services.karlia_service import karlia
 from app.services.revision_service import (
     calculer_revision, verifier_indices_disponibles, get_regle_revision, FAMILLES_CONTRAT
 )
+from app.services.validation_service import valider_pre_emission
 from datetime import date
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Optional, List
+import logging
 import uuid
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 @router.get("/apercu/{annee}")
@@ -153,11 +156,37 @@ async def lancer_facturation(
 
     lot_id = str(uuid.uuid4())
     factures_a_emettre = []
+    resultats_rejets_pre_emission = []
 
     for plan_id in plan_ids:
         plan = db.query(PlanFacturation).filter(PlanFacturation.id == plan_id).first()
-        if not plan or plan.statut not in ["PLANIFIEE", "CALCULEE"]:
+        # EMISE est désormais accepté pour laisser la garde le rejeter explicitement
+        # via DEJA_EMISE. Les statuts inconnus (dont ERREUR) restent skippés.
+        if not plan or plan.statut not in ["PLANIFIEE", "CALCULEE", "EMISE"]:
             continue
+
+        # ── GARDE PRÉ-ÉMISSION (audit #9, Q9) ─────────────────
+        garde = valider_pre_emission(db, plan)
+        # Logger les WARNINGs (notamment ID_PRODUCT_MANQUANT) pour traçabilité
+        for w in [a for a in garde["alertes"] if a["niveau"] == "WARNING"]:
+            logger.warning(
+                f"[PRE-EMISSION-WARN] plan {plan.id} contrat {plan.contrat.numero_contrat} "
+                f"annee {plan.annee_facturation}: {w['code']} — {w['message']}"
+            )
+        if not garde["ok"]:
+            erreurs = [a for a in garde["alertes"] if a["niveau"] == "ERREUR"]
+            codes = [a["code"] for a in erreurs]
+            logger.warning(
+                f"[PRE-EMISSION-BLOCK] plan {plan.id} contrat {plan.contrat.numero_contrat}: {codes}"
+            )
+            message_erreurs = "; ".join(a["message"] for a in erreurs)
+            resultats_rejets_pre_emission.append({
+                "plan_id": str(plan.id),
+                "succes": False,
+                "erreur": f"Validation pré-émission échouée : {message_erreurs}",
+            })
+            continue
+        # ── FIN GARDE ─────────────────────────────────────────
 
         contrat = plan.contrat
         montant_ht = float(plan.montant_revise_ht or plan.montant_ht_prevu or contrat.montant_annuel_ht)
@@ -213,7 +242,13 @@ async def lancer_facturation(
         })
 
     if not factures_a_emettre:
-        return {"lot_id": lot_id, "traites": 0, "emises": 0, "erreurs": 0, "resultats": []}
+        return {
+            "lot_id": lot_id,
+            "traites": 0,
+            "emises": 0,
+            "erreurs": len(resultats_rejets_pre_emission),
+            "resultats": resultats_rejets_pre_emission,
+        }
 
     resultats_karlia = await karlia.traitement_lot_factures(factures_a_emettre)
 
@@ -249,6 +284,6 @@ async def lancer_facturation(
         "lot_id": lot_id,
         "traites": len(factures_a_emettre),
         "emises": emises,
-        "erreurs": erreurs,
-        "resultats": resultats_karlia,
+        "erreurs": erreurs + len(resultats_rejets_pre_emission),
+        "resultats": resultats_karlia + resultats_rejets_pre_emission,
     }

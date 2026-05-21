@@ -101,3 +101,24 @@ Chaque entrée précise la référence code, la raison du report, et la priorit�
 - **Amélioration suggérée** : masquer le bouton si `current_user.role` n'est pas dans `('ADMIN', 'GESTIONNAIRE')`, ou afficher un `toast.error('Réservé aux administrateurs et gestionnaires')` dans le catch.
 - **Chantier proposé** : à intégrer au futur `feat/frontend-rbac-granular`.
 - **Priorité** : faible (cosmétique, fonctionnellement bloqué par backend = pas de risque, juste UX dégradée).
+
+---
+
+## Mapping article rang 0 ↔ catalogue Karlia
+
+### Constat
+Sur 572 contrats EN_COURS, seuls **4** ont leur article rang 0 avec `article_karlia_id` défini. Les **568** autres émettent leurs factures Karlia avec un fallback `description` (cf. `backend/app/services/karlia_service.py:193-199`). Le montant facturé est correct (`price_without_tax` + `quantity` toujours envoyés), mais l'article n'est pas lié au catalogue produits côté Karlia.
+
+### Impact actuel
+- **Aucun impact financier** : les 571 factures EMISE en prod totalisent 1 196 275 €, **0 facture à 0 €** constatée. Le fallback `description` fonctionne.
+- **Impact UX Karlia** : les rapports analytiques par produit catalogue ne reflètent pas la réalité (les factures sans `id_product` apparaissent comme "ligne libre" plutôt que rattachées à un produit du catalogue Karlia).
+- **Détection** : depuis le chantier 2.2, `valider_pre_emission` émet un WARNING `ID_PRODUCT_MANQUANT` loggé sur chaque émission concernée (`[PRE-EMISSION-WARN]`).
+
+### Note historique
+Le commentaire original de `valider_pre_emission` annonçait à tort que sans `id_product` Karlia enregistrait le montant à 0 €. Vérifié faux en prod (chantier 2.2). Le niveau a été corrigé de ERREUR à WARNING dans le même commit. **Cf. également** : sur les 571 plans EMISE, 568 ont été créés par un import en masse historique (`created_at = 2026-04-20 13:30:44`, identique à la seconde) et n'ont jamais transité par le code Python.
+
+### Action proposée
+Chantier `feat/data-cleanup-article-karlia-id` pour matcher les articles rang 0 avec les produits du catalogue Karlia. Heuristique probable : `JOIN articles_cache ON LOWER(designation) = LOWER(...)` ou matching sur `reference`. Validation manuelle possible si les correspondances ne sont pas claires.
+
+### Priorité
+Faible — pas de bug actif, juste donnée non optimale pour les analytics Karlia. À traiter quand le rythme le permet.
