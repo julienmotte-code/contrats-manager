@@ -26,3 +26,14 @@ Chaque entrée précise la référence code, la raison du report, et la priorit�
 - **Identifié pendant** : chantier 2.1 (RBAC backend), grep cohérence frontend ↔ backend.
 - **Décision** : à investiguer. Soit pages UI prévues mais non implémentées, soit résidus à supprimer. Ne pas toucher tant qu'on n'a pas confirmation.
 - **Priorité** : faible.
+
+---
+
+## Gating frontend granulaire pour les routes sensibles
+
+- **Référence frontend** : `contrats-ui-src/src/App.js:52` (`isNotFormateur`) vs `contrats-ui-src/src/context/AuthContext.js:19-23` (droits TECHNICIEN).
+- **Description** : le helper `isNotFormateur` protège les routes `/contrats/tunnel`, `/contrats/nouveau`, `/contrats/:id/modifier`, `/facturation`, `/chorus-pro`, `/utilisateurs`, etc., mais laisse passer le rôle TECHNICIEN. Or les droits granulaires définis dans `AuthContext.getDroitsByRole('TECHNICIEN')` indiquent `contrats_ecriture: false`, `facturation: false`, `utilisateurs: false`. Un TECHNICIEN qui tape l'URL directement (deep-link) accède donc à la page alors qu'il n'a pas le droit métier correspondant.
+- **Identifié pendant** : chantier 2.1 (RBAC backend), analyse cohérence frontend ↔ backend sur le router facturation.
+- **Impact actuel** : aucun (le backend RBAC bloque en 403 sur les appels d'écriture). Incohérence UX uniquement : l'utilisateur voit la page se charger puis se prend une erreur sur la première action.
+- **Chantier proposé** : `feat/frontend-rbac-granular` — remplacer `isNotFormateur` par des gates basés sur `droits.contrats_ecriture` / `droits.facturation` / `droits.utilisateurs` selon la route. À prévoir en Vague 2 ou 3.
+- **Priorité** : faible (pas urgent, la défense en profondeur backend est suffisante côté sécurité).
