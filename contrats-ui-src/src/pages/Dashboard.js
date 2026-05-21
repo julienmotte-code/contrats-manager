@@ -13,7 +13,6 @@ const FAMILLE_META = {
   AUTRE:           { icon: '📦', color: 'bg-gray-50 text-gray-700 border-gray-200' },
   CANTINE:         { icon: '🍽️', color: 'bg-orange-50 text-orange-700 border-orange-200' },
   ASSISTANCE_TEL:  { icon: '📞', color: 'bg-green-50 text-green-700 border-green-200' },
-  CITYWEB:         { icon: '🌐', color: 'bg-indigo-50 text-indigo-700 border-indigo-200' },
 };
 const FAMILLE_DEFAULT = { icon: '📄', color: 'bg-slate-50 text-slate-700 border-slate-200' };
 
