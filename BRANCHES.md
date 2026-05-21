@@ -170,3 +170,19 @@ Les autres tags du dépôt suivent un schéma de versioning :
 | Date | Avant | Après | Tags legacy créés | Référence |
 |---|---|---|---|---|
 | 2026-05-21 | 22 branches origin | 9 branches origin | 12 | Chantier 1.1 / branche `audit/refonte-v2` |
+| 2026-05-21 | 10 fichiers, 4 commits | 4 fichiers cleanés (-427/+4 lignes) | — | Chantier 1.2 / PR `chore/dead-code-cleanup-v1` mergée en CLI (`--no-ff`), tag `v2.4.7-dead-code-cleanup` |
+
+### Détail chantier 1.2 (2026-05-21)
+
+PR `chore/dead-code-cleanup-v1` mergée sur `main` via merge CLI `--no-ff` (la PR GitHub n'a pas été cliquée).
+
+Commits intégrés (du plus ancien au plus récent) :
+
+1. `41b841d` — `chore(backend): remove unused service functions` — retrait de `calculer_montant_revise`, `calculer_statut_renouvellement`, `obtenir_produit`, `obtenir_prix_vente`, `lister_templates_documents` + nettoyage imports
+2. `870e8b7` — `chore(backend,frontend): remove facturation lot stub endpoint and LotFacturation model` — retire `GET /api/facturation/lot/{id}`, modèle `LotFacturation`, helper `facturationAPI.lotStatut`. **Note** : la table `lots_facturation` reste en DB (drop reporté au chantier 1.4 Alembic), `api/indices.py:139` exécute encore un raw SQL `UPDATE lots_facturation` qui continue de fonctionner
+3. `cb70244` — `chore(backend,frontend): remove orphan CITYWEB family` — famille CITYWEB orpheline (0 contrat en DB, absente de `FAMILLES_CONTRAT`) retirée du dashboard backend + frontend
+4. `8370bbb` — `chore(frontend): remove unused UI libraries` — désinstallation de `lucide-react`, `react-select`, `react-datepicker` (jamais importées, ~300 ko gzippés de gain estimé)
+
+Merge commit : voir le `git log` du tag `v2.4.7-dead-code-cleanup`.
+
+**Point à reporter au chantier 1.4** : `backend/app/api/indices.py:139` exécute encore un `UPDATE lots_facturation SET indice_utilise_id = NULL` en raw SQL. Quand la table sera dropée via Alembic, ce SQL devra être retiré.
