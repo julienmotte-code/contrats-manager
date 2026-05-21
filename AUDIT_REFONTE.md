@@ -2196,4 +2196,375 @@ Sous-workflow appelé par les **workflows 3 (révision Syntec)** et **4 (factura
 - Si la facture échoue côté Karlia (validation manuelle refusée), aucune notification revient vers le module — `plan_facturation` reste `EMISE` indéfiniment.
 - `traitement_lot_factures` : aucun retry sur 429 (cf. anti-pattern phase 4 #4).
 
+### Workflow 7 — Import des factures Karlia → table `factures_karlia` (préparation Chorus Pro)
+
+**Déclencheur** : utilisateur clique "Synchroniser depuis Karlia" sur `/chorus-pro`.
+
+**Page frontend** : `pages/ChorusProPage.js`.
+
+**Endpoint** : `POST /api/chorus/synchro-factures` (`chorus.py:119`).
+
+**Flux** :
+
+```
+1. APPEL KARLIA
+   karlia._get("/documents", {
+       type: 4,           # Facture
+       status: 2,         # Envoyée (validée dans Karlia)
+       limit: 500,
+       order: "date",
+       direction: "DESC"
+   })
+   → liste des factures émises et validées dans Karlia
+
+2. POUR CHAQUE FACTURE
+   - extraire id_customer, customer_name
+   - chercher client dans clients_cache pour récupérer SIRET
+     (chorus.py:163-169 — fallback si client absent du cache → SIRET=None)
+   - calculer montants HT/TTC/TVA
+   - parser date_facture (format "dd/MM/yyyy") et date_echeance
+
+3. UPSERT factures_karlia
+   - Si existante (karlia_document_id) ET statut_chorus == "NON_TRANSMISE" :
+     UPDATE client_nom, client_siret, montants, date_echeance
+     (les factures déjà TRANSMISE/EN_COURS ne sont pas mises à jour)
+   - Si absente :
+     INSERT avec statut_chorus="NON_TRANSMISE", contrat_id=NULL
+   - COMMIT global à la fin
+```
+
+**Tables modifiées** : `factures_karlia` (INSERT/UPDATE conditionnel).
+
+**Appels externes** : `GET https://karlia.fr/app/api/v2/documents?type=4&status=2&limit=500`.
+
+**Effets de bord** :
+- **Aucun lien automatique avec `contrats`** : `contrat_id` reste `NULL`. Le lien doit être fait manuellement (ou par un script).
+- Les factures **déjà transmises** Chorus ne sont pas mises à jour — leurs métadonnées (SIRET corrigé) ne se propagent pas.
+- Pas de delta : la sync ramène **toutes** les 500 dernières factures à chaque appel.
+
+**Points de friction** :
+- Si une facture Karlia est **modifiée** dans Karlia (montants, SIRET) **après transmission Chorus**, le module ne le sait pas. Risque de désynchronisation facture émise / facture transmise.
+- Limite à 500 : si > 500 factures depuis le dernier import, les plus anciennes sont silencieusement omises. Aucune pagination boucle ici (contrairement à `/customers`).
+
+### Workflow 8 — Transmission Chorus Pro via PISTE (OAuth2)
+
+**Déclencheur** : utilisateur sélectionne une ou plusieurs factures `NON_TRANSMISE` dans `/chorus-pro` et clique "Transmettre".
+
+**Page frontend** : `pages/ChorusProPage.js`.
+
+**Endpoint** : `POST /api/chorus/transmettre` (`chorus.py:352`).
+
+**Flux détaillé** :
+
+```
+1. CONFIGURATION
+   _get_chorus_service(db) lit les 8 paramètres chorus_* depuis parametres
+   Si l'un manque → HTTPException(400, "Configuration Chorus Pro incomplète")
+   → ChorusProService(client_id, client_secret, tech_username, tech_password,
+                      siret_emetteur, code_service, code_banque, mode_qualification)
+
+2. POUR CHAQUE facture_id du request
+   a. Charger FactureKarlia par id
+   b. Refuser si statut_chorus IN (TRANSMISE, ACCEPTEE, EN_COURS)
+   c. Refuser si client_siret est NULL
+   d. INSERT TransmissionChorus (statut=EN_COURS, transmis_par=current_user.login)
+   e. UPDATE FactureKarlia SET statut_chorus='EN_COURS'
+   f. COMMIT
+   g. Appel SERVICE :
+      ChorusProService.soumettre_facture(
+          destinataire_siret, destinataire_code_service, numero_facture,
+          date_facture, date_echeance, montant_ht, montant_tva, montant_ttc,
+          commentaire="Facture {numero_facture}"
+      )
+      → service._get_access_token()  ← OAuth2 token PISTE (cache en mémoire 55min)
+      → service._post("/soumettre", payload)
+      → Réponse PISTE : {numeroFluxDepot, identifiantFactureCPP, ...}
+
+   h. SUCCÈS :
+      - transmission.statut = 'SUCCES'
+      - transmission.chorus_id_flux = numeroFluxDepot
+      - transmission.chorus_id_facture = identifiantFactureCPP
+      - transmission.reponse_json = (full response)
+      - facture.statut_chorus = 'TRANSMISE'
+      - facture.date_transmission = now()
+      - facture.chorus_numero_flux = numeroFluxDepot
+      - COMMIT
+
+   i. ÉCHEC (ChorusError) :
+      - transmission.statut = 'ECHEC'
+      - transmission.code_retour = str(status_code)
+      - transmission.message_retour = e.message
+      - transmission.reponse_json = e.detail
+      - facture.statut_chorus = 'ERREUR'
+      - facture.chorus_message_erreur = "{status}: {message}"
+      - COMMIT
+
+3. RÉSUMÉ
+   { "transmises": N, "echecs": M, "details": [...] }
+```
+
+**Tables modifiées** :
+- `transmissions_chorus` (INSERT, puis UPDATE statut)
+- `factures_karlia` (UPDATE statut_chorus, date_transmission, chorus_numero_flux, chorus_message_erreur)
+
+**Appels externes** :
+- `POST https://[sandbox-]oauth.piste.gouv.fr/api/oauth/token` (OAuth2 client_credentials)
+- `POST https://[sandbox-]api.piste.gouv.fr/cpro/factures/v1/soumettre`
+
+**Authentification PISTE — particularité** :
+
+```
+HTTP request body : grant_type=client_credentials&scope=openid
+HTTP headers     : Authorization: Basic base64(tech_username:tech_password)
+HTTP basic auth  : auth=(client_id, client_secret)
+```
+
+C'est la **double authentification** notée comme suspect dans anti-pattern phase 4 #11. PISTE attend `client_id/client_secret` comme l'OAuth2 standard via HTTP Basic auth pour identifier l'application, **et en plus** des credentials techniques (`tech_username/tech_password`) dans le header `Authorization` pour identifier l'utilisateur Chorus Pro qui dépose la facture. Cette construction est documentée dans la doc PISTE Chorus Pro mais peu connue.
+
+**Token OAuth — cache** : le `ChorusProService` cache le token en mémoire (`chorus_service.py:65-66`) avec une marge de 5 min sur l'expiration (1h par défaut). **Mais le service est ré-instancié à chaque requête** (`_get_chorus_service(db)` dans `chorus.py:92`) → le cache n'est pas partagé entre requêtes. Chaque transmission redemande un token.
+
+**État cible** :
+- `factures_karlia.statut_chorus` passe à `TRANSMISE` (succès) ou `ERREUR` (échec).
+- Le statut Chorus côté PISTE évolue ensuite : `RECUE`, `EN_TRAITEMENT`, `ACCEPTEE`, `REJETEE`. **Aucun polling automatique** n'est en place pour rafraîchir `statut_chorus` après la transmission initiale.
+
+**Points de friction connus** :
+- **Blocage 403 PISTE en production** (mémoire utilisateur [[chorus_pro_blocage]]) : 13 factures sur 15 sont `NON_TRANSMISE`, 1 `TRANSMISE`, 1 `ERREUR`. La cause exacte est en attente d'investigation côté Codial ou support PISTE.
+- Pas de mécanisme de **renvoi** automatique en cas d'échec — toute facture en `ERREUR` doit être manuellement rejouée.
+- Le `typeTva` est codé en dur `"TVA_SUR_DEBIT"` (cf. anti-pattern phase 4 #10).
+- Aucun mécanisme de **retransmission** explicite : si l'utilisateur réessaie une facture `ERREUR`, un nouveau `TransmissionChorus` est créé mais la facture passe par les mêmes garde-fous.
+
+### Workflow 9 — Synchronisation Karlia → DB locale (clients + articles)
+
+**Déclencheur** : trois possibilités :
+- Automatique au **boot du conteneur backend** (`main.py:165`)
+- Automatique chaque **nuit à 02:00** (cron APScheduler `main.py:167`)
+- Manuel : `POST /api/synchro/lancer` (depuis `/parametres` ou `Dashboard.js:90`)
+
+**Endpoint** : `POST /api/synchro/lancer` ou directement `synchro_karlia()` (`main.py:38`).
+
+**Flux** :
+
+```
+1. RECHARGER LA CLÉ API
+   db.query(Parametre).filter(cle=='karlia_api_key').first()
+   → karlia.api_key = param.valeur  (réécrit l'instance globale)
+   Si pas de clé → log "Clé API absente — synchronisation ignorée" et return
+
+2. SYNC CLIENTS (boucle paginée)
+   offset = 0; limit = 100
+   while True :
+     result = karlia.lister_clients(limit, offset)
+     pour chaque client Karlia :
+       extraire karlia_id, client_number (fallback K{karlia_id}), address_list[type=main]
+       upsert dans clients_cache :
+         - si karlia_id existe → UPDATE
+         - si karlia_id absent ET numero_client existe → fallback numéro K{karlia_id}
+         - sinon INSERT
+     db.commit() après chaque page
+     si len(clients_data) < limit : break
+     offset += 100
+
+3. SYNC ARTICLES (un seul appel)
+   result = karlia.lister_produits(limit=500)
+   pour chaque produit :
+     upsert dans articles_cache (par karlia_id)
+   db.commit()
+
+4. METTRE À JOUR LES STATS
+   UPDATE parametres SET valeur=now WHERE cle='derniere_synchro'
+   UPDATE parametres SET valeur='{total_clients} clients, {total_articles} articles'
+     WHERE cle='synchro_stats'
+
+5. LOG : "Terminée — {total_clients} clients, {total_articles} articles"
+```
+
+**Tables modifiées** : `clients_cache` (E), `articles_cache` (E), `parametres` (E `derniere_synchro` + `synchro_stats`).
+
+**Appels externes** :
+- Karlia : N × `GET /customers?limit=100&offset=…` (N = ⌈total_clients / 100⌉ + 1)
+- Karlia : 1 × `GET /products?limit=500`
+
+**Effets de bord** :
+- Au boot, **bloque le démarrage** du backend tant que la sync n'est pas finie (cf. anti-pattern phase 1).
+- Le scheduler crée 1 job à 02:00 ; si plusieurs instances backend tournent → multiple synchros concurrentes.
+- Les clients supprimés dans Karlia restent dans `clients_cache` (pas de mécanisme de purge).
+
+**Points de friction** :
+- Sync globale (pas de delta) → coûteux côté quota Karlia (251 clients = 3 pages, 404 articles = 1 page).
+- Si Karlia est indisponible, la synchro échoue silencieusement (catch global `print("Erreur : …")`).
+- La sync **devis acceptés** (workflow 4) est **séparée** de cette sync et utilise `karlia_devis_service` (cf. § 4.2).
+
+### Workflow 10 — Cycle d'authentification (login → JWT → droits)
+
+**Déclencheur** : ouverture de l'application par un utilisateur non connecté.
+
+**Pages frontend** : `pages/Login.js` (34 lignes) + `context/AuthContext.js`.
+
+**Flux** :
+
+```
+1. CHARGEMENT INITIAL
+   AuthProvider monté :
+     - lit localStorage.token
+     - si token : GET /api/auth/me (JWT en Authorization header via intercepteur axios)
+       - 200 : setUser({login, nom_complet, role, formateur_id}),
+               setDroits(getDroitsByRole(role))  ← duplication locale
+       - !200 : localStorage.removeItem('token'), user reste null
+     - sinon : user reste null
+   loading passe à false → AppRoutes rendu
+
+2. SAISIE LOGIN
+   Login.js :
+     handleSubmit → useAuth().login(username, password)
+       → authAPI.login() :
+           POST /api/auth/login
+           Content-Type: application/x-www-form-urlencoded
+           body: username=…&password=…
+       → backend (auth.py:27) :
+           - SELECT utilisateurs WHERE login = username
+           - bcrypt.checkpw(password, user.password_hash)
+           - jwt.encode({sub, role, id, formateur_id, exp=now+24h}, SECRET_KEY, HS256)
+           - return {access_token, token_type, nom_complet, role, formateur_id}
+     → localStorage.setItem('token', access_token)
+     → setUser/setDroits localement (sans rappeler /me)
+   navigate('/')
+
+3. REQUÊTES SUIVANTES
+   axios interceptor (api.js:3-7) injecte Authorization: Bearer {token}
+   Backend Dependency get_current_user :
+     - jwt.decode(token, SECRET_KEY, ['HS256'])
+     - SELECT utilisateurs WHERE login = payload['sub']
+     - vérifie user.actif == True
+     - retourne l'objet Utilisateur (SQLAlchemy)
+
+4. EXPIRATION / 401
+   Backend renvoie 401 si :
+     - JWT expiré (exp dépassé)
+     - JWT invalide (signature, payload malformé)
+     - utilisateur désactivé (actif=False)
+     - utilisateur supprimé
+   Axios interceptor (api.js:8-11) :
+     - localStorage.removeItem('token')
+     - window.location.href = '/login'  ← rechargement complet
+```
+
+**Tables lues** : `utilisateurs`.
+**Tables modifiées** : aucune (note : `derniere_connexion` n'est **jamais mise à jour** alors que la colonne existe → fonctionnalité incomplète).
+
+**Caractéristiques techniques** :
+- **JWT 24h** (`auth.py:24`) au lieu de `Settings.ACCESS_TOKEN_EXPIRE_MINUTES=480` (8h non utilisé) — incohérence.
+- **Stockage `localStorage`** : choix simple mais sensible XSS. Pour un module B2B interne, OK.
+- **Pas de refresh token** : l'utilisateur est déconnecté brutalement après 24h.
+
+**Points de friction** :
+- Aucun verrouillage de compte après N tentatives échouées → vulnérable au brute-force.
+- `password_hash` en VARCHAR(500) → bcrypt produit ~60 chars, mais place pour futures algos.
+- Aucune notification de "session expirée bientôt" côté UI.
+
+### Workflow 11 — Gestion des rôles (droits et filtrage d'affichage)
+
+**Déclencheur** : un utilisateur navigue dans l'application.
+
+**Code** : `AuthContext.js:7-35` (frontend) + `utilisateurs.py:17-22` (backend) — duplication des tables de droits.
+
+**Rôles supportés** (depuis tag `v2.3.0` qui a supprimé `CONSULTANT` et ajouté `TECHNICIEN`) :
+
+| Rôle | Droits effectifs | Vue par défaut | Particularité |
+|---|---|---|---|
+| `ADMIN` | tous | Dashboard complet | seul à pouvoir gérer Utilisateurs, Paramètres, vider cache |
+| `GESTIONNAIRE` | tout sauf `parametres`, `utilisateurs` | Dashboard complet | équivalent ADMIN sur le métier |
+| `FORMATEUR` | aucun droit listé | `/mes-prestations` | menu réduit à 3 entrées, redirigé si tente d'accéder à `/` (cf. `getForbiddenRedirect`) |
+| `TECHNICIEN` | `contrats_lecture` uniquement | Dashboard simplifié | menu 5 entrées, accès lecture seule aux contrats |
+
+**Mécanique** :
+
+```
+1. Côté backend
+   - Le décorateur Depends(get_current_user) injecte le user
+   - require_admin (utilisateurs.py:24) garde-fou pour les endpoints admin
+   - Sinon : pas de check de rôle (cf. anti-pattern phase 3 #2)
+
+2. Côté frontend
+   - PrivateRoute.allow = (u) => u.role !== 'FORMATEUR' bloque par redirect
+   - Layout.cleanMenu filtre les items selon droits[item.droit]
+   - Plusieurs pages testent localement user.role ou droits.xxx avant
+     d'afficher un bouton (ex : bouton "Supprimer modèle" en ADMIN)
+```
+
+**Effets de bord** : un FORMATEUR qui tape directement `/contrats` dans l'URL est **redirigé** vers `/mes-prestations`. Un TECHNICIEN qui tape `/parametres` est **redirigé** vers `/` (le predicate `allow={isNotFormateur}` le laisse passer côté route, mais Layout cache l'item dans le menu — et le backend renvoie 403 si tentative d'écriture).
+
+**Points de friction** :
+- Backend trust frontend (cf. anti-pattern phase 3 #2). Un TECHNICIEN motivé peut écrire sur `/api/contrats` directement avec son JWT.
+- Pas de notion de **rôle multiple** : un utilisateur ne peut être qu'un seul rôle. Si un ADMIN doit aussi gérer ses prestations en tant que formateur, il faut lier `formateur_id`.
+- La **suppression du rôle `CONSULTANT`** (v2.3.0) a été suivie d'aucune migration explicite. Si des utilisateurs `CONSULTANT` existaient en DB, `getDroitsByRole` les fait tomber dans le `default` (tout `false`) côté frontend, et `require_admin` les rejette côté backend.
+
+### Workflow 12 — Nouveaux workflows apparus depuis l'audit v2.3.0
+
+#### 12.1 — Dashboard refondu (tag `v2.4.2`, commit `2174640`)
+
+**Déclencheur** : ouverture de `/`.
+
+**Avant** : `Dashboard.js` faisait 3-4 appels distincts (`/api/contrats?statut=EN_COURS`, `/api/contrats/renouvellements`, `/api/commandes/stats`), agrégeait côté client, et boucle par famille.
+
+**Après** :
+- 1 seul endpoint backend `GET /api/dashboard/stats` (`dashboard.py:39`) qui retourne toutes les KPI agrégées.
+- Côté frontend, `dashboardAPI.stats()` est appelé une seule fois.
+- Le mapping `FAMILLE_LABELS` (8 entrées) est codé en dur côté backend ; le mapping `FAMILLE_META` (icônes/couleurs) est codé en dur côté frontend (cf. anti-pattern phase 5 #8).
+
+**Effet de bord persistant** : `Dashboard.js:88-94` continue de lancer `POST /api/synchro/lancer` en arrière-plan au montage, ce qui peut déclencher une sync clients+articles complète (cf. anti-pattern phase 5 #5).
+
+#### 12.2 — Sync devis Karlia avec rate-limit et retry (tags `v2.3.2` + `v2.4.5`)
+
+**Évolution** : commits `99c0d9b` (fix paramètre `id_type → type`), `6e4e714` (sleep 1.2s + retry 429), `8cf0cf3` (rattrapage one-shot des 106 pdf_url manquants).
+
+**Endpoint** : `POST /api/commandes/sync`.
+
+**Mécanique nouvelle** :
+- `KARLIA_SYNC_SLEEP_SECONDS=1.2` (`config.py:32`) entre chaque devis → 50 req/min max
+- `_get_with_retry` (`karlia_devis_service.py:84`) : backoffs 5s/15s/30s sur 429 et erreurs réseau
+- Compteurs étendus : `pdf_url_renseigne`, `pdf_url_absent`, `documents_rejetes_par_type`
+- Défense en profondeur : rejet si `id_type != 1` côté Python (même si Karlia filtre déjà)
+
+**Historique de l'incident traité** : `docs/DIAGNOSTIC_PDF_COMMANDES.md` (261 lignes) — sync du 20/05/2026 ayant créé 106 commandes avec `pdf_url=None`. Le script `scripts/rattrapage_pdf_url.py` (203 lignes) a corrigé via `get_devis_detail()` séquentiel.
+
+#### 12.3 — Cleanup BC commandes (tag `v2.3.1`, commit `1045343`)
+
+**Contexte** : 66 documents `BC*` (Bons de Commande, `id_type=2`) avaient été importés à tort en tant que `commandes` parce que l'ancien filtre Karlia `id_type=1` était silencieusement ignoré côté serveur (Karlia attend `type=1`).
+
+**Script** : `scripts/cleanup_bc_commandes.py` (100 lignes) — exécuté hors container.
+
+**Backup** : `backups/backup_pre_cleanup_bc_20260520_163107.sql` (git-ignoré) + `backups/deleted_bc_ids_20260520_164326.txt` (versionné, 66 IDs).
+
+#### 12.4 — Factures Karlia en Brouillon (tags `v2.4.1` puis `v2.4.6.1`)
+
+**Évolution** :
+- Avant : `id_status=2` (Envoyée) → la facture était immédiatement envoyée au client
+- `v2.4.1` (commit `34b2991`) : `id_status=1` (Brouillon) — validation manuelle requise
+- `v2.4.6.1` (commit `ed3f9d5`, **non mergé sur main**) : `id_status=0` (Brouillon "non finalisé") sur **tous les chemins de facturation**
+
+**Impact** : sécurise le workflow facturation — aucune facture ne part automatiquement sans relecture humaine dans Karlia.
+
+#### 12.5 — Tri date_devis / date_acceptation (tag `v2.4.5`, commit `5887188`)
+
+**Contexte** : la page `NouvellesCommandes` permet désormais de trier les commandes par date_devis et date_acceptation (avant : tri implicite par date_import uniquement).
+
+**Endpoint impacté** : `GET /api/commandes/nouvelles` (et autres listes statut) supporte un paramètre `sort` côté frontend (paramètre côté backend pas systématiquement implémenté — à vérifier).
+
+#### 12.6 — Service Google Calendar retiré
+
+**Trace** : diff phase 0 montre `-44 lignes` sur `backend/app/services/google_calendar_service.py`. Le fichier n'existe plus.
+
+**Impact** :
+- La table `prestations` garde **5 colonnes orphelines** (cf. § 2.15).
+- La table `formateurs.email_google` garde son sens (utilisable manuellement).
+- Aucun workflow Google Calendar actif côté frontend (la page `MesPrestations` n'a aucune intégration calendrier).
+
+**Trace dans la branche** : `feature/google-agenda-planning` existe sur origin mais pas mergée — c'est probablement la branche où le service avait été dévoloppé puis retiré.
+
+#### 12.7 — Cleanup pdf_devis Base64 (tag `v2.4.6`, commit `f71d223`)
+
+**Contexte** : le champ `commandes.pdf_devis` (déclaré `Text` dans `models.py` mais `bytea` en DB) recevait historiquement le PDF du devis encodé en base64. Ce mécanisme n'est plus utilisé depuis l'ajout de `pdf_url` qui pointe vers Karlia. Le commit retire le code mort.
+
+**Impact résiduel** : la divergence type `models.py:Text` vs `DB:bytea` persiste (cf. divergence #4 phase 2).
+
 ---
