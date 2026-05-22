@@ -65,6 +65,23 @@ class ChorusProService:
         self._access_token: Optional[str] = None
         self._token_expires: Optional[datetime] = None
 
+    def _cpro_account_header(self) -> str:
+        """
+        Valeur du header HTTP `cpro-account` attendu par Chorus Pro (PISTE).
+
+        Format : base64("<tech_username>:<tech_password>"), credentials du
+        compte technique Chorus Pro (compte "cpro-account", distinct du
+        couple client_id/client_secret PISTE).
+
+        Réutilisé par _get_access_token (Authorization Basic interne) et
+        par ChorusFluxService._build_headers (header cpro-account des
+        endpoints /deposer/flux et /consulter/compteRendu). Construction
+        unique pour éviter toute divergence byte-à-byte entre voies.
+        """
+        return base64.b64encode(
+            f"{self.tech_username}:{self.tech_password}".encode()
+        ).decode()
+
     async def _get_access_token(self) -> str:
         """Obtient un token OAuth2 via PISTE."""
         # Vérifier si le token est encore valide
@@ -72,10 +89,8 @@ class ChorusProService:
             if datetime.now() < self._token_expires:
                 return self._access_token
 
-        # Credentials en Base64
-        credentials = base64.b64encode(
-            f"{self.tech_username}:{self.tech_password}".encode()
-        ).decode()
+        # Credentials en Base64 (compte technique Chorus Pro)
+        credentials = self._cpro_account_header()
 
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(
