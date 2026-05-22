@@ -15,7 +15,8 @@ import {
   Error as ErrorIcon,
   HourglassEmpty as PendingIcon,
   Info as InfoIcon,
-  Edit as EditIcon
+  Edit as EditIcon,
+  Sync as SyncStatusIcon
 } from '@mui/icons-material';
 import { format } from 'date-fns';
 import { fr } from 'date-fns/locale';
@@ -49,6 +50,8 @@ export default function ChorusProPage() {
   const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [transmitting, setTransmitting] = useState(false);
+  // Set des facture_id en cours de rafraîchissement de statut (spinner par ligne).
+  const [refreshing, setRefreshing] = useState(new Set());
   const [selected, setSelected] = useState([]);
   const [search, setSearch] = useState('');
   const [statutFilter, setStatutFilter] = useState('');
@@ -170,6 +173,51 @@ export default function ChorusProPage() {
       });
     } finally {
       setTransmitting(false);
+    }
+  };
+
+  // Rafraîchit le statut d'une facture déposée : appelle l'endpoint backend
+  // qui interroge Chorus Pro (consulter/compteRendu) et met à jour les
+  // colonnes chorus_statut_technique / chorus_date_statut + fait évoluer
+  // statut_chorus (TRANSMISE → ACCEPTEE / REJETEE / reste TRANSMISE).
+  const rafraichirStatut = async (facture) => {
+    if (!facture.chorus_numero_flux) {
+      setSnackbar({
+        open: true,
+        message: 'Aucun numéro de flux à rafraîchir pour cette facture.',
+        severity: 'warning'
+      });
+      return;
+    }
+    setRefreshing(prev => {
+      const next = new Set(prev);
+      next.add(facture.id);
+      return next;
+    });
+    try {
+      const response = await api.post(`/api/chorus/factures/${facture.id}/rafraichir-statut`);
+      const data = response.data;
+      setSnackbar({
+        open: true,
+        message: `Statut rafraîchi : ${data.transition}${data.libelle ? ` — ${data.libelle}` : ''}`,
+        severity: data.statut_chorus === 'REJETEE' ? 'error'
+                 : data.statut_chorus === 'ACCEPTEE' ? 'success'
+                 : 'info'
+      });
+      chargerFactures();
+      chargerStats();
+    } catch (error) {
+      setSnackbar({
+        open: true,
+        message: error.response?.data?.detail || 'Erreur lors du rafraîchissement du statut',
+        severity: 'error'
+      });
+    } finally {
+      setRefreshing(prev => {
+        const next = new Set(prev);
+        next.delete(facture.id);
+        return next;
+      });
     }
   };
 
@@ -344,19 +392,21 @@ export default function ChorusProPage() {
               <TableCell align="right">Montant HT</TableCell>
               <TableCell>Date</TableCell>
               <TableCell>Statut</TableCell>
+              <TableCell>N° Flux</TableCell>
+              <TableCell>Statut technique</TableCell>
               <TableCell>Actions</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
             {loading ? (
               <TableRow>
-                <TableCell colSpan={8} align="center" sx={{ py: 4 }}>
+                <TableCell colSpan={10} align="center" sx={{ py: 4 }}>
                   <CircularProgress />
                 </TableCell>
               </TableRow>
             ) : factures.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={8} align="center" sx={{ py: 4 }}>
+                <TableCell colSpan={10} align="center" sx={{ py: 4 }}>
                   <Typography color="text.secondary">
                     Aucune facture. Cliquez sur "Importer depuis Karlia" pour synchroniser.
                   </Typography>
@@ -366,6 +416,11 @@ export default function ChorusProPage() {
               factures.map((facture) => {
                 const statInfo = STATUT_LABELS[facture.statut_chorus] || { label: facture.statut_chorus, color: 'default' };
                 const isTransmissible = ['NON_TRANSMISE', 'ERREUR', 'REJETEE'].includes(facture.statut_chorus);
+                // Le bouton Rafraîchir n'a de sens que pour les factures déjà
+                // déposées (donc avec un numéro de flux). Inutile sur les
+                // factures jamais transmises ou en erreur de pré-dépôt.
+                const peutRafraichir = !!facture.chorus_numero_flux;
+                const isRefreshing = refreshing.has(facture.id);
 
                 return (
                   <TableRow
@@ -419,13 +474,48 @@ export default function ChorusProPage() {
                       </Tooltip>
                     </TableCell>
                     <TableCell>
-                      {isTransmissible && (
-                        <Tooltip title="Modifier SIRET">
-                          <IconButton size="small" onClick={() => ouvrirEditSiret(facture)}>
-                            <EditIcon fontSize="small" />
-                          </IconButton>
-                        </Tooltip>
+                      {facture.chorus_numero_flux ? (
+                        <Typography variant="body2" fontFamily="monospace">
+                          {facture.chorus_numero_flux}
+                        </Typography>
+                      ) : (
+                        <Typography variant="body2" color="text.secondary">-</Typography>
                       )}
+                    </TableCell>
+                    <TableCell>
+                      {facture.chorus_statut_technique ? (
+                        <Tooltip title={facture.chorus_date_statut ? `Dernier statut : ${facture.chorus_date_statut}` : ''}>
+                          <Typography variant="body2" fontFamily="monospace">
+                            {facture.chorus_statut_technique}
+                          </Typography>
+                        </Tooltip>
+                      ) : (
+                        <Typography variant="body2" color="text.secondary">-</Typography>
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      <Box sx={{ display: 'flex', gap: 0.5 }}>
+                        {peutRafraichir && (
+                          <Tooltip title="Rafraîchir statut Chorus Pro">
+                            <span>
+                              <IconButton
+                                size="small"
+                                onClick={() => rafraichirStatut(facture)}
+                                disabled={isRefreshing}
+                              >
+                                {isRefreshing ? <CircularProgress size={16} /> : <SyncStatusIcon fontSize="small" />}
+                              </IconButton>
+                            </span>
+                          </Tooltip>
+                        )}
+                        {isTransmissible && (
+                          <Tooltip title="Modifier SIRET">
+                            <IconButton size="small" onClick={() => ouvrirEditSiret(facture)}>
+                              <EditIcon fontSize="small" />
+                            </IconButton>
+                          </Tooltip>
+                        )}
+                      </Box>
                     </TableCell>
                   </TableRow>
                 );

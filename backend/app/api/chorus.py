@@ -16,7 +16,7 @@ from app.models.models import (
     FactureKarlia, TransmissionChorus, Parametre, ClientCache
 )
 from app.services.chorus_service import ChorusProService, ChorusError, get_chorus_service_from_params
-from app.services.chorus_flux_service import ChorusFluxService, DepotFluxResult
+from app.services.chorus_flux_service import ChorusFluxService, DepotFluxResult, CompteRenduResult
 from app.services.facturx_orchestrator import (
     build_facturx_for_karlia_document,
     FacturxOrchestrationError,
@@ -57,6 +57,7 @@ class FactureKarliaOut(BaseModel):
     date_transmission: Optional[datetime] = None
     chorus_numero_flux: Optional[str] = None
     chorus_statut_technique: Optional[str] = None
+    chorus_date_statut: Optional[datetime] = None
     chorus_message_erreur: Optional[str] = None
     contrat_id: Optional[str] = None
     imported_at: datetime
@@ -95,6 +96,19 @@ class SynchroFacturesResponse(BaseModel):
     message: str
 
 
+class RafraichirStatutResponse(BaseModel):
+    """Réponse de POST /factures/{id}/rafraichir-statut."""
+    facture_id: str
+    statut_chorus: str
+    chorus_statut_technique: Optional[str] = None
+    chorus_date_statut: Optional[datetime] = None
+    chorus_numero_flux: Optional[str] = None
+    chorus_message_erreur: Optional[str] = None
+    transition: str           # ex. "TRANSMISE→ACCEPTEE", "TRANSMISE→TRANSMISE (en cours)"
+    libelle: Optional[str] = None
+    raw: Optional[dict] = None
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # HELPERS
 # ══════════════════════════════════════════════════════════════════════════════
@@ -115,6 +129,50 @@ def _get_chorus_service(db: Session) -> ChorusProService:
             detail="Configuration Chorus Pro incomplète. Vérifiez les paramètres dans l'écran Paramètres."
         )
     return service
+
+
+def _mapper_statut_chorus(statut_technique: Optional[str]) -> Optional[str]:
+    """
+    Mappe un statut technique Chorus Pro (statutFlux) vers le statut applicatif.
+
+    Valeurs Chorus connues (consulter/compteRendu) :
+      - IN_INTEGRE / INTEGRE        → intégration réussie     → ACCEPTEE
+      - IN_REJETE  / REJETE         → rejet                    → REJETEE
+      - IN_EN_COURS / EN_COURS / IN_TRAITE_PARTIEL / autres
+                                    → traitement en cours      → None (on garde TRANSMISE)
+
+    Retourne None si l'état n'est pas terminal — la facture reste TRANSMISE
+    en attendant un prochain rafraîchissement.
+    """
+    if not statut_technique:
+        return None
+    s = statut_technique.upper()
+    if "INTEGRE" in s:
+        return "ACCEPTEE"
+    if "REJETE" in s or "REJET" in s:
+        return "REJETEE"
+    return None
+
+
+def _parse_date_chorus(s: Optional[str]) -> Optional[datetime]:
+    """
+    Parse une date Chorus Pro (format variable selon l'endpoint).
+    Tente ISO 8601 complet puis date seule. Retourne None si non parseable
+    (on ne casse pas le rafraîchissement pour un format inattendu).
+    """
+    if not s:
+        return None
+    s = str(s).strip()
+    for fmt in ("%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(s[:len(fmt) + 6] if "%f" in fmt else s[:len(fmt)], fmt)
+        except ValueError:
+            continue
+    try:
+        # ISO 8601 avec Z ou offset
+        return datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return None
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -298,6 +356,7 @@ async def lister_factures(
             date_transmission=f.date_transmission,
             chorus_numero_flux=f.chorus_numero_flux,
             chorus_statut_technique=f.chorus_statut_technique,
+            chorus_date_statut=f.chorus_date_statut,
             chorus_message_erreur=f.chorus_message_erreur,
             contrat_id=str(f.contrat_id) if f.contrat_id else None,
             imported_at=f.imported_at
@@ -335,6 +394,7 @@ async def obtenir_facture(
         date_transmission=facture.date_transmission,
         chorus_numero_flux=facture.chorus_numero_flux,
         chorus_statut_technique=facture.chorus_statut_technique,
+        chorus_date_statut=facture.chorus_date_statut,
         chorus_message_erreur=facture.chorus_message_erreur,
         contrat_id=str(facture.contrat_id) if facture.contrat_id else None,
         imported_at=facture.imported_at
@@ -408,7 +468,7 @@ async def transmettre_factures(
         - Pas de suivi post-dépôt : on stocke "TRANSMISE" dès que Chorus a
           accepté le flux, mais le statut d'intégration réel (IN_INTEGRE /
           IN_REJETE) requiert un POST /consulter/compteRendu différé, qui
-          sera exposé dans un endpoint séparé.
+          est exposé via POST /factures/{id}/rafraichir-statut.
     """
     service = _get_chorus_service(db)
     flux_svc = ChorusFluxService(service)
@@ -612,6 +672,102 @@ async def transmettre_factures(
         "echecs": nb_echecs,
         "details": resultats,
     }
+
+
+@router.post("/factures/{facture_id}/rafraichir-statut", response_model=RafraichirStatutResponse)
+async def rafraichir_statut_facture(
+    facture_id: str,
+    db: Session = Depends(get_db),
+    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE"))
+):
+    """
+    Rafraîchit le statut technique d'une facture déposée via /deposer/flux.
+
+    Appelle POST /consulter/compteRendu côté Chorus Pro pour le
+    chorus_numero_flux de la facture, met à jour les colonnes
+    chorus_statut_technique + chorus_date_statut, et fait évoluer
+    statut_chorus selon l'état terminal renvoyé :
+
+        statut Chorus contient "INTEGRE"  → statut_chorus = "ACCEPTEE"
+        statut Chorus contient "REJETE"   → statut_chorus = "REJETEE"
+                                            + chorus_message_erreur = libellé
+        sinon (traitement en cours)       → statut_chorus reste "TRANSMISE"
+
+    Pré-requis : la facture doit avoir un chorus_numero_flux (donc avoir
+    été déposée via /transmettre). Sinon 400.
+
+    L'endpoint est idempotent côté local : on peut le rappeler autant que
+    nécessaire — chaque appel écrase l'état local avec la réponse Chorus
+    courante. Aucun appel à Chorus n'est fait si le numéro de flux est absent.
+    """
+    facture = db.query(FactureKarlia).filter(FactureKarlia.id == facture_id).first()
+    if not facture:
+        raise HTTPException(status_code=404, detail="Facture non trouvée")
+
+    if not facture.chorus_numero_flux:
+        raise HTTPException(
+            status_code=400,
+            detail="Aucun numéro de flux Chorus à rafraîchir (facture non transmise).",
+        )
+
+    service = _get_chorus_service(db)
+    flux_svc = ChorusFluxService(service)
+
+    logger.info(
+        "Chorus rafraichir-statut: facture=%r numeroFluxDepot=%s",
+        facture.numero_facture, facture.chorus_numero_flux,
+    )
+
+    try:
+        cr: CompteRenduResult = await flux_svc.consulter_cr(facture.chorus_numero_flux)
+    except ChorusError as e:
+        logger.error(
+            "Chorus rafraichir-statut: ChorusError facture=%r status=%s msg=%s",
+            facture.numero_facture, e.status_code, e.message,
+        )
+        raise HTTPException(status_code=e.status_code, detail=str(e))
+
+    logger.info(
+        "Chorus rafraichir-statut: réponse facture=%r codeRetour=%s statut=%r "
+        "libelle=%r dateTraitement=%s raw=%s",
+        facture.numero_facture, cr.code_retour, cr.statut, cr.libelle,
+        cr.date_traitement, cr.raw,
+    )
+
+    statut_avant = facture.statut_chorus
+    nouveau_statut = _mapper_statut_chorus(cr.statut)
+
+    # Toujours stocker le statut technique brut + la date du CR (traçabilité).
+    facture.chorus_statut_technique = cr.statut
+    facture.chorus_date_statut = _parse_date_chorus(cr.date_traitement)
+
+    if nouveau_statut == "ACCEPTEE":
+        facture.statut_chorus = "ACCEPTEE"
+        facture.chorus_message_erreur = None
+    elif nouveau_statut == "REJETEE":
+        facture.statut_chorus = "REJETEE"
+        # Libellé Chorus = motif principal ; raw contient le détail complet
+        # si l'utilisateur a besoin de creuser via l'écran d'admin.
+        facture.chorus_message_erreur = cr.libelle or f"Rejet Chorus (statut technique: {cr.statut})"
+    # else : état non terminal → on garde statut_chorus inchangé (TRANSMISE).
+
+    db.commit()
+
+    transition = f"{statut_avant}→{facture.statut_chorus}"
+    if nouveau_statut is None and statut_avant == facture.statut_chorus:
+        transition = f"{statut_avant}→{facture.statut_chorus} (en cours)"
+
+    return RafraichirStatutResponse(
+        facture_id=str(facture.id),
+        statut_chorus=facture.statut_chorus,
+        chorus_statut_technique=facture.chorus_statut_technique,
+        chorus_date_statut=facture.chorus_date_statut,
+        chorus_numero_flux=facture.chorus_numero_flux,
+        chorus_message_erreur=facture.chorus_message_erreur,
+        transition=transition,
+        libelle=cr.libelle,
+        raw=cr.raw,
+    )
 
 
 @router.get("/factures/{facture_id}/transmissions", response_model=List[TransmissionOut])
