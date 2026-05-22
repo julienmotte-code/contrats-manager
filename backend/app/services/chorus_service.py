@@ -35,6 +35,13 @@ class ChorusProService:
     """
     Client pour l'API Chorus Pro via PISTE.
     Utilise OAuth2 pour l'authentification.
+
+    Deux jeux de credentials, à NE PAS confondre :
+      - client_id / client_secret = identité de l'app PISTE (ex. ConnecteurChorusSgi).
+        Sert UNIQUEMENT à obtenir le token OAuth2 (Basic Auth sur /api/oauth/token).
+      - tech_username / tech_password = compte technique Chorus Pro
+        (ex. TECH_<SIRET>@cpp2017.fr). Sert UNIQUEMENT au header `cpro-account`
+        des appels métier (base64). N'a aucun rôle dans l'obtention du token.
     """
 
     def __init__(
@@ -117,16 +124,18 @@ class ChorusProService:
         return base64.b64encode(raw).decode()
 
     async def _get_access_token(self) -> str:
-        """Obtient un token OAuth2 via PISTE."""
+        """
+        Obtient un token OAuth2 via PISTE (grant_type=client_credentials).
+
+        Authentification du client OAuth2 : Basic Auth avec
+        client_id:client_secret (identité de l'app PISTE).
+        Le compte technique (tech_username/tech_password) n'intervient PAS ici ;
+        il est réservé au header `cpro-account` des appels métier.
+        """
         # Vérifier si le token est encore valide
         if self._access_token and self._token_expires:
             if datetime.now() < self._token_expires:
                 return self._access_token
-
-        # Credentials en Base64
-        credentials = base64.b64encode(
-            f"{self.tech_username}:{self.tech_password}".encode()
-        ).decode()
 
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(
@@ -137,9 +146,12 @@ class ChorusProService:
                 },
                 headers={
                     "Content-Type": "application/x-www-form-urlencoded",
-                    "Authorization": f"Basic {credentials}",
+                    "Accept": "application/json",
                 },
-                auth=(self.client_id, self.client_secret)
+                # Basic Auth client OAuth2 : httpx pose Authorization: Basic
+                # base64(client_id:client_secret). NE PAS poser un header
+                # Authorization manuel ici — ce serait soit dupliqué, soit incorrect.
+                auth=(self.client_id, self.client_secret),
             )
 
             if response.status_code != 200:
@@ -202,8 +214,13 @@ class ChorusProService:
                     correl = response.headers.get("x-correlationid")
                     message = (
                         f"Erreur sur {endpoint} — 403 vide de PISTE "
-                        f"(x-correlationid={correl}). Causes typiques : souscription PISTE inactive, "
-                        "scope manquant, IP non autorisée, ou en-tête cpro-account refusé."
+                        f"(x-correlationid={correl}). Causes effectivement rencontrées : "
+                        "(1) credentials d'une autre app PISTE en base "
+                        "(client_id/client_secret ne correspondent pas à l'app souscrite) ; "
+                        "(2) raccordement Chorus Pro de la structure inactif ou non finalisé "
+                        "sur le portail chorus-pro.gouv.fr. "
+                        "Autres causes possibles : souscription PISTE inactive, scope manquant, "
+                        "IP non autorisée, ou en-tête cpro-account refusé."
                     )
                 else:
                     message = f"Erreur sur {endpoint}"
