@@ -251,8 +251,13 @@ def build_facture_input(
     siret_emetteur: str,
 ) -> FactureInput:
     """Assemble le FactureInput consommé par facturx_cii_builder."""
-    cust_ref = (karlia_doc.get("customer_reference") or "").strip() or None
     date_end = _parse_date(karlia_doc.get("date_end"))
+    # BT-10 BuyerReference : on laisse les deux sources à None pour que le
+    # builder tombe sur le cas 3 (élément ram:BuyerReference absent du XML).
+    # Karlia ne fournit pas de référence acheteur fiable (customer_reference
+    # est libre côté fournisseur, code_service_destinataire pas garanti),
+    # et BT-10 est optionnel en EN 16931 BASIC : "pas de référence" est
+    # accepté par Chorus Pro. Pas de valeur bidon -> élément omis.
     return FactureInput(
         numero_facture=facture.numero_facture,
         date_facture=facture.date_facture,
@@ -263,8 +268,8 @@ def build_facture_input(
         montant_ht_total=facture.montant_ht or Decimal("0"),
         montant_tva_total=facture.montant_tva or Decimal("0"),
         montant_ttc_total=facture.montant_ttc or Decimal("0"),
-        numero_engagement=cust_ref,
-        code_service_destinataire=(facture.client_code_service or None),
+        numero_engagement=None,
+        code_service_destinataire=None,
     )
 
 
