@@ -1,6 +1,7 @@
 """
 API Chorus Pro — Gestion des transmissions de factures
 """
+import asyncio
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import func, desc
@@ -15,11 +16,23 @@ from app.models.models import (
     FactureKarlia, TransmissionChorus, Parametre, ClientCache
 )
 from app.services.chorus_service import ChorusProService, ChorusError, get_chorus_service_from_params
+from app.services.chorus_flux_service import ChorusFluxService, DepotFluxResult
+from app.services.facturx_orchestrator import (
+    build_facturx_for_karlia_document,
+    FacturxOrchestrationError,
+)
 from app.services.karlia_service import karlia, KarliaError
 from app.core.security import require_role
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/chorus", tags=["Chorus Pro"])
+
+
+# Délai inter-facture en secondes : évite de marteler l'API Chorus quand on
+# transmet en lot. Volontairement court (compatible avec nginx 60s pour
+# quelques factures), pas conçu pour gros volumes — voir note dans
+# transmettre_factures pour le passage en tâche de fond.
+DELAI_INTER_FACTURE_SEC = 0.7
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -69,6 +82,9 @@ class TransmissionOut(BaseModel):
 
 class TransmettreRequest(BaseModel):
     facture_ids: List[str]
+    # Champ historique conservé pour compat front. Ignoré par la voie flux :
+    # la référence acheteur (BT-10) est gérée dans le XML CII embarqué, et
+    # on a fait le choix d'omettre BT-10 (valeur Karlia non fiable).
     code_service_destinataire: Optional[str] = None
 
 
@@ -356,9 +372,47 @@ async def transmettre_factures(
     current_user = Depends(require_role("ADMIN", "GESTIONNAIRE"))
 ):
     """
-    Transmet une ou plusieurs factures vers Chorus Pro.
+    Transmet une ou plusieurs factures vers Chorus Pro via la voie
+    'dépôt de flux' Factur-X.
+
+    Pipeline par facture (indépendant — l'échec d'une n'arrête pas les autres) :
+        1. Charger FactureKarlia + valider SIRET destinataire.
+        2. Générer le Factur-X (PDF/A-3 + XML CII embarqué) via
+           build_facturx_for_karlia_document.
+        3. Déposer sur /deposer/flux (syntaxe IN_DP_E2_CII_FACTURX).
+        4. Sur succès (codeRetour=0 + numeroFluxDepot) : statut_chorus =
+           "TRANSMISE", numéro de flux et date de transmission stockés.
+        5. Sur échec : statut_chorus = "ERREUR", message d'erreur stocké.
+        6. db.commit() par facture, trace dans TransmissionChorus à chaque
+           tentative, délai court entre factures.
+
+    Garde anti-doublon : on bloque seulement les factures déjà acceptées côté
+    Chorus ("TRANSMISE" ou "ACCEPTEE"). "EN_COURS" n'est PAS bloquant : un
+    EN_COURS sans dépôt abouti est un verrou orphelin (crash entre commit du
+    verrou et résultat) — il doit être relançable depuis le module, pas en
+    SQL manuel. "ERREUR" est également relançable (retry après correction).
+
+    Robustesse du verrou : toutes les branches d'exception et la branche
+    "codeRetour ≠ 0" font transitionner statut_chorus de EN_COURS vers
+    ERREUR avec db.commit() avant de passer à la facture suivante. Le seul
+    cas résiduel de blocage est un crash brutal (kill -9, OOM) entre le
+    commit du verrou et le résultat — récupérable via relance grâce à la
+    règle ci-dessus.
+
+    Limites actuelles :
+        - Synchrone : la requête HTTP frontend attend la fin de la boucle.
+          Avec nginx en proxy (timeout 60s), au-delà de ~10-15 factures le
+          frontend recevra un 504 même si le backend continue. Le multi-
+          facture massif devra basculer en tâche de fond (Celery / asyncio
+          task / endpoint de polling) dans une itération ultérieure.
+        - Pas de suivi post-dépôt : on stocke "TRANSMISE" dès que Chorus a
+          accepté le flux, mais le statut d'intégration réel (IN_INTEGRE /
+          IN_REJETE) requiert un POST /consulter/compteRendu différé, qui
+          sera exposé dans un endpoint séparé.
     """
     service = _get_chorus_service(db)
+    flux_svc = ChorusFluxService(service)
+    is_test = bool(service.mode_qualification)
 
     resultats = []
     for fid in request.facture_ids:
@@ -367,7 +421,9 @@ async def transmettre_factures(
             resultats.append({"facture_id": fid, "succes": False, "erreur": "Facture non trouvée"})
             continue
 
-        if facture.statut_chorus in ("TRANSMISE", "ACCEPTEE", "EN_COURS"):
+        # Seuls TRANSMISE et ACCEPTEE bloquent un nouvel envoi.
+        # EN_COURS est relançable (verrou orphelin possible), voir docstring.
+        if facture.statut_chorus in ("TRANSMISE", "ACCEPTEE"):
             resultats.append({
                 "facture_id": fid,
                 "succes": False,
@@ -383,86 +439,169 @@ async def transmettre_factures(
             })
             continue
 
-        # Créer l'enregistrement de transmission
+        # Relance d'un EN_COURS orphelin : on logge explicitement pour ne
+        # pas masquer le fait qu'on écrase un verrou laissé par une
+        # tentative précédente.
+        if facture.statut_chorus == "EN_COURS":
+            logger.warning(
+                "Chorus transmettre: relance d'une facture en EN_COURS "
+                "(verrou orphelin probable) facture=%r",
+                facture.numero_facture,
+            )
+
+        # Trace + verrou logique côté facture (EN_COURS) commité immédiatement
+        # pour ne pas laisser de fantôme si le process tombe pendant le dépôt.
         transmission = TransmissionChorus(
             facture_id=facture.id,
             statut="EN_COURS",
             transmis_par=current_user.login,
-            transmis_at=datetime.now()
+            transmis_at=datetime.now(),
+            is_test=is_test,
         )
         db.add(transmission)
         facture.statut_chorus = "EN_COURS"
         db.commit()
 
         try:
-            # Appel API Chorus Pro
-            reponse = await service.soumettre_facture(
-                destinataire_siret=facture.client_siret,
-                destinataire_code_service=request.code_service_destinataire or facture.client_code_service,
-                numero_facture=facture.numero_facture,
-                date_facture=facture.date_facture,
-                date_echeance=facture.date_echeance,
-                montant_ht=facture.montant_ht,
-                montant_tva=facture.montant_tva or Decimal("0"),
-                montant_ttc=facture.montant_ttc or facture.montant_ht,
-                commentaire=f"Facture {facture.numero_facture}"
+            # 1) Génération Factur-X (PDF/A-3 + XML CII)
+            logger.info(
+                "Chorus transmettre: début Factur-X facture=%r karlia_doc_id=%s",
+                facture.numero_facture, facture.karlia_document_id,
+            )
+            facturx_result = await build_facturx_for_karlia_document(
+                db, facture.karlia_document_id
+            )
+            pdf_bytes = facturx_result.pdf_facturx_bytes
+            nom_fichier = f"{facture.numero_facture}.pdf"
+
+            # 2) Dépôt /deposer/flux
+            depot: DepotFluxResult = await flux_svc.deposer_flux(pdf_bytes, nom_fichier)
+
+            # 3) Évaluation du résultat. Chorus Pro renvoie codeRetour=0
+            # quand le dépôt est accepté ; un numeroFluxDepot non-nul est
+            # le marqueur de référence pour le suivi ultérieur.
+            depot_ok = (depot.code_retour == 0 and bool(depot.numero_flux_depot))
+
+            # 4) Logging traçabilité (réponse complète) — premier dépôt réel
+            logger.info(
+                "Chorus transmettre: dépôt %s facture=%r numeroFluxDepot=%s "
+                "codeRetour=%s libelle=%r dateDepot=%s raw=%s",
+                "OK" if depot_ok else "KO",
+                facture.numero_facture,
+                depot.numero_flux_depot,
+                depot.code_retour,
+                depot.libelle,
+                depot.date_depot,
+                depot.raw,
             )
 
-            # Mise à jour succès
-            id_flux = reponse.get("numeroFluxDepot") or reponse.get("idFlux")
-            id_facture = reponse.get("identifiantFactureCPP") or reponse.get("idFacture")
+            if depot_ok:
+                facture.statut_chorus = "TRANSMISE"
+                facture.chorus_numero_flux = depot.numero_flux_depot
+                facture.date_transmission = datetime.now()
+                facture.chorus_message_erreur = None
 
-            transmission.statut = "SUCCES"
-            transmission.chorus_id_flux = str(id_flux) if id_flux else None
-            transmission.chorus_id_facture = str(id_facture) if id_facture else None
-            transmission.reponse_json = reponse
+                transmission.statut = "SUCCES"
+                transmission.chorus_id_flux = depot.numero_flux_depot
+                transmission.code_retour = str(depot.code_retour) if depot.code_retour is not None else None
+                transmission.message_retour = depot.libelle
+                transmission.reponse_json = depot.raw
 
-            facture.statut_chorus = "TRANSMISE"
-            facture.date_transmission = datetime.now()
-            facture.chorus_numero_flux = str(id_flux) if id_flux else None
-            facture.chorus_message_erreur = None
+                db.commit()
+                resultats.append({
+                    "facture_id": fid,
+                    "succes": True,
+                    "numero_flux": depot.numero_flux_depot,
+                    "date_depot": depot.date_depot,
+                    "code_retour": depot.code_retour,
+                    "libelle": depot.libelle,
+                })
+            else:
+                # codeRetour ≠ 0 ou numéro de flux absent : Chorus a répondu
+                # mais n'a pas pris en compte le dépôt. On stocke la réponse
+                # brute pour analyse hors-ligne.
+                err_msg = (
+                    f"codeRetour={depot.code_retour}, "
+                    f"libelle={depot.libelle!r}, "
+                    f"numeroFluxDepot={depot.numero_flux_depot!r}"
+                )
+                facture.statut_chorus = "ERREUR"
+                facture.chorus_message_erreur = err_msg
+
+                transmission.statut = "ECHEC"
+                transmission.code_retour = str(depot.code_retour) if depot.code_retour is not None else None
+                transmission.message_retour = depot.libelle or err_msg
+                transmission.reponse_json = depot.raw
+
+                db.commit()
+                resultats.append({
+                    "facture_id": fid,
+                    "succes": False,
+                    "erreur": err_msg,
+                    "detail": depot.raw,
+                })
+
+        except FacturxOrchestrationError as e:
+            # Erreur de génération Factur-X (paramètre manquant, document
+            # Karlia absent, etc.) — pas un échec Chorus, mais bloque le dépôt.
+            logger.error(
+                "Chorus transmettre: échec génération Factur-X facture=%r : %s",
+                facture.numero_facture, e,
+            )
+            facture.statut_chorus = "ERREUR"
+            facture.chorus_message_erreur = f"Génération Factur-X impossible : {e}"
+
+            transmission.statut = "ECHEC"
+            transmission.message_retour = f"Génération Factur-X impossible : {e}"
 
             db.commit()
-
             resultats.append({
                 "facture_id": fid,
-                "succes": True,
-                "numero_flux": id_flux,
-                "id_facture_chorus": id_facture
+                "succes": False,
+                "erreur": f"Génération Factur-X impossible : {e}",
             })
 
         except ChorusError as e:
+            logger.error(
+                "Chorus transmettre: ChorusError facture=%r status=%s msg=%s detail=%s",
+                facture.numero_facture, e.status_code, e.message, e.detail,
+            )
+            facture.statut_chorus = "ERREUR"
+            facture.chorus_message_erreur = f"{e.status_code}: {e.message}"
+
             transmission.statut = "ECHEC"
             transmission.code_retour = str(e.status_code)
             transmission.message_retour = e.message
             transmission.reponse_json = e.detail
 
-            facture.statut_chorus = "ERREUR"
-            facture.chorus_message_erreur = f"{e.status_code}: {e.message}"
-
             db.commit()
-
             resultats.append({
                 "facture_id": fid,
                 "succes": False,
                 "erreur": str(e),
-                "detail": e.detail
+                "detail": e.detail,
             })
 
         except Exception as e:
-            transmission.statut = "ECHEC"
-            transmission.message_retour = str(e)
-
+            logger.exception(
+                "Chorus transmettre: exception inattendue facture=%r",
+                facture.numero_facture,
+            )
             facture.statut_chorus = "ERREUR"
             facture.chorus_message_erreur = str(e)
 
-            db.commit()
+            transmission.statut = "ECHEC"
+            transmission.message_retour = str(e)
 
+            db.commit()
             resultats.append({
                 "facture_id": fid,
                 "succes": False,
-                "erreur": str(e)
+                "erreur": str(e),
             })
+
+        # Délai inter-facture (évite de marteler l'API Chorus).
+        await asyncio.sleep(DELAI_INTER_FACTURE_SEC)
 
     # Résumé
     nb_succes = sum(1 for r in resultats if r.get("succes"))
@@ -471,7 +610,7 @@ async def transmettre_factures(
     return {
         "transmises": nb_succes,
         "echecs": nb_echecs,
-        "details": resultats
+        "details": resultats,
     }
 
 
