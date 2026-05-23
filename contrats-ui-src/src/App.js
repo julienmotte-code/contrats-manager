@@ -5,6 +5,7 @@ import { AuthProvider, useAuth } from './context/AuthContext';
 import Layout from './components/Layout';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
+import DashboardFormateur from './pages/DashboardFormateur';
 import Contrats from './pages/Contrats';
 import NouveauContrat from './pages/NouveauContrat';
 import TunnelContrat from './pages/TunnelContrat';
@@ -36,12 +37,23 @@ function PrivateRoute({ children }) {
   return <Layout>{children}</Layout>;
 }
 
+// Aiguillage du tableau de bord selon le rôle.
+// ADMIN/GESTIONNAIRE : dashboard global (CA, contrats, familles, commandes).
+// FORMATEUR/TECHNICIEN : dashboard restreint (3 tuiles prestations).
+function HomeDashboard() {
+  const { user } = useAuth();
+  if (user?.role === 'FORMATEUR' || user?.role === 'TECHNICIEN') {
+    return <DashboardFormateur />;
+  }
+  return <Dashboard />;
+}
+
 function AppRoutes() {
   const { user } = useAuth();
   return (
     <Routes>
       <Route path="/login" element={user ? <Navigate to="/" replace /> : <Login />} />
-      <Route path="/" element={<PrivateRoute><Dashboard /></PrivateRoute>} />
+      <Route path="/" element={<PrivateRoute><HomeDashboard /></PrivateRoute>} />
       <Route path="/contrats" element={<PrivateRoute><Contrats /></PrivateRoute>} />
       <Route path="/contrats/nouveau" element={<PrivateRoute><NouveauContrat /></PrivateRoute>} />
       <Route path="/contrats/tunnel" element={<PrivateRoute><TunnelContrat /></PrivateRoute>} />
