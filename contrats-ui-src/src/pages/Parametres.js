@@ -19,6 +19,8 @@ const PARAMS_CHORUS = [
   { cle: 'chorus_siret_emetteur', label: 'SIRET émetteur', type: 'text', placeholder: '12345678901234' },
   { cle: 'chorus_code_service', label: 'Code service (optionnel)', type: 'text', placeholder: '' },
   { cle: 'chorus_code_banque', label: 'Code banque (optionnel)', type: 'text', placeholder: '' },
+  { cle: 'chorus_id_fournisseur', label: 'idFournisseur Chorus (requis)', type: 'text', placeholder: 'ID numérique de la structure fournisseur' },
+  { cle: 'chorus_id_utilisateur_courant', label: 'idUtilisateurCourant Chorus (optionnel)', type: 'text', placeholder: 'ID numérique du compte technique' },
 ];
 
 export default function Parametres() {
@@ -44,6 +46,8 @@ export default function Parametres() {
   const [chorusTesting, setChorusTesting] = useState(false);
   const [chorusTestResult, setChorusTestResult] = useState(null);
   const [chorusMode, setChorusMode] = useState('true');
+  const [chorusAutoConfig, setChorusAutoConfig] = useState(false);
+  const [chorusAutoConfigResult, setChorusAutoConfigResult] = useState(null);
 
   const charger = () => {
     setLoading(true);
@@ -161,11 +165,26 @@ export default function Parametres() {
       setChorusTestResult(r.data);
       if (r.data.ok) toast.success('Connexion Chorus Pro OK');
       else toast.error('Connexion Chorus Pro échouée');
-    } catch (e) { 
+    } catch (e) {
       setChorusTestResult({ ok: false, error: e.response?.data?.detail || 'Erreur' });
-      toast.error(e.response?.data?.detail || 'Erreur test connexion'); 
+      toast.error(e.response?.data?.detail || 'Erreur test connexion');
     }
     finally { setChorusTesting(false); }
+  };
+
+  const autoConfigurerChorus = async () => {
+    setChorusAutoConfig(true); setChorusAutoConfigResult(null);
+    try {
+      const r = await api.post('/api/chorus/auto-config');
+      setChorusAutoConfigResult({ ok: true, ...r.data });
+      toast.success('Auto-configuration Chorus Pro effectuée');
+      chargerChorusParams();
+    } catch (e) {
+      const detail = e.response?.data?.detail;
+      const msg = typeof detail === 'object' ? (detail.message || JSON.stringify(detail)) : (detail || 'Erreur auto-configuration');
+      setChorusAutoConfigResult({ ok: false, message: msg, detail });
+      toast.error(msg);
+    } finally { setChorusAutoConfig(false); }
   };
 
   const handleChorusChange = (cle, valeur) => {
@@ -262,12 +281,34 @@ export default function Parametres() {
           </div>
         )}
 
-        <div className="flex gap-3">
+        {chorusAutoConfigResult && (
+          <div className={'rounded-lg px-4 py-3 text-sm ' + (chorusAutoConfigResult.ok ? 'bg-green-50 border border-green-200 text-green-800' : 'bg-red-50 border border-red-200 text-red-800')}>
+            {chorusAutoConfigResult.ok ? (
+              <>
+                ✅ Auto-configuration OK
+                {chorusAutoConfigResult.saved && (
+                  <ul className="mt-2 font-mono text-xs space-y-1">
+                    {Object.entries(chorusAutoConfigResult.saved).map(([k, v]) => (
+                      <li key={k}>{k} = <strong>{String(v)}</strong></li>
+                    ))}
+                  </ul>
+                )}
+              </>
+            ) : (
+              <>❌ {chorusAutoConfigResult.message}</>
+            )}
+          </div>
+        )}
+
+        <div className="flex gap-3 flex-wrap">
           <button onClick={sauvegarderChorus} disabled={chorusSaving} className="btn-primary">
             {chorusSaving ? 'Enregistrement...' : '💾 Enregistrer'}
           </button>
           <button onClick={testerChorusConnexion} disabled={chorusTesting} className="btn-secondary">
             {chorusTesting ? '⏳ Test...' : '🔌 Tester la connexion'}
+          </button>
+          <button onClick={autoConfigurerChorus} disabled={chorusAutoConfig} className="btn-secondary" title="Récupère idFournisseur et idUtilisateurCourant depuis Chorus Pro">
+            {chorusAutoConfig ? '⏳ Récupération...' : '🔧 Auto-configurer (idFournisseur)'}
           </button>
         </div>
       </div>
