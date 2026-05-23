@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   Box, Paper, Typography, Table, TableBody, TableCell, TableContainer,
   TableHead, TableRow, Button, IconButton, Chip, TextField,
@@ -19,14 +20,20 @@ import { fr } from 'date-fns/locale';
 import api from '../services/api';
 import { useAuth } from '../context/AuthContext';
 
+const TAB_INDEX_BY_STATUT = { a_planifier: 0, planifiee: 1, realisee: 2 };
+
 export default function MesPrestations() {
   const { user, droits } = useAuth();
+  const [searchParams] = useSearchParams();
   const [prestations, setPrestations] = useState([]);
   const [stats, setStats] = useState({ a_planifier: 0, planifiees: 0, realisees: 0 });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [success, setSuccess] = useState(null);
-  const [tabValue, setTabValue] = useState(0);
+  const [tabValue, setTabValue] = useState(() => {
+    const tab = searchParams.get('tab');
+    return TAB_INDEX_BY_STATUT[tab] ?? 0;
+  });
 
   const [formateurs, setFormateurs] = useState([]);
   const [selectedFormateur, setSelectedFormateur] = useState(null);
@@ -44,6 +51,13 @@ export default function MesPrestations() {
   // Peut voir tous les formateurs ?
   const canViewAllFormateurs = droits?.toutes_prestations || user?.role === 'ADMIN' || user?.role === 'GESTIONNAIRE';
 
+  // Synchroniser l'onglet actif sur le paramètre d'URL ?tab=
+  useEffect(() => {
+    const tab = searchParams.get('tab');
+    const idx = TAB_INDEX_BY_STATUT[tab];
+    if (idx !== undefined) setTabValue(idx);
+  }, [searchParams]);
+
   // Charger les formateurs pour le sélecteur (admin/gestionnaire uniquement)
   useEffect(() => {
     const fetchFormateurs = async () => {
@@ -51,7 +65,7 @@ export default function MesPrestations() {
         if (canViewAllFormateurs) {
           const res = await api.get('/api/formateurs?actif_only=true');
           setFormateurs(res.data.formateurs || []);
-          
+
           // Si l'utilisateur a un formateur_id, le sélectionner par défaut
           if (user?.formateur_id) {
             const monFormateur = res.data.formateurs.find(f => f.id === user.formateur_id);
@@ -184,7 +198,7 @@ export default function MesPrestations() {
     return (
       <Box sx={{ p: 3 }}>
         <Alert severity="warning">
-          Votre compte n'est pas associé à un profil formateur. 
+          Votre compte n'est pas associé à un profil formateur.
           Veuillez contacter un administrateur.
         </Alert>
       </Box>

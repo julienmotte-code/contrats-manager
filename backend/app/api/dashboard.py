@@ -9,7 +9,7 @@ from datetime import date
 import logging
 
 from app.core.database import get_db
-from app.core.security import require_authenticated
+from app.core.security import require_role
 from app.models.models import Contrat, Commande
 
 logger = logging.getLogger(__name__)
@@ -39,10 +39,12 @@ def _label_famille(code: str) -> str:
 @router.get("/stats")
 def dashboard_stats(
     db: Session = Depends(get_db),
-    current_user = Depends(require_authenticated),
+    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE")),
 ):
     """
     Retourne l'ensemble des statistiques pour la page d'accueil.
+    Réservé aux rôles ADMIN et GESTIONNAIRE — les FORMATEUR/TECHNICIEN
+    utilisent /api/prestations/formateur/{id} via un dashboard dédié.
 
     Forme de la réponse :
     {
