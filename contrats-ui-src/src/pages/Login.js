@@ -18,7 +18,7 @@ export default function Login() {
     <div className="min-h-screen bg-blue-900 flex items-center justify-center">
       <div className="bg-white rounded-2xl shadow-2xl p-8 w-full max-w-md">
         <div className="text-center mb-8">
-          <div className="text-5xl mb-4">📋</div>
+          <img src="/logo_sgi.jpg" alt="SGI" className="w-20 h-20 rounded-full bg-white object-contain mx-auto mb-4 shadow-sm border border-gray-100" />
           <h1 className="text-2xl font-bold text-gray-900">Gestion SGI</h1>
         </div>
         <form onSubmit={handleSubmit} className="space-y-4">

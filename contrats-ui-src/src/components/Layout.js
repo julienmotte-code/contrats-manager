@@ -75,8 +75,9 @@ export default function Layout({ children }) {
   return (
     <div className="min-h-screen flex bg-gray-50">
       <aside className="w-64 bg-blue-900 text-white flex flex-col fixed h-full z-10">
-        <div className="p-5 border-b border-blue-800">
-          <h1 className="text-lg font-bold">📋 Gestion SGI</h1>
+        <div className="p-5 border-b border-blue-800 flex items-center gap-3">
+          <img src="/logo_sgi.jpg" alt="SGI" className="w-10 h-10 rounded-full bg-white object-contain p-1 shrink-0" />
+          <h1 className="text-lg font-bold">Gestion SGI</h1>
         </div>
 
         <nav className="flex-1 p-4 space-y-1 overflow-y-auto">
