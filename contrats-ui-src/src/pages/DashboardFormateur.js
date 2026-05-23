@@ -1,19 +1,30 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
-import {
-  Box, Grid, Card, CardContent, Typography, CircularProgress, Alert
-} from '@mui/material';
-import {
-  Event as EventIcon, Schedule as ScheduleIcon, CheckCircle as DoneIcon
-} from '@mui/icons-material';
-import { format } from 'date-fns';
-import { fr } from 'date-fns/locale';
+import { Link } from 'react-router-dom';
 import api from '../services/api';
 import { useAuth } from '../context/AuthContext';
+import { format } from 'date-fns';
+import { fr } from 'date-fns/locale';
+
+const TUILES = [
+  { key: 'a_planifier', label: 'À planifier', icon: '📅', color: 'bg-amber-50 text-amber-700', to: '/mes-prestations?tab=a_planifier' },
+  { key: 'planifiees',  label: 'Planifiées',  icon: '🗓️', color: 'bg-blue-50 text-blue-700',   to: '/mes-prestations?tab=planifiee' },
+  { key: 'realisees',   label: 'Réalisées',   icon: '✅', color: 'bg-green-50 text-green-700',  to: '/mes-prestations?tab=realisee' },
+];
+
+function PrestationCard({ tuile, count }) {
+  return (
+    <Link to={tuile.to} className={`block p-4 rounded-xl transition-all hover:shadow-md ${tuile.color}`}>
+      <div className="flex items-center justify-between mb-2">
+        <span className="text-2xl">{tuile.icon}</span>
+        <span className="text-2xl font-bold">{count}</span>
+      </div>
+      <div className="text-sm font-medium">{tuile.label}</div>
+    </Link>
+  );
+}
 
 export default function DashboardFormateur() {
   const { user } = useAuth();
-  const navigate = useNavigate();
   const [stats, setStats] = useState({ a_planifier: 0, planifiees: 0, realisees: 0 });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -46,79 +57,39 @@ export default function DashboardFormateur() {
 
   if ((user?.role === 'FORMATEUR' || user?.role === 'TECHNICIEN') && !user?.formateur_id) {
     return (
-      <Box sx={{ p: 3 }}>
-        <Alert severity="warning">
+      <div className="space-y-6">
+        <div className="card bg-amber-50 border-amber-200 text-amber-800">
           Votre compte n'est pas associé à un profil formateur. Contactez un administrateur.
-        </Alert>
-      </Box>
+        </div>
+      </div>
     );
   }
 
-  const tuiles = [
-    {
-      label: 'À planifier',
-      count: stats.a_planifier,
-      icon: <EventIcon sx={{ fontSize: 56 }} />,
-      color: 'warning.main',
-      target: '/mes-prestations?tab=a_planifier',
-    },
-    {
-      label: 'Planifiées',
-      count: stats.planifiees,
-      icon: <ScheduleIcon sx={{ fontSize: 56 }} />,
-      color: 'info.main',
-      target: '/mes-prestations?tab=planifiee',
-    },
-    {
-      label: 'Réalisées',
-      count: stats.realisees,
-      icon: <DoneIcon sx={{ fontSize: 56 }} />,
-      color: 'success.main',
-      target: '/mes-prestations?tab=realisee',
-    },
-  ];
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-64 text-gray-400 text-lg">
+        Chargement...
+      </div>
+    );
+  }
 
   return (
-    <Box sx={{ p: 3 }}>
-      <Box sx={{ mb: 4 }}>
-        <Typography variant="h4">Tableau de bord</Typography>
-        <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
-          {format(new Date(), "EEEE d MMMM yyyy", { locale: fr })}
-        </Typography>
-      </Box>
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-2xl font-bold text-gray-900">Tableau de bord</h1>
+        <p className="text-gray-500 text-sm mt-1">{format(new Date(), "EEEE d MMMM yyyy", { locale: fr })}</p>
+      </div>
 
-      {error && <Alert severity="error" sx={{ mb: 3 }} onClose={() => setError(null)}>{error}</Alert>}
-
-      {loading ? (
-        <Box sx={{ display: 'flex', justifyContent: 'center', py: 6 }}>
-          <CircularProgress />
-        </Box>
-      ) : (
-        <Grid container spacing={3}>
-          {tuiles.map((t) => (
-            <Grid item xs={12} sm={4} key={t.label}>
-              <Card
-                onClick={() => navigate(t.target)}
-                sx={{
-                  cursor: 'pointer',
-                  transition: 'transform 0.15s ease, box-shadow 0.15s ease',
-                  '&:hover': { transform: 'translateY(-2px)', boxShadow: 6 },
-                }}
-              >
-                <CardContent sx={{ textAlign: 'center', py: 4 }}>
-                  <Box sx={{ color: t.color, mb: 1 }}>{t.icon}</Box>
-                  <Typography variant="h2" sx={{ color: t.color, fontWeight: 700, lineHeight: 1 }}>
-                    {t.count}
-                  </Typography>
-                  <Typography variant="body1" color="text.secondary" sx={{ mt: 1.5 }}>
-                    {t.label}
-                  </Typography>
-                </CardContent>
-              </Card>
-            </Grid>
-          ))}
-        </Grid>
+      {error && (
+        <div className="card bg-red-50 border-red-200 text-red-700 text-sm">{error}</div>
       )}
-    </Box>
+
+      <div className="card">
+        <h2 className="font-semibold text-gray-900 mb-4">📋 Mes prestations</h2>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          {TUILES.map(t => <PrestationCard key={t.key} tuile={t} count={stats[t.key]} />)}
+        </div>
+      </div>
+    </div>
   );
 }
