@@ -395,7 +395,7 @@ export default function CommandesAPlanifier() {
               <Typography variant="subtitle2" color="text.secondary">Adresse</Typography>
               <Typography sx={{ whiteSpace: 'pre-line', mb: 2 }}>{detailCommande.client_adresse || '-'}</Typography>
 
-              <Typography variant="h6" sx={{ mt: 2, mb: 1 }}>Lignes du devis</Typography>
+              <Typography variant="h6" sx={{ mt: 2, mb: 1 }}>Lignes du BC</Typography>
               <TableContainer>
                 <Table size="small">
                   <TableHead>

@@ -272,7 +272,7 @@ export default function CommandesPlanifiees() {
                 </>
               )}
 
-              <Typography variant="h6" sx={{ mt: 2, mb: 1 }}>Lignes du devis</Typography>
+              <Typography variant="h6" sx={{ mt: 2, mb: 1 }}>Lignes du BC</Typography>
               <TableContainer>
                 <Table size="small">
                   <TableHead>

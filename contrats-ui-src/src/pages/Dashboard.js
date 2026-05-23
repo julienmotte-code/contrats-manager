@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import api, { dashboardAPI, indicesAPI } from '../services/api';
 import { format } from 'date-fns';
 import { fr } from 'date-fns/locale';
+import { useAuth } from '../context/AuthContext';
 
 // ─── Libellés et icônes par famille de contrat ────────────────
 const FAMILLE_META = {
@@ -70,13 +71,29 @@ function CommandeStatutCard({ statut, count }) {
   );
 }
 
+// Pastille d'état d'une étape de synchro
+function Etape({ label, etat }) {
+  const icone = etat === 'ok' ? '✓' : etat === 'erreur' ? '✗' : etat === 'cours' ? '⏳' : '○';
+  const couleur = etat === 'ok' ? 'text-green-600' : etat === 'erreur' ? 'text-red-600' : etat === 'cours' ? 'text-blue-600' : 'text-gray-400';
+  return (
+    <div className={`flex items-center gap-2 text-sm ${couleur}`}>
+      <span className="w-4 text-center">{icone}</span>
+      <span>{label}{etat === 'cours' ? '…' : ''}</span>
+    </div>
+  );
+}
+
 // ─── Page Dashboard ──────────────────────────────────────────
 export default function Dashboard() {
+  const { user } = useAuth();
+  const peutSynchro = ['ADMIN', 'GESTIONNAIRE'].includes(user?.role);
+
   const [stats, setStats] = useState(null);
   const [indice, setIndice] = useState(null);
   const [loading, setLoading] = useState(true);
   const [synchroInfo, setSynchroInfo] = useState(null);
   const [synchroLoading, setSynchroLoading] = useState(false);
+  const [etapes, setEtapes] = useState(null);
 
   const chargerStats = () => {
     dashboardAPI.stats()
@@ -85,12 +102,10 @@ export default function Dashboard() {
   };
 
   useEffect(() => {
-    // 1. Synchro automatique à l'ouverture (sans bloquer le reste)
-    api.post('/api/synchro/lancer')
+    // 1. Date de dernière synchro Karlia (lecture seule, ne déclenche rien)
+    api.get('/api/synchro/statut')
       .then(r => setSynchroInfo(r.data))
-      .catch(() => {
-        api.get('/api/synchro/statut').then(r => setSynchroInfo(r.data)).catch(() => {});
-      });
+      .catch(() => {});
 
     // 2. Stats dashboard (appel principal)
     dashboardAPI.stats()
@@ -106,15 +121,44 @@ export default function Dashboard() {
 
   const lancerSynchro = async () => {
     setSynchroLoading(true);
+    const init = { clients: 'cours', commandes: 'attente', factures: 'attente' };
+    setEtapes(init);
+    const opts = { timeout: 360000 };
+
+    // Étape 1 : clients + articles
     try {
-      const r = await api.post('/api/synchro/lancer');
-      setSynchroInfo(r.data);
-      chargerStats();
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setSynchroLoading(false);
+      await api.post('/api/synchro/lancer', null, opts);
+      setEtapes(e => ({ ...e, clients: 'ok', commandes: 'cours' }));
+    } catch (err) {
+      console.error(err);
+      setEtapes(e => ({ ...e, clients: 'erreur', commandes: 'cours' }));
     }
+
+    // Étape 2 : bons de commande
+    try {
+      await api.post('/api/commandes/sync?force_full=false', null, opts);
+      setEtapes(e => ({ ...e, commandes: 'ok', factures: 'cours' }));
+    } catch (err) {
+      console.error(err);
+      setEtapes(e => ({ ...e, commandes: 'erreur', factures: 'cours' }));
+    }
+
+    // Étape 3 : factures Karlia (récupération pour Chorus)
+    try {
+      await api.post('/api/chorus/synchro-factures', null, opts);
+      setEtapes(e => ({ ...e, factures: 'ok' }));
+    } catch (err) {
+      console.error(err);
+      setEtapes(e => ({ ...e, factures: 'erreur' }));
+    }
+
+    // Rafraîchir la date de dernière synchro + les stats
+    try {
+      const r = await api.get('/api/synchro/statut');
+      setSynchroInfo(r.data);
+    } catch (_) {}
+    chargerStats();
+    setSynchroLoading(false);
   };
 
   if (loading) {
@@ -146,16 +190,28 @@ export default function Dashboard() {
       </div>
 
       {/* Bandeau synchro */}
-      <div className="bg-white border border-gray-200 rounded-xl px-5 py-3 flex items-center justify-between">
-        <div className="text-sm text-gray-500">
-          🔄 Dernière synchronisation Karlia :
-          <span className="font-medium text-gray-700 ml-1">{synchroInfo?.derniere_synchro || 'Inconnue'}</span>
-          {synchroInfo?.stats && <span className="text-gray-400 ml-2">({synchroInfo.stats})</span>}
+      {peutSynchro && (
+        <div className="bg-white border border-gray-200 rounded-xl px-5 py-3 flex items-center justify-between">
+          <div className="text-sm text-gray-500">
+            🔄 Dernière synchronisation Karlia :
+            <span className="font-medium text-gray-700 ml-1">{synchroInfo?.derniere_synchro || 'Inconnue'}</span>
+            {synchroInfo?.stats && <span className="text-gray-400 ml-2">({synchroInfo.stats})</span>}
+          </div>
+          <button onClick={lancerSynchro} disabled={synchroLoading} className="btn-secondary text-sm py-1.5">
+            {synchroLoading ? '⏳ Synchronisation...' : '🔄 Synchroniser maintenant'}
+          </button>
         </div>
-        <button onClick={lancerSynchro} disabled={synchroLoading} className="btn-secondary text-sm py-1.5">
-          {synchroLoading ? '⏳ Synchronisation...' : '🔄 Synchroniser maintenant'}
-        </button>
-      </div>
+      )}
+
+      {/* Déroulé synchro en direct */}
+      {peutSynchro && etapes && (
+        <div className="bg-white border border-gray-200 rounded-xl px-5 py-3 space-y-1">
+          <div className="text-xs font-medium text-gray-500 mb-1">Synchronisation en cours</div>
+          <Etape label="Clients et articles" etat={etapes.clients} />
+          <Etape label="Bons de commande" etat={etapes.commandes} />
+          <Etape label="Factures" etat={etapes.factures} />
+        </div>
+      )}
 
       {/* KPI globaux */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">

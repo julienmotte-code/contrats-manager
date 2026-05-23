@@ -114,7 +114,7 @@ export default function ContratsACreer() {
 
       <Alert severity="info" sx={{ mb: 2 }}>
         Ces commandes ont été marquées comme nécessitant la création d'un contrat ou avenant.
-        Cliquez sur "Créer contrat" pour pré-remplir le formulaire avec les données du devis.
+        Cliquez sur "Créer contrat" pour pré-remplir le formulaire avec les données du bon de commande.
       </Alert>
 
       <Box sx={{ mb: 2 }}>
@@ -134,7 +134,7 @@ export default function ContratsACreer() {
         <Table size="small">
           <TableHead>
             <TableRow sx={{ backgroundColor: 'grey.100' }}>
-              <TableCell>Référence devis</TableCell>
+              <TableCell>Référence BC</TableCell>
               <TableCell>Client</TableCell>
               <TableCell>Date acceptation</TableCell>
               <TableCell>Statut commande</TableCell>
@@ -237,7 +237,7 @@ export default function ContratsACreer() {
             <Box sx={{ mt: 1 }}>
               <Grid container spacing={2}>
                 <Grid item xs={6}>
-                  <Typography variant="subtitle2" color="text.secondary">Référence devis</Typography>
+                  <Typography variant="subtitle2" color="text.secondary">Référence BC</Typography>
                   <Typography gutterBottom>{detailCommande.reference_devis || '-'}</Typography>
                 </Grid>
                 <Grid item xs={6}>
@@ -266,7 +266,7 @@ export default function ContratsACreer() {
                 </Grid>
               </Grid>
 
-              <Typography variant="h6" sx={{ mt: 3, mb: 1 }}>Lignes du devis</Typography>
+              <Typography variant="h6" sx={{ mt: 3, mb: 1 }}>Lignes du BC</Typography>
               <TableContainer>
                 <Table size="small">
                   <TableHead>

@@ -1,6 +1,12 @@
 """
-Routes API — Commandes (devis acceptés Karlia)
-GET  /api/commandes/sync              → Synchronise les devis depuis Karlia
+Routes API — Commandes (bons de commande validés Karlia)
+
+Depuis la refonte v3.1, la source de synchronisation est les BONS DE COMMANDE
+Karlia (type=2) et non plus les devis (type=1). Les noms d'attributs publics
+(reference_devis, date_devis, date_acceptation) sont CONSERVÉS pour
+compatibilité descendante de l'API et du frontend.
+
+GET  /api/commandes/sync              → Synchronise les BC depuis Karlia
 GET  /api/commandes/stats             → Statistiques
 GET  /api/commandes/nouvelles         → Liste des nouvelles commandes
 GET  /api/commandes/a-planifier       → Liste des commandes à planifier
@@ -11,7 +17,7 @@ GET  /api/commandes/{id}              → Détail d'une commande
 POST /api/commandes/{id}/valider      → Valider une commande (choix traitement)
 POST /api/commandes/{id}/planifier    → Planifier une commande
 POST /api/commandes/{id}/terminer     → Marquer comme terminée
-GET  /api/commandes/{id}/pdf          → Télécharger le PDF du devis
+GET  /api/commandes/{id}/pdf          → Télécharger le PDF du bon de commande
 """
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import RedirectResponse
@@ -111,11 +117,22 @@ class CommandeStats(BaseModel):
 
 
 class SyncDevisResult(BaseModel):
+    """
+    Résultat d'une sync Karlia → commandes locales.
+
+    Les noms de champs commencent par "devis_" / "nouveaux_devis" pour
+    compatibilité historique avec le frontend. Depuis v3.1, ils comptent
+    en réalité des BONS DE COMMANDE.
+    """
     success: bool
     nouveaux_devis: int = 0
     devis_mis_a_jour: int = 0
     devis_ignores: int = 0
+    ignores_avances: int = 0
+    documents_rejetes_par_type: int = 0
     opportunites_marquees: int = 0
+    pdf_url_renseigne: int = 0
+    pdf_url_absent: int = 0
     erreurs: List[str] = []
     message: str = ""
 
@@ -140,11 +157,12 @@ def _commande_to_response(commande: Commande) -> CommandeResponse:
     nb_prestations = len(prestations)
     nb_attribuees = sum(1 for p in prestations if p.formateur_id is not None)
     nb_planifiees = sum(1 for p in prestations if p.statut == 'planifiee' or p.statut == 'realisee')
-    
+
     return CommandeResponse(
         id=commande.id,
         karlia_document_id=commande.karlia_document_id,
         karlia_customer_id=commande.karlia_customer_id,
+        karlia_opportunity_id=commande.karlia_opportunity_id,
         reference_devis=commande.reference_devis,
         client_nom=commande.client_nom,
         client_email=commande.client_email,
@@ -204,7 +222,7 @@ async def sync_devis_karlia(
     db: Session = Depends(get_db),
     current_user = Depends(require_role("ADMIN", "GESTIONNAIRE")),
 ):
-    """Synchronise les devis acceptés depuis Karlia."""
+    """Synchronise les bons de commande validés depuis Karlia."""
     try:
         result = await karlia_devis_service.sync_devis_acceptes(db, force_full=force_full)
         return SyncDevisResult(**result)
@@ -339,12 +357,12 @@ async def valider_commande(
         raise HTTPException(status_code=400, detail="Cette commande a déjà été validée")
     if validation.type_traitement not in ["a_planifier", "sans_planification"]:
         raise HTTPException(status_code=400, detail="type_traitement invalide")
-    
+
     commande.type_traitement = validation.type_traitement
     commande.necessite_contrat = validation.necessite_contrat
     commande.date_validation = datetime.utcnow()
     commande.statut = "a_planifier" if validation.type_traitement == "a_planifier" else "deployee"
-    
+
     db.commit()
     db.refresh(commande)
     return _commande_to_response(commande)
@@ -363,14 +381,14 @@ async def planifier_commande(
         raise HTTPException(status_code=404, detail="Commande non trouvée")
     if commande.statut != "a_planifier":
         raise HTTPException(status_code=400, detail="Seules les commandes 'à planifier' peuvent être planifiées")
-    
+
     commande.date_planifiee = planification.date_planifiee
     commande.intervenant_id = planification.intervenant_id
     commande.intervenant_nom = planification.intervenant_nom
     commande.notes_planification = planification.notes_planification
     commande.statut = "planifiee"
     commande.updated_at = datetime.utcnow()
-    
+
     db.commit()
     db.refresh(commande)
     return _commande_to_response(commande)
@@ -386,10 +404,10 @@ async def terminer_commande(
     commande = db.query(Commande).filter(Commande.id == commande_id).first()
     if not commande:
         raise HTTPException(status_code=404, detail="Commande non trouvée")
-    
+
     commande.statut = "terminee"
     commande.updated_at = datetime.utcnow()
-    
+
     db.commit()
     db.refresh(commande)
     return _commande_to_response(commande)
@@ -406,14 +424,14 @@ async def lier_contrat_commande(
     commande = db.query(Commande).filter(Commande.id == commande_id).first()
     if not commande:
         raise HTTPException(status_code=404, detail="Commande non trouvée")
-    
+
     contrat = db.query(Contrat).filter(Contrat.id == contrat_id).first()
     if not contrat:
         raise HTTPException(status_code=404, detail="Contrat non trouvé")
-    
+
     commande.contrat_id = contrat_id
     commande.updated_at = datetime.utcnow()
-    
+
     db.commit()
     db.refresh(commande)
     return _commande_to_response(commande)
@@ -425,7 +443,7 @@ async def get_commande_pdf(
     db: Session = Depends(get_db),
     current_user = Depends(require_role("ADMIN", "GESTIONNAIRE")),
 ):
-    """Redirige vers le PDF du devis hébergé par Karlia."""
+    """Redirige vers le PDF du bon de commande hébergé par Karlia."""
     commande = db.query(Commande).filter(Commande.id == commande_id).first()
     if not commande:
         raise HTTPException(status_code=404, detail="Commande non trouvée")
@@ -443,16 +461,16 @@ async def facturer_commande(
     commande = db.query(Commande).options(
         joinedload(Commande.lignes)
     ).filter(Commande.id == commande_id).first()
-    
+
     if not commande:
         raise HTTPException(status_code=404, detail="Commande non trouvée")
-    
+
     if commande.statut != "deployee":
         raise HTTPException(status_code=400, detail="Seules les commandes terminées peuvent être facturées")
-    
+
     if not commande.karlia_customer_id:
         raise HTTPException(status_code=400, detail="Client Karlia non renseigné sur cette commande")
-    
+
     # Préparer les lignes pour Karlia
     lignes_karlia = []
     for ligne in commande.lignes:
@@ -463,10 +481,10 @@ async def facturer_commande(
             "vat_rate": float(ligne.taux_tva or 20),
             "description": ligne.designation or ""
         })
-    
+
     if not lignes_karlia:
         raise HTTPException(status_code=400, detail="Aucune ligne à facturer")
-    
+
     try:
         # Créer la facture dans Karlia
         result = await karlia.creer_facture(
@@ -477,14 +495,14 @@ async def facturer_commande(
             montant_ht=float(commande.montant_ht or 0),
             description=f"Facturation prestation - {commande.reference_devis}"
         )
-        
+
         # Mettre à jour la commande
         commande.statut = "facturee"
         commande.facture_karlia_id = str(result.get("id", ""))
         commande.facture_karlia_ref = result.get("reference", "")
         commande.updated_at = datetime.utcnow()
         db.commit()
-        
+
         return {
             "success": True,
             "message": f"Facture {result.get('reference', '')} émise avec succès",

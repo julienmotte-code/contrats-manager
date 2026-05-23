@@ -7,7 +7,7 @@ import {
   FormControl, FormLabel, Checkbox, Tooltip, TablePagination, TableSortLabel
 } from '@mui/material';
 import {
-  Sync as SyncIcon, Search as SearchIcon, Visibility as ViewIcon,
+  Search as SearchIcon, Visibility as ViewIcon,
   Check as CheckIcon, PictureAsPdf as PdfIcon, NewReleases as NewIcon
 } from '@mui/icons-material';
 import { format } from 'date-fns';
@@ -19,7 +19,6 @@ export default function NouvellesCommandes() {
   const [commandes, setCommandes] = useState([]);
   const [stats, setStats] = useState({});
   const [loading, setLoading] = useState(true);
-  const [syncing, setSyncing] = useState(false);
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(0);
   const [rowsPerPage, setRowsPerPage] = useState(20);
@@ -72,22 +71,6 @@ export default function NouvellesCommandes() {
     fetchStats();
     fetchCommandes();
   }, [fetchStats, fetchCommandes]);
-
-  const handleSync = async (forceFull = false) => {
-    setSyncing(true);
-    setError(null);
-    try {
-      const res = await api.post(`/api/commandes/sync?force_full=${forceFull}`);
-      setSuccess(`Synchronisation terminée : ${res.data.nouveaux_devis} nouveaux, ${res.data.devis_mis_a_jour} mis à jour`);
-      fetchCommandes();
-      fetchStats();
-    } catch (err) {
-      setError('Erreur lors de la synchronisation');
-      console.error(err);
-    } finally {
-      setSyncing(false);
-    }
-  };
 
   const openValidation = (commande) => {
     setSelectedCommande(commande);
@@ -189,24 +172,6 @@ export default function NouvellesCommandes() {
         <Typography variant="h4" sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
           <NewIcon color="primary" /> Nouvelles Commandes
         </Typography>
-        <Box sx={{ display: 'flex', gap: 1 }}>
-          <Button
-            variant="outlined"
-            startIcon={syncing ? <CircularProgress size={20} /> : <SyncIcon />}
-            onClick={() => handleSync(false)}
-            disabled={syncing}
-          >
-            Synchroniser
-          </Button>
-          <Button
-            variant="contained"
-            startIcon={syncing ? <CircularProgress size={20} /> : <SyncIcon />}
-            onClick={() => handleSync(true)}
-            disabled={syncing}
-          >
-            Sync complète
-          </Button>
-        </Box>
       </Box>
 
       {/* Stats */}
@@ -283,7 +248,7 @@ export default function NouvellesCommandes() {
                   direction={sortBy === 'date_devis' && sortDir ? sortDir : 'asc'}
                   onClick={() => handleSortClick('date_devis')}
                 >
-                  Date devis
+                  Date BC
                 </TableSortLabel>
               </TableCell>
               <TableCell sortDirection={sortBy === 'date_acceptation' ? sortDir : false}>
@@ -451,7 +416,7 @@ export default function NouvellesCommandes() {
                 </Grid>
               </Grid>
 
-              <Typography variant="h6" sx={{ mt: 3, mb: 2 }}>Lignes du devis</Typography>
+              <Typography variant="h6" sx={{ mt: 3, mb: 2 }}>Lignes du BC</Typography>
               <TableContainer>
                 <Table size="small">
                   <TableHead>

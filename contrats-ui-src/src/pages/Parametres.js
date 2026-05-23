@@ -31,7 +31,6 @@ export default function Parametres() {
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [viding, setViding] = useState(false);
-  const [synchroLoading, setSynchroLoading] = useState(false);
   const [testResult, setTestResult] = useState(null);
   // Modèles
   const [modeles, setModeles] = useState([]);
@@ -98,15 +97,6 @@ export default function Parametres() {
       toast.success(r.data.message); charger();
     } catch (e) { toast.error(e.response?.data?.detail || 'Erreur'); }
     finally { setViding(false); }
-  };
-
-  const lancerSynchro = async () => {
-    setSynchroLoading(true);
-    try {
-      await api.post('/api/synchro/lancer');
-      toast.success('Synchronisation terminée'); charger();
-    } catch (e) { toast.error('Erreur synchronisation'); }
-    finally { setSynchroLoading(false); }
   };
 
   const uploaderModele = async () => {
@@ -244,16 +234,16 @@ export default function Parametres() {
       <div className="card space-y-4">
         <h2 className="font-semibold text-gray-900 border-b pb-2">📤 Chorus Pro (Facturation collectivités)</h2>
         <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-sm text-blue-800">
-          💡 Pour configurer Chorus Pro : créez un compte sur <a href="https://developer.aife.economie.gouv.fr" target="_blank" rel="noreferrer" className="underline">PISTE</a>, 
+          💡 Pour configurer Chorus Pro : créez un compte sur <a href="https://developer.aife.economie.gouv.fr" target="_blank" rel="noreferrer" className="underline">PISTE</a>,
           puis un compte technique sur <a href="https://chorus-pro.gouv.fr" target="_blank" rel="noreferrer" className="underline">Chorus Pro</a>.
         </div>
-        
+
         <div className="space-y-3">
           {PARAMS_CHORUS.map(p => (
             <div key={p.cle}>
               <label className="label">{p.label}</label>
-              <input 
-                className="input font-mono text-sm" 
+              <input
+                className="input font-mono text-sm"
                 type={p.type}
                 placeholder={p.placeholder}
                 value={chorusParams[p.cle] || ''}
@@ -261,12 +251,12 @@ export default function Parametres() {
               />
             </div>
           ))}
-          
+
           <div>
             <label className="label">Mode</label>
-            <select 
-              className="input" 
-              value={chorusMode} 
+            <select
+              className="input"
+              value={chorusMode}
               onChange={e => setChorusMode(e.target.value)}
             >
               <option value="true">🧪 Qualification (test)</option>
@@ -392,12 +382,9 @@ export default function Parametres() {
           </div>
         </div>
         <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 text-sm text-yellow-800">
-          ⚠️ Pour tester avec une base Karlia différente : <strong>1)</strong> Changez la clé API ci-dessus, <strong>2)</strong> Videz le cache, <strong>3)</strong> Lancez la synchronisation.
+          ⚠️ Pour tester avec une base Karlia différente : <strong>1)</strong> Changez la clé API ci-dessus, <strong>2)</strong> Videz le cache, <strong>3)</strong> Relancez la synchronisation depuis le tableau de bord.
         </div>
         <div className="flex gap-3">
-          <button onClick={lancerSynchro} disabled={synchroLoading} className="btn-primary">
-            {synchroLoading ? '⏳ Synchronisation...' : '🔄 Synchroniser maintenant'}
-          </button>
           <button onClick={viderCache} disabled={viding} className="btn-danger">
             {viding ? 'Vidage...' : '🗑️ Vider le cache'}
           </button>
