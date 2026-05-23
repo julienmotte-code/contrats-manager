@@ -13,3 +13,7 @@ alembic==1.13.3
 apscheduler==3.10.4
 python-docx==1.1.2
 email-validator
+# Transmission Chorus Pro via Factur-X (voie deposer/flux)
+factur-x==4.2
+pikepdf==10.7.1
+lxml==5.3.0
