@@ -25,6 +25,9 @@ import ContratsACreer from './pages/ContratsACreer';
 import Formateurs from './pages/Formateurs';
 import MesPrestations from './pages/MesPrestations';
 import ChorusProPage from './pages/ChorusProPage';
+import FacturesFournisseurs from './pages/FacturesFournisseurs';
+import FactureFournisseurSelection from './pages/FactureFournisseurSelection';
+import FactureFournisseurEdition from './pages/FactureFournisseurEdition';
 
 function PrivateRoute({ children }) {
   const { user, loading } = useAuth();
@@ -73,6 +76,9 @@ function AppRoutes() {
       <Route path="/formateurs" element={<PrivateRoute><Formateurs /></PrivateRoute>} />
       <Route path="/mes-prestations" element={<PrivateRoute><MesPrestations /></PrivateRoute>} />
       <Route path="/chorus-pro" element={<PrivateRoute><ChorusProPage /></PrivateRoute>} />
+      <Route path="/factures-fournisseurs" element={<PrivateRoute><FacturesFournisseurs /></PrivateRoute>} />
+      <Route path="/factures-fournisseurs/nouvelle" element={<PrivateRoute><FactureFournisseurSelection /></PrivateRoute>} />
+      <Route path="/factures-fournisseurs/:id" element={<PrivateRoute><FactureFournisseurEdition /></PrivateRoute>} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );
