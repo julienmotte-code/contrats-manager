@@ -43,4 +43,13 @@ export const facturationAPI = {
 export const dashboardAPI = {
   stats: () => api.get('/api/dashboard/stats'),
 };
+export const facturesFournisseursAPI = {
+  facturables: (params) => api.get('/api/factures-fournisseurs/facturables', { params }),
+  liste: (params) => api.get('/api/factures-fournisseurs', { params }),
+  detail: (id) => api.get(`/api/factures-fournisseurs/${id}`),
+  creer: (data) => api.post('/api/factures-fournisseurs', data),
+  modifier: (id, data) => api.put(`/api/factures-fournisseurs/${id}`, data),
+  valider: (id) => api.post(`/api/factures-fournisseurs/${id}/valider`),
+  supprimer: (id) => api.delete(`/api/factures-fournisseurs/${id}`),
+};
 export default api;

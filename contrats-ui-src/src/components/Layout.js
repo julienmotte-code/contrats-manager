@@ -18,6 +18,7 @@ const MENU_COMPLET = [
   { type: 'separator', label: 'Gestion' },
   { path: '/clients', label: 'Clients', icon: '🏢', droit: 'contrats_ecriture' },
   { path: '/facturation', label: 'Facturation', icon: '💶', droit: 'facturation' },
+  { path: '/factures-fournisseurs', label: 'Factures fournisseurs', icon: '🧾', droit: 'facturation' },
   { path: '/indices', label: 'Indices Syntec', icon: '📈', droit: 'indices' },
   { path: '/chorus-pro', label: 'Chorus Pro', icon: '📤', droit: 'facturation' },
   { type: 'separator', label: 'Administration' },

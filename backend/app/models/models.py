@@ -494,3 +494,94 @@ class Prestation(Base):
     commande_ligne = relationship("CommandeLigne", back_populates="prestations")
     formateur      = relationship("Formateur", back_populates="prestations", foreign_keys=[formateur_id])
     agenda_formateur = relationship("Formateur", foreign_keys=[agenda_formateur_id])
+
+
+class FactureFournisseur(Base):
+    """En-tête d'une facture fournisseur construite côté SGI à partir des
+    bons de réception Karlia. Une facture = un seul fournisseur.
+
+    L'émission dans Karlia (POST /suppliers-documents) est en attente du
+    support Karlia ; id_suppliers_document_karlia et statut_emission_karlia
+    restent NULL tant que l'émission n'est pas branchée.
+    """
+    __tablename__ = "factures_fournisseurs"
+
+    id                            = Column(Integer, primary_key=True, autoincrement=True)
+    id_fournisseur_karlia         = Column(Integer, nullable=False)
+    nom_fournisseur               = Column(String(255))
+    statut                        = Column(String(20), nullable=False, server_default='brouillon')
+    date_facture                  = Column(Date)
+    reference                     = Column(String(200))
+    total_ht                      = Column(Numeric(12, 2), nullable=False, server_default='0')
+    total_tva                     = Column(Numeric(12, 2), nullable=False, server_default='0')
+    total_ttc                     = Column(Numeric(12, 2), nullable=False, server_default='0')
+    id_suppliers_document_karlia  = Column(Integer)
+    statut_emission_karlia        = Column(String(50))
+    created_at                    = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at                    = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    lignes = relationship(
+        "FactureFournisseurLigne",
+        back_populates="facture",
+        cascade="all, delete-orphan",
+    )
+
+
+class FactureFournisseurLigne(Base):
+    """Ligne d'une facture fournisseur. Référence la ligne source du bon
+    de réception Karlia (id_bl_karlia + ligne_index) pour permettre le
+    pointage anti-doublon avec cumul partiel.
+    """
+    __tablename__ = "factures_fournisseurs_lignes"
+
+    id                     = Column(Integer, primary_key=True, autoincrement=True)
+    id_facture_fournisseur = Column(
+        Integer,
+        ForeignKey("factures_fournisseurs.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    id_bl_karlia      = Column(Integer, nullable=False)
+    ligne_index       = Column(Integer, nullable=False)
+    id_product_karlia = Column(Integer)  # 0/null pour lignes libres
+    designation       = Column(String(500), nullable=False)
+    reference         = Column(String(200))
+    quantite          = Column(Numeric(12, 3), nullable=False)
+    prix_unitaire_ht  = Column(Numeric(12, 2), nullable=False)
+    id_vat_karlia     = Column(String(10))
+    total_ht          = Column(Numeric(12, 2), nullable=False)
+    # Snapshot du restant facturable au moment de la création du brouillon
+    # (= quantité livrée Karlia − cumul facturé à T0). Sert au front à
+    # borner les champs `max` de l'édition sans rappeler /facturables.
+    # Nullable pour les lignes créées avant migration 0004.
+    quantite_max_facturable = Column(Numeric(12, 3), nullable=True)
+    created_at        = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at        = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    facture = relationship("FactureFournisseur", back_populates="lignes")
+
+
+class FactureFournisseurPointage(Base):
+    """Pointage anti-doublon avec cumul partiel par ligne de BR Karlia.
+
+    Source de vérité de l'anti-doublon : à chaque validation de facture,
+    quantite_facturee_cumulee est incrémentée. Le rapprochement (étape 2)
+    proposera (quantite_livree - quantite_facturee_cumulee) et masquera la
+    ligne quand le restant atteint 0.
+    """
+    __tablename__ = "factures_fournisseurs_pointage"
+
+    id                        = Column(Integer, primary_key=True, autoincrement=True)
+    id_bl_karlia              = Column(Integer, nullable=False)
+    ligne_index               = Column(Integer, nullable=False)
+    quantite_livree           = Column(Numeric(12, 3), nullable=False)
+    quantite_facturee_cumulee = Column(Numeric(12, 3), nullable=False, server_default='0')
+    created_at                = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at                = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint(
+            'id_bl_karlia',
+            'ligne_index',
+            name='uq_factures_fournisseurs_pointage_bl_ligne',
+        ),
+    )

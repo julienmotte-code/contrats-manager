@@ -34,6 +34,13 @@ class Settings(BaseSettings):
     # gros volumes (variable d'env KARLIA_SYNC_SLEEP_SECONDS).
     KARLIA_SYNC_SLEEP_SECONDS: float = 1.2
 
+    # TTL (secondes) du cache mémoire du catalogue produits Karlia utilisé
+    # par la fonctionnalité factures fournisseurs. Le catalogue change
+    # rarement (catégories produits) et son chargement coûte ~4 s
+    # (4 pages /products). 600 s = 10 min : compromis fraîcheur / coût.
+    # Le bouton « Rafraîchir » côté UI force un rechargement (force_refresh=true).
+    KARLIA_CATALOGUE_CACHE_TTL: int = 600
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
