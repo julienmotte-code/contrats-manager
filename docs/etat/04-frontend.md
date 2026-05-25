@@ -76,6 +76,9 @@ Conclusion : les deux dossiers ont divergé. Toute modification du front doit au
 | `/formateurs` | `Formateurs` | role ≠ `FORMATEUR` |
 | `/mes-prestations` | `MesPrestations` | tout user connecté |
 | `/chorus-pro` | `ChorusProPage` | role ≠ `FORMATEUR` |
+| `/factures-fournisseurs` _(v3.2.0)_ | `FacturesFournisseurs` | role ≠ `FORMATEUR` |
+| `/factures-fournisseurs/nouvelle` _(v3.2.0)_ | `FactureFournisseurSelection` | role ≠ `FORMATEUR` |
+| `/factures-fournisseurs/:id` _(v3.2.0)_ | `FactureFournisseurEdition` | role ≠ `FORMATEUR` |
 | `*` | redirect `/` | — |
 
 Le contrôle réel des permissions reste **côté backend** (`require_role`) ; le front limite seulement la visibilité dans la barre de navigation et bloque la navigation directe par URL.
@@ -101,6 +104,7 @@ Trois variantes (`MENU_COMPLET`, `MENU_FORMATEUR`, `MENU_TECHNICIEN`) — choisi
 | Gestion | `/facturation` | `facturation` |
 | Gestion | `/indices` | `indices` |
 | Gestion | `/chorus-pro` | `facturation` |
+| Gestion | `/factures-fournisseurs` _(v3.2.0)_ | `facturation` |
 | Admin | `/parametres` | `parametres` |
 | Admin | `/formateurs` | `utilisateurs` |
 | Admin | `/utilisateurs` | `utilisateurs` |
@@ -169,6 +173,9 @@ Le filtrage final retire les items dont `droit` n'est pas dans `droits` (passés
 | `CommandesTerminees.js` (235 l.) | Facturation commande terminée (`POST /api/commandes/{id}/facturer`). |
 | `ContratsACreer.js` (322 l.) | `GET /api/commandes/contrats-a-creer`, redirige vers `/contrats/nouveau` avec préremplissage. |
 | `ChorusProPage.js` (496 l.) | `GET /api/chorus/factures`, `statistiques`, `synchro-factures`, `transmettre`, `test-connexion`, `PUT /siret`. |
+| `FacturesFournisseurs.js` _(v3.2.0)_ | Liste des factures fournisseurs, bouton "Nouvelle facture" → `/factures-fournisseurs/nouvelle`. |
+| `FactureFournisseurSelection.js` _(v3.2.0)_ | `GET /api/factures-fournisseurs/facturables` (BR Karlia non encore facturés, filtrés par blacklist catégorie), sélection multi-lignes BR → création brouillon. |
+| `FactureFournisseurEdition.js` _(v3.2.0)_ | Édition du brouillon (lignes modifiables), `POST /api/factures-fournisseurs/{id}/valider` pose le pointage anti-doublon. Émission Karlia _non disponible_ (voir 00-INDEX §4.1). |
 
 ## 8. Appels API directs (hors wrappers)
 

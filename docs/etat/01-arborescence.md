@@ -39,7 +39,9 @@ find . -type f \
 │   │   ├── script.py.mako
 │   │   └── versions/
 │   │       ├── 0001_baseline_existing_db.py   33 l.
-│   │       └── 0002_drop_lots_facturation_fix_indices_uniqueness.py  98 l.
+│   │       ├── 0002_drop_lots_facturation_fix_indices_uniqueness.py  98 l.
+│   │       ├── 0003_create_factures_fournisseurs.py     125 l.  (v3.2.0)
+│   │       └── 0004_add_quantite_max_facturable.py       51 l.  (v3.2.0)
 │   ├── app/
 │   │   ├── __init__.py
 │   │   ├── main.py                            205 l.
@@ -54,6 +56,7 @@ find . -type f \
 │   │   │   ├── dashboard.py                   145 l.
 │   │   │   ├── documents.py                   144 l.
 │   │   │   ├── facturation.py                 289 l.
+│   │   │   ├── factures_fournisseurs.py       381 l.  (v3.2.0)
 │   │   │   ├── formateurs.py                  229 l.
 │   │   │   ├── indices.py                     158 l.
 │   │   │   ├── parametres.py                  157 l.
@@ -80,6 +83,7 @@ find . -type f \
 │   │       ├── contrat_service.py             141 l.
 │   │       ├── document_service.py            251 l.
 │   │       ├── karlia_devis_service.py        507 l.
+│   │       ├── karlia_factures_fournisseurs_service.py  1112 l.  (v3.2.0)
 │   │       ├── karlia_service.py              291 l.
 │   │       ├── revision_service.py            162 l.
 │   │       └── validation_service.py          270 l.
@@ -118,6 +122,9 @@ find . -type f \
 │       │   ├── Dashboard.js                   231 l.
 │       │   ├── DetailContrat.js               254 l.
 │       │   ├── Facturation.js                 305 l.
+│       │   ├── FactureFournisseurEdition.js   447 l.  (v3.2.0)
+│       │   ├── FactureFournisseurSelection.js 338 l.  (v3.2.0)
+│       │   ├── FacturesFournisseurs.js        177 l.  (v3.2.0)
 │       │   ├── Formateurs.js                  280 l.
 │       │   ├── Indices.js                     183 l.
 │       │   ├── Login.js                        34 l.

@@ -30,7 +30,7 @@ Python 3.12-slim (cf. `backend/Dockerfile`).
 
 - `Base.metadata.create_all(bind=engine)` au démarrage (création des tables si absentes — cohabite avec Alembic).
 - Middleware CORS : `allow_origins = settings.CORS_ORIGINS`, credentials autorisés, méthodes/headers `*`.
-- 15 routers branchés via `app.include_router(...)` :
+- 16 routers branchés via `app.include_router(...)` :
 
 | Préfixe | Module | Tag |
 |---|---|---|
@@ -49,6 +49,7 @@ Python 3.12-slim (cf. `backend/Dockerfile`).
 | `/api/prestations` | `app.api.prestations` | Prestations |
 | `/api` | `app.api.chorus` (prefix interne `/chorus`) | Chorus Pro |
 | `/api/dashboard` | `app.api.dashboard` | Dashboard |
+| `/api/factures-fournisseurs` | `app.api.factures_fournisseurs` _(v3.2.0)_ | Factures fournisseurs |
 
 - 3 endpoints racine définis dans `main.py` :
   - `GET /api/health` — public, `{status:"ok",version:"1.0.0"}`.
@@ -192,6 +193,17 @@ Tous les modèles déclarés, dans l'ordre du fichier. Pour chaque modèle : nom
 - `designation NOT NULL`, `description`, `duree_jours NUMERIC(5,2) default 1`, `date_prevue`, `date_planifiee`, `heure_debut TIME`, `heure_fin TIME`, `lieu`, `google_event_id`, `statut default 'a_planifier'`, `notes`.
 - `agenda_formateur_id` FK formateurs.id — colonne d'agenda distincte du titulaire (utilisée pour saisie de date).
 - 4 colonnes Google Calendar conservées en DB sans service actif : `google_calendar_id`, `google_sync_status`, `google_sync_error`, `google_synced_at`.
+
+### `FactureFournisseur` — `factures_fournisseurs` _(v3.2.0)_
+- PK `id INT`. `numero VARCHAR` (numéro local), `date_facture DATE`, `id_fournisseur_karlia INT`, `nom_fournisseur`, `montant_ht NUMERIC(12,2)`, `montant_tva NUMERIC(12,2)`, `montant_ttc NUMERIC(12,2)`, `statut` (`BROUILLON` / `VALIDEE`), `created_at`, `updated_at`.
+- `id_suppliers_document_karlia INT` _nullable_ et `statut_emission_karlia VARCHAR` _nullable_ — réservés à l'émission Karlia future (bloquée par `POST /suppliers-documents` indisponible côté API, voir 00-INDEX §4.1).
+- Relation 1→N vers `LigneFactureFournisseur`.
+
+### `LigneFactureFournisseur` — `lignes_factures_fournisseurs` _(v3.2.0)_
+- PK `id INT`. `facture_fournisseur_id` FK CASCADE NOT NULL.
+- `id_bon_reception_karlia INT`, `id_ligne_bon_reception_karlia INT` — clé fonctionnelle de rapprochement avec les BR Karlia.
+- `designation`, `quantite NUMERIC`, `prix_unitaire_ht NUMERIC(12,4)`, `tva_taux NUMERIC(5,2)`, `montant_ht`, `montant_tva`, `montant_ttc`.
+- `quantite_max_facturable NUMERIC` (migration `0004`) — borne le rapprochement pour empêcher de facturer plus que reçu.
 
 ## 6. Endpoints HTTP
 
@@ -381,6 +393,15 @@ Classe `KarliaDevisService` :
 - `_create_commande`, `_update_commande`, `_parse_karlia_date`, `_parse_tva`.
 - Persistance `derniere_synchro_devis` dans `parametres`.
 - Historique documenté en tête de fichier : sync 2026-05-20 a saturé Karlia, d'où le rate-limit actuel ; rattrapage `scripts/rattrapage_pdf_url.py`.
+- **Bug latent à auditer** : `get_customer_detail` appelle `/customers/{id}` pour des entités qui peuvent en réalité être des fournisseurs (devraient passer par `/suppliers/{id}`). 404 silencieux possibles. _Voir 00-INDEX §4.4._
+
+### `karlia_factures_fournisseurs_service.py` _(v3.2.0)_ — lecture BR + rapprochement
+Classe `KarliaFacturesFournisseursService` (1 112 l.). Construit la liste des "facturables" à partir des bons de réception (BR) Karlia et gère la création de factures fournisseurs locales :
+- `lister_facturables(...)` : récupère les BR Karlia, applique la blacklist de catégories (`config.FACTURES_FOURNISSEURS_BLACKLIST_CATEGORIES`), exclut les lignes déjà entièrement facturées via la colonne `quantite_max_facturable` (migration `0004`).
+- `creer_brouillon(...)` : crée une `FactureFournisseur` (statut `BROUILLON`) + ses `LigneFactureFournisseur` rapprochées aux BR.
+- `valider(...)` : pose un pointage anti-doublon par ligne (lignes BR consommées), passe le statut à `VALIDEE`.
+- Cache catalogue articles (TTL interne) pour accélérer le rapprochement.
+- Architecture prête pour émission Karlia future via `POST /suppliers-documents` (champs `id_suppliers_document_karlia` / `statut_emission_karlia` nullables) — _voir 00-INDEX §4.1_.
 
 ### `chorus_service.py` (373 l.) — client OAuth2 PISTE + soumission Chorus Pro
 Constantes :
@@ -463,9 +484,11 @@ Cette matrice est dupliquée côté frontend (`contrats-ui-src/src/context/AuthC
 ## 9. Migrations Alembic
 
 - `backend/alembic.ini` + `backend/alembic/env.py`.
-- 2 révisions appliquées (DB en `0002`) :
+- 4 révisions présentes (DB cible : `0004` après v3.2.0) :
   - `0001_baseline_existing_db.py` (33 l.) — baseline tagué sur l'état existant.
   - `0002_drop_lots_facturation_fix_indices_uniqueness.py` (98 l.) — ajoute `UNIQUE(annee, mois)` sur `indices_revision` + tentative de drop de `lots_facturation`.
+  - `0003_create_factures_fournisseurs.py` _(v3.2.0)_ — crée les tables `factures_fournisseurs` et `lignes_factures_fournisseurs` (FK BR Karlia / ligne BR Karlia, colonnes `id_suppliers_document_karlia` et `statut_emission_karlia` nullables pour émission Karlia future).
+  - `0004_add_quantite_max_facturable.py` _(v3.2.0)_ — ajoute la colonne `quantite_max_facturable` (anti-doublon de facturation par ligne BR). Test à blanc réalisé localement.
 - À VÉRIFIER : la table `lots_facturation` existe **toujours** en base (cf. `\dt` § 03), donc la migration `0002` n'a pas effacé la table ou Alembic a marqué la révision sans exécuter l'étape — à inspecter avant tout nettoyage.
 
 ## 10. Scripts utilitaires

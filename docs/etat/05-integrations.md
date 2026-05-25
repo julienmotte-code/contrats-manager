@@ -53,6 +53,26 @@ Méthodes :
 
 La sync devis (`sync_devis_acceptes`) est déclenchée **manuellement** par l'UI via `POST /api/commandes/sync` ou `POST /api/commandes/sync?force_full=true` ; il n'y a pas de job cron pour cette sync au commit de référence.
 
+### 1.5 Factures fournisseurs (`karlia_factures_fournisseurs_service.py`) _(v3.2.0)_
+
+Lecture des bons de réception (BR) Karlia côté circuit achat. Endpoints Karlia consommés :
+
+| Méthode | Endpoint Karlia | Usage |
+|---|---|---|
+| Liste BR | `GET /purchase-receipts` | facturables (BR non encore facturés). |
+| Détail BR | `GET /purchase-receipts/{id}` | lignes à rapprocher (designation, quantité, prix unitaire, TVA). |
+| Fournisseur | `GET /suppliers/{id}` | catégorie du fournisseur pour la blacklist. |
+| Catalogue | `GET /products` (déjà mis en cache par `synchro_karlia`) | enrichissement libellé / TVA par défaut. |
+
+Particularités :
+- **Blacklist catégorie** : la clé `FACTURES_FOURNISSEURS_BLACKLIST_CATEGORIES` (côté `config.py`) liste les catégories de fournisseurs à exclure des "facturables".
+- **Cache catalogue articles** : TTL interne au service pour accélérer la sélection.
+- **Anti-doublon par pointage** : à la validation d'un brouillon, chaque ligne BR consommée est marquée via `quantite_max_facturable` (migration `0004`) côté DB locale ; aucun appel d'écriture vers Karlia à ce stade.
+
+Chantier ouvert (voir 00-INDEX §4.1) : émission `POST /suppliers-documents` côté Karlia renvoie `"API not available"`. Architecture côté `contrats-manager` prête (colonnes nullables `id_suppliers_document_karlia` / `statut_emission_karlia`, bouton à ajouter UI).
+
+Chantier ouvert (voir 00-INDEX §4.2) : pas de lien BR → opportunité client exposé par Karlia ; impossible de filtrer les factures fournisseurs par affaire client.
+
 ## 2. Chorus Pro via PISTE
 
 ### 2.1 URLs & environnements

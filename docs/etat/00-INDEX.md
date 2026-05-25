@@ -4,10 +4,10 @@
 
 ## 1. Métadonnées de génération
 
-- Date : **2026-05-23**
-- Commit de référence : `8752ab8 docs: journal merge chantier 2.2 + tag v2.5.1` (branche `main`).
+- Date initiale : **2026-05-23** — mise à jour : **2026-05-25** (ajout factures fournisseurs).
+- Commit de référence : `f43cead merge: feat/factures-fournisseurs (v3.2.0)` (branche `main`).
 - Branche de travail : `docs/etat-des-lieux-complet` (créée depuis `main` au début de l'opération).
-- Tag stable courant : **v2.5.1-pre-emission-guard** (dernier tag sur `main`).
+- Tag stable courant : **v3.2.0** (factures fournisseurs).
 - Environnement vérifié : docker-compose actif (`db`, `backend`, `frontend` up).
 
 ## 2. Table des matières
@@ -29,12 +29,15 @@
 - **Plan de facturation** : prorata, génération annuelle automatique, révision Syntec (Août/Octobre), Digitech manuel. 1 150 lignes au plan, 571 EMISE.
 - **Facturation Karlia** : aperçu → calcul (gardes pré-calcul) → émission (gardes pré- et post-émission, batching avec rate-limit).
 - **Sync Karlia** (clients/articles) : auto au démarrage + cron 02h00. 251 clients, 404 articles en cache.
-- **Sync devis Karlia** (commandes) : manuelle, rate-limit 1,2 s, retry 429 (backoffs 5/15/30 s). 144 commandes en base, 131 nouvelles.
+- **Sync devis Karlia** (commandes) : manuelle, rate-limit 1,2 s, retry 429 (backoffs 5/15/30 s). 144 commandes en base, 131 nouvelles. _Note v3.1.0_ : source de synchro bascule sur bons de commande + synchro unifiée depuis le Dashboard.
+- **Factures fournisseurs** _(nouveau v3.2.0)_ : création locale de factures fournisseurs à partir des bons de réception (BR) Karlia, avec rapprochement par ligne, filtrage des BR par catégorie de fournisseur (blacklist configurable via `config.py`), brouillon éditable, anti-doublon par pointage à la validation, cache catalogue articles côté service. Routes `/api/factures-fournisseurs/*`. Émission Karlia _non encore activée_ — voir §6 Chantiers ouverts.
 - **Prestations** : visibilité filtrée FORMATEUR/TECHNICIEN par `formateur_id`/`agenda_formateur_id`. 11 prestations en base.
 - **RBAC** : 4 rôles (ADMIN, GESTIONNAIRE, FORMATEUR, TECHNICIEN), matrice DROITS partagée backend (source `utilisateurs.py:DROITS`) + frontend (copie dans `AuthContext.js`). 12 utilisateurs.
 - **Authentification** : JWT HS256, 24 h, bcrypt.
 - **Génération Word** : modèles par famille de contrat, publipostage paragraphes + tableaux.
 - **Indices Syntec** : 6 lignes (Août/Octobre 2023-2025).
+- **Branding SGI** : sidebar, écran de connexion, favicon (depuis v3.0.3).
+- **Dashboard formateur/technicien** : 3 tuiles prestations + garde de rôle sur `/api/dashboard/stats` (depuis v3.0.1).
 
 ### Partiellement opérationnel / en cours
 - **Chorus Pro (transmission)** : code complet (OAuth2 PISTE + payload `SAISIE_API`) sur `main`, mais **transmission bloquée par un 403 PISTE non résolu** côté production (voir `MEMORY.md → chorus_pro_blocage.md`). 32 factures importées, 2 marquées TRANSMISE, 30 NON_TRANSMISE.
@@ -52,7 +55,29 @@
 - **Valeur par défaut `Utilisateur.role = "UTILISATEUR"`** dans `models.py` : hors matrice. Aucun utilisateur ne porte cette valeur ; piège potentiel pour un compte créé sans rôle explicite.
 - **Checks DB non répliqués dans `models.py`** : `ck_statut_chorus` (factures_karlia) et `ck_statut_transmission` (transmissions_chorus) existent côté Postgres mais sont absents des modèles → un `create_all` from scratch ne les recrée pas.
 
-## 4. Comment naviguer ce dossier
+## 4. Chantiers ouverts (au 2026-05-25, post v3.2.0)
+
+### 4.1 Émission de la facture fournisseur dans Karlia — BLOQUÉE
+- `POST /suppliers-documents` renvoie `"API not available"` sur l'environnement Karlia courant.
+- En attente d'une réponse du support Karlia.
+- **Architecture déjà prête côté `contrats-manager`** : colonnes `id_suppliers_document_karlia` et `statut_emission_karlia` nullables sur `factures_fournisseurs` (migration `0003`). Bouton d'émission à ajouter côté UI une fois le endpoint disponible.
+
+### 4.2 Filtre par opportunité / affaire CLIENT — NON FAISABLE en l'état
+- Le circuit achat Karlia n'expose aucun lien direct BR → opportunité client.
+- Les opportunités fournisseur ne sont pas récupérables individuellement via `GET /opportunities/{id}` (réponse non exploitable).
+- À reprendre si un pont achat ↔ vente est identifié côté Karlia (changement d'API ou nouvelle relation côté Karlia).
+
+### 4.3 Piste de performance — cache détails BR
+- Au premier chargement de `/facturables` à froid, le temps reste ~18 s (le cache catalogue articles déjà mis en place couvre les articles, pas les détails BR).
+- Optimisation potentielle : ajouter un cache TTL pour les détails BR Karlia (`/purchase-receipts/{id}`).
+- Non bloquant ; à activer uniquement si l'utilisateur final le ressent.
+
+### 4.4 Bug latent — `karlia_devis_service` confond clients et fournisseurs
+- `karlia_devis_service.py` appelle `/customers/{id}` pour certaines entités qui peuvent en réalité être des fournisseurs (devraient passer par `/suppliers/{id}`).
+- Conséquence : 404 silencieux possibles, données partielles côté sync devis/commandes.
+- À auditer séparément (hors périmètre v3.2.0).
+
+## 5. Comment naviguer ce dossier
 
 1. Commencer par `01-arborescence.md` pour un panorama des fichiers.
 2. `02-backend.md` détaille les modèles, routers et services — c'est la référence pour comprendre l'API.
@@ -61,7 +86,7 @@
 5. `05-integrations.md` et `06-workflows.md` plongent dans le métier (Karlia, Chorus Pro, contrats, facturation).
 6. `07-deploiement.md` couvre l'infra (Docker, nginx, `.env`).
 
-## 5. Conventions
+## 6. Conventions
 
 - "À VÉRIFIER" signale un point non confirmé par lecture directe au moment de la rédaction.
 - Les nombres d'enregistrements proviennent d'un `SELECT count(*)` réel et reflètent l'état de la base à la date indiquée.

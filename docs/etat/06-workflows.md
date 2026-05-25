@@ -159,3 +159,30 @@ Workflow (cf. § 05) :
 
 `GET /api/documents/telecharger/{doc_id}` renvoie le binaire.
 Gestion des modèles (`/api/documents/modeles*`) réservée ADMIN.
+
+## 10. Factures fournisseurs _(v3.2.0)_
+
+Création locale d'une facture fournisseur à partir des bons de réception (BR) Karlia.
+
+### 10.1 Sélection des facturables
+`GET /api/factures-fournisseurs/facturables` (`factures_fournisseurs.py`) :
+- Récupère les BR Karlia via `GET /purchase-receipts` puis détail `/purchase-receipts/{id}` (parallélisé).
+- Pour chaque BR, charge `/suppliers/{id_fournisseur}` (catégorie) ; **exclut** ceux dont la catégorie est listée dans `config.FACTURES_FOURNISSEURS_BLACKLIST_CATEGORIES`.
+- Pour chaque ligne BR, calcule la quantité restante facturable : `quantite_BR − somme(quantite_max_facturable) déjà posée localement`. Ligne masquée si reste ≤ 0.
+- Cache catalogue articles (TTL interne) pour accélérer.
+- Temps observé : ~18 s à froid au premier appel (chantier perf — voir 00-INDEX §4.3).
+
+### 10.2 Création du brouillon
+`POST /api/factures-fournisseurs/` avec la sélection multi-lignes BR :
+- Crée une `FactureFournisseur` (statut `BROUILLON`) et ses `LigneFactureFournisseur` rapprochées.
+- L'utilisateur peut ensuite éditer le brouillon (quantité, prix, TVA) côté `FactureFournisseurEdition`.
+
+### 10.3 Validation (anti-doublon)
+`POST /api/factures-fournisseurs/{id}/valider` :
+- Pour chaque ligne, écrit `quantite_max_facturable = quantite` côté `lignes_factures_fournisseurs` — c'est le pointage qui empêche de re-facturer cette même quantité depuis un autre brouillon.
+- Bascule `statut → VALIDEE`.
+- **Aucun appel sortant vers Karlia** à ce stade (émission Karlia bloquée, voir 00-INDEX §4.1).
+
+### 10.4 Émission vers Karlia — chantier ouvert
+- L'appel cible serait `POST /suppliers-documents` côté Karlia, mais l'environnement actuel renvoie `"API not available"`.
+- Architecture prête côté `contrats-manager` : colonnes `id_suppliers_document_karlia` et `statut_emission_karlia` _nullables_ sur `factures_fournisseurs` (migration `0003`). Bouton d'émission UI à ajouter une fois l'endpoint disponible.

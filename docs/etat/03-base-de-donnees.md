@@ -11,27 +11,29 @@ Commandes utilisées :
 ## 1. Tables présentes
 
 ```
-public | alembic_version       | table
-public | articles_cache        | table
-public | clients_cache         | table
-public | commande_lignes       | table
-public | commandes             | table
-public | contrat_articles      | table
-public | contrats              | table
-public | documents_generes     | table
-public | factures_karlia       | table
-public | formateurs            | table
-public | indices_revision      | table
-public | lots_facturation      | table
-public | modeles_documents     | table
-public | parametres            | table
-public | plan_facturation      | table
-public | prestations           | table
-public | transmissions_chorus  | table
-public | utilisateurs          | table
+public | alembic_version                 | table
+public | articles_cache                  | table
+public | clients_cache                   | table
+public | commande_lignes                 | table
+public | commandes                       | table
+public | contrat_articles                | table
+public | contrats                        | table
+public | documents_generes               | table
+public | factures_fournisseurs           | table  (v3.2.0)
+public | factures_karlia                 | table
+public | formateurs                      | table
+public | indices_revision                | table
+public | lignes_factures_fournisseurs    | table  (v3.2.0)
+public | lots_facturation                | table
+public | modeles_documents               | table
+public | parametres                      | table
+public | plan_facturation                | table
+public | prestations                     | table
+public | transmissions_chorus            | table
+public | utilisateurs                    | table
 ```
 
-18 tables. Aucune n'est manquante côté DB par rapport aux modèles SQLAlchemy.
+20 tables après v3.2.0 (ajout de `factures_fournisseurs` et `lignes_factures_fournisseurs`). Aucune n'est manquante côté DB par rapport aux modèles SQLAlchemy.
 
 ## 2. Volumétries
 
@@ -169,6 +171,18 @@ Voir § 02 pour la liste exhaustive ; en DB, les contraintes effectives sont :
 - FK `contrat_id UUID → contrats.id ON DELETE SET NULL`.
 - Indices : `idx_factures_karlia_client`, `idx_factures_karlia_date`, `idx_factures_karlia_statut`.
 - Check **DB seulement** : `ck_statut_chorus IN ('NON_TRANSMISE','EN_COURS','TRANSMISE','ACCEPTEE','REJETEE','ERREUR')` — **absent du modèle SQLAlchemy**.
+
+### `factures_fournisseurs` _(v3.2.0)_
+- `id SERIAL` PK ; `numero VARCHAR`, `date_facture DATE`, `id_fournisseur_karlia INT`, `nom_fournisseur VARCHAR`, `montant_ht NUMERIC(12,2)`, `montant_tva NUMERIC(12,2)`, `montant_ttc NUMERIC(12,2)`, `statut VARCHAR` (`BROUILLON` / `VALIDEE`).
+- `id_suppliers_document_karlia INT` _nullable_, `statut_emission_karlia VARCHAR` _nullable_ — réservés à l'émission Karlia (bloquée côté API, voir 00-INDEX §4.1).
+- `created_at`, `updated_at TIMESTAMPTZ DEFAULT now()`.
+- Référencée par `lignes_factures_fournisseurs.facture_fournisseur_id` (CASCADE).
+
+### `lignes_factures_fournisseurs` _(v3.2.0)_
+- `id SERIAL` PK ; `facture_fournisseur_id INT NOT NULL` FK CASCADE.
+- `id_bon_reception_karlia INT`, `id_ligne_bon_reception_karlia INT` — rapprochement BR.
+- `designation VARCHAR`, `quantite NUMERIC(12,4)`, `prix_unitaire_ht NUMERIC(12,4)`, `tva_taux NUMERIC(5,2)`, `montant_ht NUMERIC(12,2)`, `montant_tva NUMERIC(12,2)`, `montant_ttc NUMERIC(12,2)`.
+- `quantite_max_facturable NUMERIC` (migration `0004`) — anti-doublon par ligne BR.
 
 ### `formateurs`
 - `id SERIAL` PK ; `nom VARCHAR(255) NOT NULL`, `prenom`, `email VARCHAR(255) NOT NULL UNIQUE`, `email_google`, `telephone`, `actif BOOL DEFAULT true`, `couleur VARCHAR(7) DEFAULT '#3788d8'`, `created_at`, `updated_at` TIMESTAMPTZ.
