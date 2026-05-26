@@ -32,6 +32,7 @@ from app.models.models import ClientCache, FactureKarlia, Parametre
 from app.services.facturx_cii_builder import (
     FactureInput,
     LigneFacture,
+    PaymentMeansInput,
     TradeParty,
     build_xml_cii_basic,
 )
@@ -249,6 +250,7 @@ def build_facture_input(
     karlia_doc: Dict[str, Any],
     karlia_company: Dict[str, Any],
     siret_emetteur: str,
+    payment_means: Optional[PaymentMeansInput] = None,
 ) -> FactureInput:
     """Assemble le FactureInput consommé par facturx_cii_builder."""
     date_end = _parse_date(karlia_doc.get("date_end"))
@@ -270,6 +272,7 @@ def build_facture_input(
         montant_ttc_total=facture.montant_ttc or Decimal("0"),
         numero_engagement=None,
         code_service_destinataire=None,
+        payment_means=payment_means,
     )
 
 
@@ -329,6 +332,14 @@ async def build_facturx_for_karlia_document(
     api_key = _load_param(db, "karlia_api_key")
     if not api_key:
         raise FacturxOrchestrationError("Paramètre 'karlia_api_key' absent ou vide en base.")
+    # Paramètres bancaires (optionnels). Si chorus_iban absent → bloc PaymentMeans
+    # omis du XML (comportement actuel préservé).
+    iban_param = _load_param(db, "chorus_iban")
+    payment_means = PaymentMeansInput(
+        iban=iban_param,
+        bic=_load_param(db, "chorus_bic"),
+        titulaire_compte=_load_param(db, "chorus_titulaire_compte"),
+    ) if iban_param else None
 
     facture = _load_facture(db, karlia_document_id)
     client = _load_client(db, facture.client_karlia_id)
@@ -346,7 +357,8 @@ async def build_facturx_for_karlia_document(
 
     # Mapping
     facture_input = build_facture_input(
-        facture, client, karlia_doc, karlia_company, siret_emetteur
+        facture, client, karlia_doc, karlia_company, siret_emetteur,
+        payment_means=payment_means,
     )
 
     # Génération XML CII (warnings BR-CO-10/13 émis par le builder si écart)

@@ -41,6 +41,7 @@ COUNTRY_FR = "FR"
 CURRENCY_EUR = "EUR"
 VAT_TYPE_CODE = "VAT"
 VAT_CATEGORY_STANDARD = "S"   # Standard rate
+PAYMENT_MEANS_CODE_VIREMENT = "30"   # UNTDID 4461 : Credit transfer (virement)
 
 
 # ── Modèles d'entrée (dataclasses, pas d'ORM) ──────────────────────────────
@@ -55,6 +56,19 @@ class TradeParty:
     adresse_ligne1: Optional[str] = None
     pays: str = COUNTRY_FR
     tva_intracom: Optional[str] = None         # ex. "FR00531891307" (côté émetteur)
+
+
+@dataclass
+class PaymentMeansInput:
+    """
+    Coordonnées bancaires émetteur pour ram:SpecifiedTradeSettlementPaymentMeans.
+    TypeCode 30 = virement (UNTDID 4461). Le bloc CII n'est émis QUE si iban est fourni.
+    titulaire_compte est stocké pour traçabilité mais N'EST PAS écrit dans le XML BASIC
+    (pas de représentation native au profil BASIC ; le titulaire implicite = SellerTradeParty).
+    """
+    iban: str
+    bic: Optional[str] = None
+    titulaire_compte: Optional[str] = None
 
 
 @dataclass
@@ -98,6 +112,8 @@ class FactureInput:
     # Référence acheteur (BT-10) — voir stratégie dans la docstring de la classe.
     numero_engagement: Optional[str] = None
     code_service_destinataire: Optional[str] = None
+    # Moyen de paiement (virement). Si None ou iban manquant, le bloc PaymentMeans est omis du XML.
+    payment_means: Optional[PaymentMeansInput] = None
 
 
 # ── Helpers d'écriture XML ─────────────────────────────────────────────────
@@ -291,6 +307,19 @@ def _check_coherence_ht_lignes(facture: FactureInput) -> None:
 def _build_header_trade_settlement(transaction_el, facture: FactureInput):
     settlement = _sub(transaction_el, "ram:ApplicableHeaderTradeSettlement")
     _sub(settlement, "ram:InvoiceCurrencyCode", CURRENCY_EUR)
+
+    # Moyen de paiement (BG-16) — virement SEPA si IBAN fourni.
+    # Position CII : entre InvoiceCurrencyCode et ApplicableTradeTax.
+    # Bloc omis si pas d'IBAN -> comportement actuel préservé.
+    # BIC (BT-86) volontairement non émis : non autorisé par le XSD du profil BASIC
+    # (réservé au profil EN16931). PaymentMeansInput.bic est ignoré ici.
+    pm = facture.payment_means
+    iban = (pm.iban or "").replace(" ", "").upper() if pm else ""
+    if iban:
+        means = _sub(settlement, "ram:SpecifiedTradeSettlementPaymentMeans")
+        _sub(means, "ram:TypeCode", PAYMENT_MEANS_CODE_VIREMENT)
+        creditor_account = _sub(means, "ram:PayeePartyCreditorFinancialAccount")
+        _sub(creditor_account, "ram:IBANID", iban)
 
     # Cohérence HT lignes vs header : warning explicite si écart (pas de fix silencieux).
     _check_coherence_ht_lignes(facture)
