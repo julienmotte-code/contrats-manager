@@ -56,6 +56,11 @@ async def synchroniser_produits(
                 "prix_unitaire_ht": prix_ht,
                 "unite": p.get("unit", ""),
                 "actif": True,
+                # Catégorie Karlia : on filtre toujours sur id_product_category (instable
+                # côté libellé). Karlia renvoie id_product_category en str ; on convertit
+                # en int. NULL accepté si produit sans catégorie au catalogue.
+                "id_product_category": _to_int_or_none(p.get("id_product_category")),
+                "product_category": p.get("product_category") or None,
             }
             if existing:
                 for k, v in data.items():
@@ -67,6 +72,16 @@ async def synchroniser_produits(
         return {"message": f"{count} articles synchronisés"}
     except KarliaError as e:
         raise HTTPException(502, f"Erreur Karlia : {e.message}")
+
+
+def _to_int_or_none(v):
+    """Convertit une valeur Karlia (str/int/None) en int, ou None si vide/invalide."""
+    if v is None or v == "":
+        return None
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return None
 
 
 def _formater_produit_karlia(p: dict) -> dict:
