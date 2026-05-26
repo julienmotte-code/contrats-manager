@@ -215,7 +215,13 @@ async def synchroniser_factures_karlia(
         })
 
         factures_karlia = result.get("data", [])
-        logger.info(f"Récupération de {len(factures_karlia)} factures depuis Karlia")
+        logger.info(f"Récupération brute de {len(factures_karlia)} documents depuis Karlia")
+
+        factures_karlia = [
+            fk for fk in factures_karlia
+            if str(fk.get("id_type")) == "4" and str(fk.get("canceled", "0")) == "0"
+        ]
+        logger.info(f"Factures Karlia retenues après filtre: {len(factures_karlia)}")
 
         for fk in factures_karlia:
             try:
@@ -229,8 +235,8 @@ async def synchroniser_factures_karlia(
                 ).first()
 
                 # Récupérer les infos client
-                client_id = fk.get("id_customer")
-                client_nom = fk.get("customer_name", "")
+                client_id = fk.get("id_customer") or fk.get("id_customer_supplier")
+                client_nom = fk.get("customer_name") or fk.get("customer_supplier_title", "")
                 client_siret = None
 
                 # Chercher le SIRET dans le cache client
@@ -243,8 +249,8 @@ async def synchroniser_factures_karlia(
                         client_nom = client_cache.nom
 
                 # Calculer les montants
-                montant_ht = Decimal(str(fk.get("amount_without_tax", 0) or 0))
-                montant_ttc = Decimal(str(fk.get("amount_with_tax", 0) or 0))
+                montant_ht = Decimal(str(fk.get("total_without_tax", 0) or 0))
+                montant_ttc = Decimal(str(fk.get("total_with_tax", 0) or 0))
                 montant_tva = montant_ttc - montant_ht
 
                 # Parser les dates
@@ -265,6 +271,9 @@ async def synchroniser_factures_karlia(
                 if existante:
                     # Mise à jour si pas encore transmise
                     if existante.statut_chorus == "NON_TRANSMISE":
+                        existante.numero_facture = fk.get("number") or fk.get("reference") or existante.numero_facture
+                        existante.reference = fk.get("reference") or fk.get("number") or existante.reference
+                        existante.client_karlia_id = client_id or existante.client_karlia_id
                         existante.client_nom = client_nom
                         existante.client_siret = client_siret
                         existante.montant_ht = montant_ht
@@ -277,8 +286,8 @@ async def synchroniser_factures_karlia(
                     # Nouvelle facture
                     nouvelle = FactureKarlia(
                         karlia_document_id=karlia_id,
-                        numero_facture=fk.get("reference", f"FAC-{karlia_id}"),
-                        reference=fk.get("reference"),
+                        numero_facture=fk.get("number") or fk.get("reference") or f"FAC-{karlia_id}",
+                        reference=fk.get("reference") or fk.get("number"),
                         client_karlia_id=client_id or 0,
                         client_nom=client_nom,
                         client_siret=client_siret,
