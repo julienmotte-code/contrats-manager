@@ -62,6 +62,9 @@ class ArticleCache(Base):
     actif            = Column(Boolean, default=True)
     synchro_at       = Column(DateTime(timezone=True))
     created_at       = Column(DateTime(timezone=True), server_default=func.now())
+    # Catégorisation Karlia — alimentée par la sync /products
+    id_product_category = Column(Integer)
+    product_category    = Column(String(255))
 
 
 class IndiceRevision(Base):
@@ -350,6 +353,12 @@ class CommandeLigne(Base):
     discount_percent  = Column(Numeric(15, 6))  # pourcentage de remise
     ordre             = Column(Integer, default=0)
     created_at        = Column(DateTime, server_default=func.now())  # timestamp without time zone en DB — cf. AUDIT_REFONTE.md § 2.19 #5
+    # Catégorisation Karlia (snapshot à la sync) + destination de routage
+    # (valeurs prévues : 'a_planifier' | 'contrat' | 'facturation_directe' ;
+    # NULL = pas encore routé. Pas de CHECK constraint pour l'instant.)
+    id_product_category = Column(Integer)
+    product_category    = Column(String(255))
+    destination         = Column(String(30))
 
     commande = relationship("Commande", back_populates="lignes")
     prestations = relationship("Prestation", back_populates="commande_ligne")
