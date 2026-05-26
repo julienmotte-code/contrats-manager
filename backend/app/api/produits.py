@@ -75,13 +75,20 @@ async def synchroniser_produits(
 
 
 def _to_int_or_none(v):
-    """Convertit une valeur Karlia (str/int/None) en int, ou None si vide/invalide."""
+    """
+    Convertit une valeur Karlia (str/int/None) en int, ou None si vide/invalide.
+
+    Convention : 0 / "0" sont traités comme NULL — Karlia renvoie parfois
+    id_product_category="0" pour les produits non catégorisés, on stocke NULL
+    plutôt qu'un entier 0 qui n'a pas de sémantique métier.
+    """
     if v is None or v == "":
         return None
     try:
-        return int(v)
+        n = int(v)
     except (TypeError, ValueError):
         return None
+    return None if n == 0 else n
 
 
 def _formater_produit_karlia(p: dict) -> dict:

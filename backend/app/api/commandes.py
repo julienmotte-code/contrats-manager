@@ -34,6 +34,14 @@ from app.core.security import require_authenticated, require_role
 from app.services.karlia_service import karlia
 from app.models.models import Commande, CommandeLigne, Prestation, Contrat
 from app.services.karlia_devis_service import karlia_devis_service
+from app.services.routage_service import (
+    destination_par_defaut,
+    eclater_ligne_en_prestations,
+    DESTINATIONS_VALIDES,
+    DESTINATION_A_PLANIFIER,
+    DESTINATION_CONTRAT,
+    DESTINATION_FACTURATION_DIRECTE,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -55,6 +63,14 @@ class CommandeLigneResponse(BaseModel):
     montant_tva: Optional[Decimal] = None
     montant_ttc: Optional[Decimal] = None
     ordre: Optional[int] = None
+    # Catégorie (snapshot Karlia)
+    id_product_category: Optional[int] = None
+    product_category: Optional[str] = None
+    # destination = valeur stockée (NULL tant que pas routé)
+    # destination_defaut = valeur calculée par le routage par défaut (jamais NULL)
+    # → le frontend pré-coche destination_defaut quand destination est NULL.
+    destination: Optional[str] = None
+    destination_defaut: str = DESTINATION_FACTURATION_DIRECTE
 
     class Config:
         from_attributes = True
@@ -138,8 +154,32 @@ class SyncDevisResult(BaseModel):
 
 
 class CommandeValidation(BaseModel):
+    """
+    Ancien schéma global (compat descendante).
+
+    Un type_traitement unique pour toute la commande. Toujours accepté en
+    fallback quand le payload nouveau (`lignes`) n'est PAS fourni.
+    """
     type_traitement: str  # 'a_planifier' ou 'sans_planification'
     necessite_contrat: bool = False
+
+
+class CommandeRoutageLigne(BaseModel):
+    """Routage d'une ligne unique dans le nouveau payload de validation."""
+    ligne_id: int
+    destination: str  # 'a_planifier' | 'contrat' | 'facturation_directe'
+
+
+class CommandeRoutage(BaseModel):
+    """
+    Nouveau schéma de validation par ligne. Si `lignes` est fourni, on emprunte
+    le chemin par-ligne (cf. valider_commande). type_traitement et
+    necessite_contrat sont ignorés dans ce mode (la destination par ligne
+    porte toute l'information).
+    """
+    type_traitement: Optional[str] = None
+    necessite_contrat: Optional[bool] = None
+    lignes: Optional[List[CommandeRoutageLigne]] = None
 
 
 class CommandePlanification(BaseModel):
@@ -191,7 +231,32 @@ def _commande_to_response(commande: Commande) -> CommandeResponse:
         formateur_nom=f"{commande.formateur.prenom or ''} {commande.formateur.nom}".strip() if commande.formateur else None,
         date_import=commande.date_import,
         date_validation=commande.date_validation,
-        lignes=[CommandeLigneResponse.model_validate(l) for l in commande.lignes]
+        lignes=[_ligne_to_response(l) for l in commande.lignes]
+    )
+
+
+def _ligne_to_response(ligne: CommandeLigne) -> CommandeLigneResponse:
+    """Sérialise une CommandeLigne en y ajoutant la destination par défaut calculée."""
+    return CommandeLigneResponse(
+        id=ligne.id,
+        commande_id=ligne.commande_id,
+        karlia_product_id=ligne.karlia_product_id,
+        designation=ligne.designation,
+        description=ligne.description,
+        quantite=ligne.quantite,
+        unite=ligne.unite,
+        prix_unitaire_ht=ligne.prix_unitaire_ht,
+        taux_tva=ligne.taux_tva,
+        montant_ht=ligne.montant_ht,
+        montant_tva=ligne.montant_tva,
+        montant_ttc=ligne.montant_ttc,
+        ordre=ligne.ordre,
+        id_product_category=ligne.id_product_category,
+        product_category=ligne.product_category,
+        destination=ligne.destination,
+        destination_defaut=destination_par_defaut(
+            ligne.id_product_category, ligne.product_category
+        ),
     )
 
 
@@ -345,23 +410,125 @@ async def get_commande(
 @router.post("/{commande_id}/valider", response_model=CommandeResponse)
 async def valider_commande(
     commande_id: int,
-    validation: CommandeValidation,
+    payload: CommandeRoutage,
     db: Session = Depends(get_db),
     current_user = Depends(require_role("ADMIN", "GESTIONNAIRE")),
 ):
-    """Valide une commande avec le choix de traitement."""
+    """
+    Valide une commande, deux chemins selon le payload :
+
+    1) Nouveau chemin par-ligne (`lignes` présent) : chaque ligne reçoit sa
+       propre `destination` ∈ {'a_planifier', 'contrat', 'facturation_directe'}.
+       - 'a_planifier' → éclatement unitaire en N prestations (cf.
+         routage_service.eclater_ligne_en_prestations).
+       - 'contrat' → marque la commande necessite_contrat=True (mécanisme
+         existant, le contrat reste créé manuellement via le tunnel 4 étapes).
+       - 'facturation_directe' → AUCUN déclenchement automatique ici. La
+         facturation Karlia reste pilotée par le circuit existant
+         (POST /commandes/{id}/facturer).
+       Toute la validation s'effectue dans une transaction unique.
+
+    2) Ancien chemin global (`lignes` absent) : payload {type_traitement,
+       necessite_contrat}. Compatibilité descendante stricte avec
+       CommandeValidation.
+
+    Statut final de la commande :
+      - au moins une ligne 'a_planifier' → 'a_planifier'
+        (le tunnel planification habituel prend le relais)
+      - sinon, au moins une 'contrat' → 'a_planifier' aussi (les contrats
+        nécessitent toujours une intervention humaine via /contrats-a-creer).
+        On garde 'a_planifier' pour rester cohérent avec le statut historique
+        des commandes en attente d'action.
+      - sinon → 'deployee' (tout est en facturation directe, rien à faire
+        de plus côté SGI, la commande sort des écrans actifs).
+    """
     commande = db.query(Commande).filter(Commande.id == commande_id).first()
     if not commande:
         raise HTTPException(status_code=404, detail="Commande non trouvée")
     if commande.statut != "nouvelle":
         raise HTTPException(status_code=400, detail="Cette commande a déjà été validée")
-    if validation.type_traitement not in ["a_planifier", "sans_planification"]:
+
+    # ─── Chemin par-ligne (nouveau) ─────────────────────────────────────
+    if payload.lignes is not None:
+        # Index des lignes de la commande pour validation/lookup
+        lignes_commande = {l.id: l for l in commande.lignes}
+
+        # Validation préalable : tout doit être OK avant tout side-effect
+        for item in payload.lignes:
+            if item.ligne_id not in lignes_commande:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"ligne_id {item.ligne_id} n'appartient pas à cette commande",
+                )
+            if item.destination not in DESTINATIONS_VALIDES:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"destination invalide '{item.destination}' pour ligne {item.ligne_id} "
+                        f"(attendu : {list(DESTINATIONS_VALIDES)})"
+                    ),
+                )
+
+        # Couverture : on s'assure que CHAQUE ligne de la commande est routée
+        ids_routes = {item.ligne_id for item in payload.lignes}
+        ids_manquants = set(lignes_commande.keys()) - ids_routes
+        if ids_manquants:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Lignes non routées : {sorted(ids_manquants)}. "
+                       f"Toutes les lignes doivent recevoir une destination.",
+            )
+
+        # Application dans une seule transaction
+        try:
+            has_a_planifier = False
+            has_contrat = False
+
+            for item in payload.lignes:
+                ligne = lignes_commande[item.ligne_id]
+                ligne.destination = item.destination
+
+                if item.destination == DESTINATION_A_PLANIFIER:
+                    has_a_planifier = True
+                    eclater_ligne_en_prestations(db, ligne)
+                elif item.destination == DESTINATION_CONTRAT:
+                    has_contrat = True
+                # facturation_directe : rien d'autre à faire ici (cf. docstring)
+
+            commande.date_validation = datetime.utcnow()
+            commande.necessite_contrat = has_contrat
+            # type_traitement reste à fin documentaire : valeur agrégée
+            if has_a_planifier:
+                commande.type_traitement = DESTINATION_A_PLANIFIER
+                commande.statut = "a_planifier"
+            elif has_contrat:
+                commande.type_traitement = DESTINATION_CONTRAT
+                commande.statut = "a_planifier"
+            else:
+                commande.type_traitement = DESTINATION_FACTURATION_DIRECTE
+                commande.statut = "deployee"
+
+            db.commit()
+        except HTTPException:
+            db.rollback()
+            raise
+        except Exception as e:
+            db.rollback()
+            logger.error(f"Erreur routage par-ligne commande {commande_id} : {e}")
+            raise HTTPException(status_code=500, detail=f"Erreur de routage : {e}")
+
+        db.refresh(commande)
+        return _commande_to_response(commande)
+
+    # ─── Chemin ancien (global) ─────────────────────────────────────────
+    type_traitement = payload.type_traitement
+    if type_traitement not in ["a_planifier", "sans_planification"]:
         raise HTTPException(status_code=400, detail="type_traitement invalide")
 
-    commande.type_traitement = validation.type_traitement
-    commande.necessite_contrat = validation.necessite_contrat
+    commande.type_traitement = type_traitement
+    commande.necessite_contrat = payload.necessite_contrat or False
     commande.date_validation = datetime.utcnow()
-    commande.statut = "a_planifier" if validation.type_traitement == "a_planifier" else "deployee"
+    commande.statut = "a_planifier" if type_traitement == "a_planifier" else "deployee"
 
     db.commit()
     db.refresh(commande)
