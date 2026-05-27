@@ -117,11 +117,11 @@ function ArticleSearchLine({ art, i, catalogue, update, remove, isFirst }) {
 
   const resultats = useMemo(() => {
     const q = recherche.toLowerCase().trim();
-    if (!q) return catalogue.slice(0, 50);
+    if (!q) return catalogue;
     return catalogue.filter(a =>
       ((a.designation || '').toLowerCase().includes(q)) ||
       ((a.reference || '').toLowerCase().includes(q))
-    ).slice(0, 50);
+    );
   }, [recherche, catalogue]);
 
   const selectionner = (a) => {

@@ -25,11 +25,11 @@ function ArticleSearchInputNC({ art, produits, onSelect, onClear }) {
 
   const resultats = useMemo(() => {
     const q = recherche.toLowerCase().trim();
-    if (!q) return produits.slice(0, 50);
+    if (!q) return produits;
     return produits.filter(p =>
       ((p.designation || '').toLowerCase().includes(q)) ||
       ((p.reference || '').toLowerCase().includes(q))
-    ).slice(0, 50);
+    );
   }, [recherche, produits]);
 
   const articleSelectionne = !!art.article_karlia_id;
