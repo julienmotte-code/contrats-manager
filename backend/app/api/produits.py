@@ -27,7 +27,7 @@ async def lister_produits(
     query = db.query(ArticleCache).filter(ArticleCache.actif == True)
     if recherche:
         query = query.filter(ArticleCache.designation.ilike(f"%{recherche}%"))
-    articles = query.order_by(ArticleCache.designation).limit(100).all()
+    articles = query.order_by(ArticleCache.designation).limit(1000).all()
     return {"source": "cache", "data": [
         {"karlia_id": a.karlia_id, "reference": a.reference, "designation": a.designation,
          "prix_unitaire_ht": float(a.prix_unitaire_ht) if a.prix_unitaire_ht else None,
