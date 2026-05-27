@@ -161,6 +161,7 @@ class KarliaService:
         date_echeance: date,
         montant_ht: float,
         description: str = "",
+        id_opportunity: Optional[int] = None,
     ) -> dict:
         """
         Crée une facture dans Karlia via l'endpoint Documents.
@@ -209,6 +210,8 @@ class KarliaService:
             "description": description or f"Facturation annuelle — Contrat {reference_contrat}",
             "products_list": products_list,
         }
+        if id_opportunity:
+            payload["id_opportunity"] = int(id_opportunity)
         logger.info(f"Création facture Karlia pour contrat {reference_contrat}, client {client_karlia_id}")
         return await self._post("/documents", payload)
 
