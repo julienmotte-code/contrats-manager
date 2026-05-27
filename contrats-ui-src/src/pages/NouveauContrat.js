@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import api, { contratsAPI, clientsAPI, produitsAPI, indicesAPI } from '../services/api';
 import toast from 'react-hot-toast';
 function calculerProrata(dateDebut, montantAnnuel, demiMois) {
@@ -21,6 +21,8 @@ function calculerProrata(dateDebut, montantAnnuel, demiMois) {
 }
 export default function NouveauContrat() {
   const navigate = useNavigate();
+  const location = useLocation();
+  const stateData = location.state || {};
   const [loading, setLoading] = useState(false);
   const [clientRecherche, setClientRecherche] = useState('');
   const [clientsResultats, setClientsResultats] = useState([]);
@@ -73,7 +75,7 @@ export default function NouveauContrat() {
     setLoading(true);
     try {
       const r = await contratsAPI.creer({ ...form, client_karlia_id: clientSelectionne.karlia_id, client_nom: clientSelectionne.nom, client_numero: clientSelectionne.numero_client, montant_annuel_ht: parseFloat(form.montant_annuel_ht),
-        prorate_demi_mois: demiMois, indice_reference_id: form.indice_reference_id || null, articles: form.articles.filter(a => a.designation).map(a => ({ ...a, prix_unitaire_ht: a.prix_unitaire_ht ? parseFloat(a.prix_unitaire_ht) : null, quantite: parseFloat(a.quantite) })) });
+        prorate_demi_mois: demiMois, indice_reference_id: form.indice_reference_id || null, karlia_opportunity_id: stateData.karlia_opportunity_id ?? null, articles: form.articles.filter(a => a.designation).map(a => ({ ...a, prix_unitaire_ht: a.prix_unitaire_ht ? parseFloat(a.prix_unitaire_ht) : null, quantite: parseFloat(a.quantite) })) });
       toast.success('Contrat créé avec succès');
       navigate(`/contrats/${r.data.id}`);
     } catch (e) { toast.error(e.response?.data?.detail || 'Erreur lors de la création'); }

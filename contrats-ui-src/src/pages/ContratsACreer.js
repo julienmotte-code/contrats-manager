@@ -69,6 +69,7 @@ export default function ContratsACreer() {
     navigate('/contrats/nouveau', {
       state: {
         fromCommande: commande.id,
+        karlia_opportunity_id: commande.karlia_opportunity_id,
         client: {
           karlia_id: commande.karlia_customer_id,
           nom: commande.client_nom,
