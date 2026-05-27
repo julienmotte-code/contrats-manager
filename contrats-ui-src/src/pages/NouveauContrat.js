@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import api, { contratsAPI, clientsAPI, produitsAPI, indicesAPI } from '../services/api';
 import toast from 'react-hot-toast';
@@ -19,6 +19,61 @@ function calculerProrata(dateDebut, montantAnnuel, demiMois) {
   const detailDemi = demiMois ? ` + ½ mois (${bonusDemiMois} €)` : '';
   return { prorate: true, nbMois, demiMois, bonusDemiMois, montant: montantTotal, montantBase, detail: regle + detailDemi };
 }
+function ArticleSearchInputNC({ art, produits, onSelect, onClear }) {
+  const [recherche, setRecherche] = useState('');
+  const [showResults, setShowResults] = useState(false);
+
+  const resultats = useMemo(() => {
+    const q = recherche.toLowerCase().trim();
+    if (!q) return produits.slice(0, 50);
+    return produits.filter(p =>
+      ((p.designation || '').toLowerCase().includes(q)) ||
+      ((p.reference || '').toLowerCase().includes(q))
+    ).slice(0, 50);
+  }, [recherche, produits]);
+
+  const articleSelectionne = !!art.article_karlia_id;
+
+  if (articleSelectionne) {
+    return (
+      <div className="flex items-center justify-between p-2 bg-white border border-blue-200 rounded text-xs">
+        <div className="min-w-0 flex-1">
+          <p className="font-medium text-gray-900 truncate">{art.designation}</p>
+          <p className="text-gray-500 truncate">{art.reference ? `Réf ${art.reference} — ` : ''}ID {art.article_karlia_id}</p>
+        </div>
+        <button type="button" onClick={() => { onClear(); setRecherche(''); setShowResults(false); }} className="ml-2 text-xs text-blue-600 underline whitespace-nowrap">Changer</button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="relative">
+      <input className="input text-xs"
+        placeholder="Rechercher un article (désignation ou référence)..."
+        value={recherche}
+        onFocus={() => setShowResults(true)}
+        onChange={e => { setRecherche(e.target.value); setShowResults(true); }} />
+      {showResults && resultats.length > 0 && (
+        <div className="absolute z-20 left-0 right-0 mt-1 border border-gray-200 rounded-lg divide-y max-h-80 overflow-y-auto bg-white shadow-lg">
+          {resultats.map(p => (
+            <button key={p.karlia_id} type="button"
+              onClick={() => { onSelect(p); setRecherche(''); setShowResults(false); }}
+              className="w-full text-left px-3 py-2 hover:bg-blue-50 text-xs">
+              <p className="font-medium">{p.designation}</p>
+              <p className="text-gray-500">
+                {p.reference ? `Réf ${p.reference}` : '(sans réf)'} — {p.prix_unitaire_ht || '?'} € HT
+              </p>
+            </button>
+          ))}
+        </div>
+      )}
+      {showResults && recherche.trim() && resultats.length === 0 && (
+        <p className="text-xs text-gray-400 mt-1">Aucun article ne correspond</p>
+      )}
+    </div>
+  );
+}
+
 export default function NouveauContrat() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -34,9 +89,18 @@ export default function NouveauContrat() {
   const [demiMois, setDemiMois] = useState(false);
   const [showNouveauClient, setShowNouveauClient] = useState(false);
   const [nouveauClient, setNouveauClient] = useState({ nom: '', email: '', telephone: '', adresse_ligne1: '', code_postal: '', ville: '', siret: '' });
-  const [form, setForm] = useState({ numero_contrat: '', date_debut: '', date_fin: '', montant_annuel_ht: '', indice_reference_id: '', prorate_validated: false, prorate_note: '', type_contrat: 'CONTRAT', articles: [{ rang: 0, article_karlia_id: '', designation: '', prix_unitaire_ht: '', quantite: 1, taux_tva: 20 }] });
+  const [form, setForm] = useState({ numero_contrat: '', date_debut: '', date_fin: '', montant_annuel_ht: '', indice_reference_id: '', prorate_validated: false, prorate_note: '', type_contrat: 'CONTRAT', articles: [{ rang: 0, article_karlia_id: '', designation: '', reference: '', prix_unitaire_ht: '', quantite: 1, taux_tva: 20 }] });
   useEffect(() => {
-    produitsAPI.liste({ limit: 300 }).then(r => setProduits(r.data.data || []));
+    produitsAPI.liste({ limit: 1000 })
+      .then(r => {
+        const data = r.data.data || [];
+        console.log('[NouveauContrat] catalogue produits chargé:', data.length, 'articles');
+        setProduits(data);
+      })
+      .catch(e => {
+        console.error('[NouveauContrat] échec chargement catalogue produits', e);
+        toast.error('Impossible de charger le catalogue articles');
+      });
     indicesAPI.liste().then(r => setIndices(r.data.data || []));
     api.get('/api/indices/familles').then(r => setFamilles(r.data.data || []));
   }, []);
@@ -54,10 +118,35 @@ export default function NouveauContrat() {
       if (prod) setForm(f => ({ ...f, articles: f.articles.map(a => a.rang === rang ? { ...a, designation: prod.designation, prix_unitaire_ht: prod.prix_unitaire_ht || '', article_karlia_id: value } : a) }));
     }
   };
+  const appliquerArticleDepuisCatalogue = (rang, produit) => {
+    setForm(f => ({
+      ...f,
+      articles: f.articles.map(a => a.rang === rang ? {
+        ...a,
+        article_karlia_id: String(produit.karlia_id || ''),
+        designation: produit.designation || '',
+        reference: produit.reference || '',
+        prix_unitaire_ht: produit.prix_unitaire_ht || '',
+        taux_tva: produit.taux_tva ?? a.taux_tva
+      } : a)
+    }));
+  };
+  const viderArticle = (rang) => {
+    setForm(f => ({
+      ...f,
+      articles: f.articles.map(a => a.rang === rang ? {
+        ...a,
+        article_karlia_id: '',
+        designation: '',
+        reference: '',
+        prix_unitaire_ht: ''
+      } : a)
+    }));
+  };
   const ajouterArticle = () => {
     const max = Math.max(...form.articles.map(a => a.rang));
     if (max >= 7) { toast.error('Maximum 7 articles complémentaires'); return; }
-    setForm(f => ({ ...f, articles: [...f.articles, { rang: max + 1, article_karlia_id: '', designation: '', prix_unitaire_ht: '', quantite: 1, taux_tva: 20 }] }));
+    setForm(f => ({ ...f, articles: [...f.articles, { rang: max + 1, article_karlia_id: '', designation: '', reference: '', prix_unitaire_ht: '', quantite: 1, taux_tva: 20 }] }));
   };
   const creerNouveauClient = async () => {
     try {
@@ -189,7 +278,14 @@ export default function NouveauContrat() {
                   {art.rang > 0 && <button type="button" onClick={() => setForm(f => ({ ...f, articles: f.articles.filter(a => a.rang !== art.rang) }))} className="text-red-400 hover:text-red-600 text-xs">✕</button>}
                 </div>
                 <div className="grid grid-cols-12 gap-2">
-                  <div className="col-span-4"><select className="input text-xs" value={art.article_karlia_id} onChange={e => setArticle(art.rang, 'article_karlia_id', e.target.value)}><option value="">Sélectionner article Karlia</option>{produits.map(p => <option key={p.karlia_id} value={p.karlia_id}>{p.reference ? `[${p.reference}] ` : ''}{p.designation}</option>)}</select></div>
+                  <div className="col-span-4">
+                    <ArticleSearchInputNC
+                      art={art}
+                      produits={produits}
+                      onSelect={(p) => appliquerArticleDepuisCatalogue(art.rang, p)}
+                      onClear={() => viderArticle(art.rang)}
+                    />
+                  </div>
                   <div className="col-span-4"><input className="input text-xs" placeholder="Désignation *" required={art.rang === 0} value={art.designation} onChange={e => setArticle(art.rang, 'designation', e.target.value)} /></div>
                   <div className="col-span-2"><input className="input text-xs" type="number" placeholder="Prix HT" value={art.prix_unitaire_ht} onChange={e => setArticle(art.rang, 'prix_unitaire_ht', e.target.value)} /></div>
                   <div className="col-span-2"><input className="input text-xs" type="number" placeholder="TVA%" value={art.taux_tva} onChange={e => setArticle(art.rang, 'taux_tva', e.target.value)} /></div>
