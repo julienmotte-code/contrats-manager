@@ -62,10 +62,28 @@ export default function AffectationFormateurs() {
         api.get('/api/formateurs', { params: { actif_only: true } }),
       ]);
       setCommande(cmdRes.data);
-      const prests = prestRes.data.prestations || [];
+      // Construire l'ensemble des ligne_id qui sont des intitulés Karlia
+      // (section_karlia=1) ou explicitement routés 'intitule'. Ces lignes ne
+      // représentent pas une vraie prestation et ne doivent jamais apparaître
+      // sur l'écran d'affectation — même si une prestation parasite y est
+      // encore rattachée (résidu d'un éclatement antérieur au garde-fou
+      // de v3.3.x). Cas couverts : les commandes resyncées depuis l'arrivée
+      // de section_karlia (toutes les 'nouvelle' et celles du groupe A de la
+      // bascule du chantier intitulés). Les commandes historiques restées
+      // au statut a_planifier/planifiee n'ont PAS section_karlia peuplé →
+      // le filtre n'a aucun effet sur elles (cf. Phase B, nettoyage DB).
+      const lignesIntituleIds = new Set(
+        (cmdRes.data.lignes || [])
+          .filter((l) => l.section_karlia === 1 || l.destination === 'intitule')
+          .map((l) => l.id),
+      );
+      const allPrests = prestRes.data.prestations || [];
+      const prests = allPrests.filter(
+        (p) => !lignesIntituleIds.has(p.commande_ligne_id),
+      );
       setPrestations(prests);
       setFormateurs(formRes.data.formateurs || []);
-      // Init de la map depuis l'état courant des prestations.
+      // Init de la map depuis les prestations AFFICHÉES (intitulés exclus).
       const init = {};
       for (const p of prests) {
         init[p.id] = p.formateur_id !== null && p.formateur_id !== undefined
