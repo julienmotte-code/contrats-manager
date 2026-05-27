@@ -1,4 +1,6 @@
 """Routes produits — Cache des articles Karlia"""
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from typing import Optional
@@ -7,7 +9,16 @@ from app.core.security import require_authenticated, require_role
 from app.models.models import ArticleCache
 from app.services.karlia_service import karlia, KarliaError
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter()
+
+# Seuil minimal d'articles reçus de Karlia pour déclencher la désactivation des
+# obsolètes. Si Karlia renvoie moins (réponse partielle, erreur silencieuse,
+# coupure réseau), on n'ose PAS désactiver — risque de tout invalider sur une
+# anomalie temporaire. 50 = très en-dessous des ~400 attendus, suffisant pour
+# détecter une réponse manifestement tronquée.
+SEUIL_REPONSE_PLAUSIBLE = 50
 
 
 @router.get("")
@@ -43,9 +54,12 @@ async def synchroniser_produits(
 ):
     try:
         result = await karlia.lister_produits(limit=500)
+        produits_recus = result.get("data", [])
+        ids_karlia_recus = set()
         count = 0
-        for p in result.get("data", []):
+        for p in produits_recus:
             karlia_id = str(p["id"])
+            ids_karlia_recus.add(karlia_id)
             existing = db.query(ArticleCache).filter(ArticleCache.karlia_id == karlia_id).first()
             prix = p.get("sell_price", {})
             prix_ht = prix.get("price") if isinstance(prix, dict) else None
@@ -68,8 +82,35 @@ async def synchroniser_produits(
             else:
                 db.add(ArticleCache(**data))
             count += 1
+
+        # Garde anti-réponse-partielle : on ne désactive les obsolètes QUE si la
+        # réponse Karlia est manifestement complète. En dessous du seuil, on logge
+        # un warning et on saute la désactivation — éviter d'invalider tout le
+        # cache sur une réponse Karlia dégradée (timeout, rate-limit, panne).
+        desactives = 0
+        if len(produits_recus) >= SEUIL_REPONSE_PLAUSIBLE:
+            obsoletes = db.query(ArticleCache).filter(
+                ArticleCache.actif == True,
+                ~ArticleCache.karlia_id.in_(ids_karlia_recus),
+            ).all()
+            for a in obsoletes:
+                a.actif = False
+            desactives = len(obsoletes)
+            logger.info(
+                f"Synchro articles : {count} ajoutés/maj, {desactives} désactivés (absents de Karlia)"
+            )
+        else:
+            logger.warning(
+                f"Synchro articles : Karlia a renvoyé {len(produits_recus)} produits "
+                f"(< seuil {SEUIL_REPONSE_PLAUSIBLE}), désactivation des obsolètes SKIPPED par sécurité"
+            )
+
         db.commit()
-        return {"message": f"{count} articles synchronisés"}
+        return {
+            "message": f"{count} articles synchronisés, {desactives} désactivés",
+            "ajoutes_ou_majs": count,
+            "desactives": desactives,
+        }
     except KarliaError as e:
         raise HTTPException(502, f"Erreur Karlia : {e.message}")
 
