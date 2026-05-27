@@ -456,6 +456,16 @@ async def valider_commande(
     Les lignes routées 'intitule' (titres de section/sous-totaux Karlia) sont
     acceptées mais ne déclenchent AUCUN effet : pas de prestation, pas de
     necessite_contrat, et ignorées dans le calcul du statut final.
+
+    Marquage "Traité" Karlia (custom field 66505, porté par l'opportunité) :
+    DÉPLACÉ ICI depuis la sync. Posé en BEST-EFFORT après le commit de
+    routage, uniquement dans le chemin par-ligne et uniquement quand il ne
+    reste plus aucune commande 'nouvelle' sur l'opportunité (garde-fou
+    multi-BC). Un échec côté Karlia ne fait pas échouer la validation : le
+    routage SGI est déjà committé, on logge un warning. Le chemin global
+    (compat descendante) ne pose PAS le marquage : il n'est plus appelé par
+    le frontend depuis l'écran de routage v3.3.0 et n'a pas la sémantique
+    "SGI a routé".
     """
     commande = db.query(Commande).filter(Commande.id == commande_id).first()
     if not commande:
@@ -538,10 +548,51 @@ async def valider_commande(
             logger.error(f"Erreur routage par-ligne commande {commande_id} : {e}")
             raise HTTPException(status_code=500, detail=f"Erreur de routage : {e}")
 
+        # ── Marquage "Traité" Karlia — best-effort, post-commit ─────────────
+        # Pourquoi ici plutôt qu'à l'import : pour que tant que SGI n'a pas
+        # validé le routage, le BC apparaisse "non Traité" côté CRM Karlia
+        # (le commercial voit que SGI n'a pas fini). Une fois validé → SGI
+        # coche Traité → le BC sort du flux côté CRM.
+        # Garde-fou multi-BC : 66505 est porté par l'OPPORTUNITÉ. Si dans le
+        # futur Karlia permet plusieurs BC sur une même opportunité, on
+        # n'allume Traité qu'une fois TOUTES les commandes de l'opp sorties
+        # de 'nouvelle' — sinon on signalerait à tort "fini" alors qu'il
+        # reste des BC frères à router.
+        # Best-effort : échec Karlia → warning, JAMAIS d'échec de validation
+        # (le routage SGI est déjà committé en DB, ne pas le défaire).
+        if commande.karlia_opportunity_id:
+            reste_nouvelle = db.query(Commande).filter(
+                Commande.karlia_opportunity_id == commande.karlia_opportunity_id,
+                Commande.statut == "nouvelle",
+                Commande.id != commande.id,
+            ).first()
+            if reste_nouvelle is None:
+                try:
+                    async with httpx.AsyncClient(timeout=10.0) as http_client:
+                        await karlia_devis_service._marquer_opportunity_traitee(
+                            http_client, str(commande.karlia_opportunity_id)
+                        )
+                except Exception as e:
+                    logger.warning(
+                        f"Marquage 'Traité' Karlia échoué (best-effort) pour "
+                        f"commande {commande_id} "
+                        f"(opp={commande.karlia_opportunity_id}) : {e!r}"
+                    )
+            else:
+                logger.info(
+                    f"Marquage 'Traité' différé pour commande {commande_id} : "
+                    f"il reste au moins une commande 'nouvelle' sur "
+                    f"l'opportunité {commande.karlia_opportunity_id} "
+                    f"(id={reste_nouvelle.id})"
+                )
+
         db.refresh(commande)
         return _commande_to_response(commande)
 
     # ─── Chemin ancien (global) ─────────────────────────────────────────
+    # NB : ce chemin (compat descendante) NE pose PAS le marquage "Traité"
+    # Karlia. Il n'est plus utilisé par le frontend depuis v3.3.0 et n'a pas
+    # la sémantique "SGI a routé par ligne" qui justifie le signal CRM.
     type_traitement = payload.type_traitement
     if type_traitement not in ["a_planifier", "sans_planification"]:
         raise HTTPException(status_code=400, detail="type_traitement invalide")

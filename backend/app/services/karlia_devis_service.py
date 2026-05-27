@@ -418,7 +418,13 @@ class KarliaDevisService:
             articles_cat_index = self._build_articles_categorie_index(db)
             logger.info(f"Index catégories articles_cache: {len(articles_cat_index)} entrées")
 
-            async with httpx.AsyncClient(timeout=30.0) as http_client:
+            # Le client httpx ouvert ici servait au marquage 'Traité' Karlia,
+            # déplacé en v3.3.x vers POST /api/commandes/{id}/valider (signal
+            # CRM cohérent : Traité = SGI a routé). La sync n'écrit plus
+            # côté Karlia ; on conserve néanmoins le contexte pour clarté
+            # et pour qu'un futur ajout d'appel Karlia depuis la boucle
+            # reste trivial.
+            async with httpx.AsyncClient(timeout=30.0) as http_client:  # noqa: F841
                 for index, bc_data in enumerate(bc_list, start=1):
                     # Sleep en tête d'itération : protège tous les appels Karlia
                     # de cette itération contre le quota 100 req/min.
@@ -520,11 +526,13 @@ class KarliaDevisService:
                             )
                             result["nouveaux_devis"] += 1
 
-                        # ── Marquage "Traité" Karlia après succès ──
-                        if commande_traitee is not None:
-                            await asyncio.sleep(0.8)
-                            if await self._marquer_opportunity_traitee(http_client, id_opportunity):
-                                result["opportunites_marquees"] += 1
+                        # NB : le marquage "Traité" Karlia (custom field 66505,
+                        # porté par l'opportunité) ne se fait PLUS ici. Il a
+                        # été déplacé dans valider_commande (chemin par-ligne)
+                        # pour que "Traité" signale réellement "SGI a routé
+                        # la commande" au commercial Karlia. Voir
+                        # _marquer_opportunity_traitee (méthode conservée et
+                        # appelée depuis l'endpoint de validation).
 
                     except Exception as e:
                         error_msg = f"Erreur BC {bc_data.get('id', '?')}: {str(e)}"
@@ -562,8 +570,7 @@ class KarliaDevisService:
                 f"{result['devis_mis_a_jour']} MAJ, "
                 f"{result['devis_ignores']} ignorés (sans client résolvable), "
                 f"{result['ignores_avances']} ignorés (statut avancé déjà existant), "
-                f"{result['documents_rejetes_par_type']} rejetés (mauvais type), "
-                f"{result['opportunites_marquees']} opportunités marquées | "
+                f"{result['documents_rejetes_par_type']} rejetés (mauvais type) | "
                 f"PDF: {result['pdf_url_renseigne']} ok, {result['pdf_url_absent']} absent"
             )
             logger.info(result["message"])
