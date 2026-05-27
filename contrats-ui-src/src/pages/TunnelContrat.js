@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import api, { contratsAPI, clientsAPI, produitsAPI } from '../services/api';
 import toast from 'react-hot-toast';
@@ -111,11 +111,119 @@ function SelectionClient({ clientSelectionne, setClientSelectionne }) {
   );
 }
 
+function ArticleSearchLine({ art, i, catalogue, update, remove, isFirst }) {
+  const [recherche, setRecherche] = useState('');
+  const [showResults, setShowResults] = useState(false);
+
+  const resultats = useMemo(() => {
+    const q = recherche.toLowerCase().trim();
+    if (!q) return [];
+    return catalogue.filter(a =>
+      ((a.designation || '').toLowerCase().includes(q)) ||
+      ((a.reference || '').toLowerCase().includes(q))
+    ).slice(0, 20);
+  }, [recherche, catalogue]);
+
+  const selectionner = (a) => {
+    update(i, 'designation', a.designation || '');
+    update(i, 'article_karlia_id', String(a.karlia_id || ''));
+    update(i, 'reference', a.reference || '');
+    update(i, 'prix_unitaire_ht', a.prix_unitaire_ht || '');
+    update(i, 'taux_tva', a.taux_tva || 20);
+    setRecherche('');
+    setShowResults(false);
+  };
+
+  const articleSelectionne = !!art.article_karlia_id;
+
+  return (
+    <div className={`p-3 rounded-lg border ${isFirst ? 'border-blue-200 bg-blue-50' : 'border-gray-200 bg-gray-50'}`}>
+      <div className="flex items-center justify-between mb-2">
+        <span className="text-xs font-semibold text-gray-500">
+          {isFirst ? '⭐ Article principal (rang 0 — obligatoire pour Karlia)' : `Article annexe ${i}`}
+        </span>
+        {!isFirst && <button onClick={() => remove(i)} className="text-red-500 text-xs">✕ Supprimer</button>}
+      </div>
+
+      {articleSelectionne ? (
+        <div className="flex items-center justify-between p-2 mb-2 bg-white border border-blue-200 rounded">
+          <div>
+            <p className="text-sm font-medium text-gray-900">{art.designation}</p>
+            <p className="text-xs text-gray-500">
+              {art.reference ? `Réf : ${art.reference} — ` : ''}ID Karlia : {art.article_karlia_id}
+            </p>
+          </div>
+          <button onClick={() => {
+            update(i, 'article_karlia_id', null);
+            update(i, 'designation', '');
+            update(i, 'reference', '');
+            update(i, 'prix_unitaire_ht', '');
+          }} className="text-xs text-blue-600 underline">Changer</button>
+        </div>
+      ) : (
+        <div className="relative mb-2">
+          <input className="input text-sm"
+            placeholder="Rechercher un article (désignation ou référence)..."
+            value={recherche}
+            onChange={e => { setRecherche(e.target.value); setShowResults(true); }} />
+          {showResults && resultats.length > 0 && (
+            <div className="absolute z-10 left-0 right-0 mt-1 border border-gray-200 rounded-lg divide-y max-h-60 overflow-y-auto bg-white shadow">
+              {resultats.map(a => (
+                <button key={a.karlia_id} type="button" onClick={() => selectionner(a)}
+                  className="w-full text-left px-3 py-2 hover:bg-blue-50 text-sm">
+                  <p className="font-medium">{a.designation}</p>
+                  <p className="text-xs text-gray-500">
+                    {a.reference ? `Réf ${a.reference}` : '(sans réf)'} — {a.prix_unitaire_ht || '?'} € HT
+                  </p>
+                </button>
+              ))}
+            </div>
+          )}
+          {showResults && recherche.trim() && resultats.length === 0 && (
+            <p className="text-xs text-gray-400 mt-1">Aucun article ne correspond</p>
+          )}
+        </div>
+      )}
+
+      <div className="grid grid-cols-2 gap-2">
+        <div className="col-span-2">
+          <input className="input text-sm" placeholder="Désignation *" value={art.designation}
+            onChange={e => update(i, 'designation', e.target.value)} />
+        </div>
+        <div>
+          <input className="input text-sm" placeholder="ID Karlia *" value={art.article_karlia_id || ''}
+            onChange={e => update(i, 'article_karlia_id', e.target.value)} readOnly
+            title="Sélectionnez depuis le catalogue ci-dessus" />
+        </div>
+        <div>
+          <input className="input text-sm" placeholder="Référence" value={art.reference || ''}
+            onChange={e => update(i, 'reference', e.target.value)} />
+        </div>
+        <div>
+          <input className="input text-sm" type="number" placeholder="Prix HT *" value={art.prix_unitaire_ht}
+            onChange={e => update(i, 'prix_unitaire_ht', e.target.value)} />
+        </div>
+        <div className="grid grid-cols-2 gap-1">
+          <input className="input text-sm" type="number" placeholder="Qté" value={art.quantite}
+            onChange={e => update(i, 'quantite', e.target.value)} />
+          <select className="input text-sm" value={art.taux_tva}
+            onChange={e => update(i, 'taux_tva', parseFloat(e.target.value))}>
+            <option value={20}>20%</option>
+            <option value={10}>10%</option>
+            <option value={5.5}>5.5%</option>
+            <option value={0}>0%</option>
+          </select>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ArticlesEditor({ articles, setArticles }) {
   const [catalogue, setCatalogue] = useState([]);
 
   useEffect(() => {
-    produitsAPI.liste({ limit: 200 })
+    produitsAPI.liste({ limit: 1000 })
       .then(r => setCatalogue(r.data.data || []))
       .catch(() => {});
   }, []);
@@ -131,66 +239,11 @@ function ArticlesEditor({ articles, setArticles }) {
   const remove = (i) => setArticles(prev =>
     prev.filter((_, idx) => idx !== i).map((a, idx) => ({ ...a, rang: idx })));
 
-  const selectionnerCatalogue = (i, art) => {
-    update(i, 'designation', art.designation || '');
-    update(i, 'article_karlia_id', String(art.karlia_id || ''));
-    update(i, 'reference', art.reference || '');
-    update(i, 'prix_unitaire_ht', art.prix_unitaire_ht || '');
-    update(i, 'taux_tva', art.taux_tva || 20);
-  };
-
   return (
     <div className="space-y-3">
       {articles.map((art, i) => (
-        <div key={i} className={`p-3 rounded-lg border ${i === 0 ? 'border-blue-200 bg-blue-50' : 'border-gray-200 bg-gray-50'}`}>
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-semibold text-gray-500">
-              {i === 0 ? '⭐ Article principal (rang 0 — obligatoire pour Karlia)' : `Article annexe ${i}`}
-            </span>
-            {i > 0 && <button onClick={() => remove(i)} className="text-red-500 text-xs">✕ Supprimer</button>}
-          </div>
-                    {catalogue.length > 0 && (
-            <select className="input text-sm mb-2 font-medium border-blue-300 bg-white" value={art.article_karlia_id || ''}
-              onChange={e => { const a = catalogue.find(x => String(x.karlia_id) === e.target.value); if (a) selectionnerCatalogue(i, a); }}>
-              <option value="">📦 Choisir un article depuis Karlia...</option>
-              {catalogue.map(a => (
-                <option key={a.karlia_id} value={String(a.karlia_id)}>
-                  {a.designation} — {a.prix_unitaire_ht || '?'} € HT
-                </option>
-              ))}
-            </select>
-          )}
-          <div className="grid grid-cols-2 gap-2">
-            <div className="col-span-2">
-              <input className="input text-sm" placeholder="Désignation *" value={art.designation}
-                onChange={e => update(i, 'designation', e.target.value)} />
-            </div>
-            <div>
-              <input className="input text-sm" placeholder="ID Karlia *" value={art.article_karlia_id || ''}
-                onChange={e => update(i, 'article_karlia_id', e.target.value)} readOnly 
-                title="Sélectionnez depuis le catalogue ci-dessus" />
-            </div>
-            <div>
-              <input className="input text-sm" placeholder="Référence" value={art.reference || ''}
-                onChange={e => update(i, 'reference', e.target.value)} />
-            </div>
-            <div>
-              <input className="input text-sm" type="number" placeholder="Prix HT *" value={art.prix_unitaire_ht}
-                onChange={e => update(i, 'prix_unitaire_ht', e.target.value)} />
-            </div>
-            <div className="grid grid-cols-2 gap-1">
-              <input className="input text-sm" type="number" placeholder="Qté" value={art.quantite}
-                onChange={e => update(i, 'quantite', e.target.value)} />
-              <select className="input text-sm" value={art.taux_tva}
-                onChange={e => update(i, 'taux_tva', parseFloat(e.target.value))}>
-                <option value={20}>20%</option>
-                <option value={10}>10%</option>
-                <option value={5.5}>5.5%</option>
-                <option value={0}>0%</option>
-              </select>
-            </div>
-          </div>
-        </div>
+        <ArticleSearchLine key={i} art={art} i={i} catalogue={catalogue}
+          update={update} remove={remove} isFirst={i === 0} />
       ))}
       <button onClick={addArticle} className="btn-secondary text-sm w-full">+ Ajouter un article</button>
     </div>
