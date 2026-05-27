@@ -33,7 +33,7 @@ import httpx
 from app.core.database import get_db
 from app.core.security import require_authenticated, require_role
 from app.services.karlia_service import karlia
-from app.models.models import Commande, CommandeLigne, Prestation, Contrat
+from app.models.models import Commande, CommandeLigne, Prestation, Contrat, Formateur
 from app.services.karlia_devis_service import karlia_devis_service
 from app.services.routage_service import (
     destination_par_defaut,
@@ -113,6 +113,11 @@ class CommandeResponse(BaseModel):
     nb_prestations_planifiees: int = 0
     formateur_id: Optional[int] = None
     formateur_nom: Optional[str] = None
+    # Comptage des formateur_id distincts non-NULL sur les prestations de la
+    # commande. Le frontend l'utilise pour afficher : 0 → "Non attribué",
+    # 1 → formateur_nom, ≥2 → "N formateurs". Calculé en mémoire à partir des
+    # prestations déjà chargées (joinedload), pas de N+1 sur la liste paginée.
+    nb_formateurs_distincts: int = 0
     date_import: Optional[datetime] = None
     date_validation: Optional[datetime] = None
     lignes: List[CommandeLigneResponse] = []
@@ -195,6 +200,33 @@ class CommandePlanification(BaseModel):
     notes_planification: Optional[str] = None
 
 
+class AffectationFormateurItem(BaseModel):
+    """Une affectation prestation → formateur dans le payload par-prestation.
+
+    formateur_id à None = désaffecter explicitement la prestation. Une
+    prestation NON listée dans le payload n'est PAS touchée (affectation
+    partielle autorisée, cf. POST /commandes/{id}/affecter-formateurs).
+    """
+    prestation_id: int
+    formateur_id: Optional[int] = None
+
+
+class AffectationFormateursPayload(BaseModel):
+    affectations: List[AffectationFormateurItem]
+
+
+class AffectationFormateursResult(BaseModel):
+    """Réponse de POST /commandes/{id}/affecter-formateurs.
+
+    `avertissements` liste les prestation_id dont la réaffectation a quand
+    même été appliquée mais qui étaient déjà 'planifiee' (ou avaient une
+    date planifiée posée) — le frontend prévient l'utilisateur qu'un
+    événement agenda associé devra peut-être être recalé manuellement.
+    """
+    commande: CommandeResponse
+    avertissements: List[int] = []
+
+
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 def _commande_to_response(commande: Commande) -> CommandeResponse:
@@ -203,6 +235,11 @@ def _commande_to_response(commande: Commande) -> CommandeResponse:
     nb_prestations = len(prestations)
     nb_attribuees = sum(1 for p in prestations if p.formateur_id is not None)
     nb_planifiees = sum(1 for p in prestations if p.statut == 'planifiee' or p.statut == 'realisee')
+    # Nombre de formateurs distincts (non-NULL) sur les prestations. Permet
+    # au frontend d'afficher "N formateurs" quand la commande est répartie.
+    nb_formateurs_distincts = len({
+        p.formateur_id for p in prestations if p.formateur_id is not None
+    })
 
     return CommandeResponse(
         id=commande.id,
@@ -235,6 +272,7 @@ def _commande_to_response(commande: Commande) -> CommandeResponse:
         nb_prestations_planifiees=nb_planifiees,
         formateur_id=commande.formateur_id,
         formateur_nom=f"{commande.formateur.prenom or ''} {commande.formateur.nom}".strip() if commande.formateur else None,
+        nb_formateurs_distincts=nb_formateurs_distincts,
         date_import=commande.date_import,
         date_validation=commande.date_validation,
         lignes=[_ligne_to_response(l) for l in commande.lignes]
@@ -631,6 +669,145 @@ async def planifier_commande(
     db.commit()
     db.refresh(commande)
     return _commande_to_response(commande)
+
+
+@router.post(
+    "/{commande_id}/affecter-formateurs",
+    response_model=AffectationFormateursResult,
+)
+async def affecter_formateurs(
+    commande_id: int,
+    payload: AffectationFormateursPayload,
+    db: Session = Depends(get_db),
+    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE")),
+):
+    """
+    Affecte un formateur PAR PRESTATION sur une commande.
+
+    Use case : remplacer l'affectation globale "1 formateur pour toute la
+    commande" (POST /api/prestations/reattribuer-commande/{id}, conservé en
+    raccourci) par une répartition fine. Pour chaque prestation listée dans
+    le payload, on pose son `formateur_id` (ou NULL pour désaffecter).
+
+    Semantique :
+      - Affectation PARTIELLE autorisée : une prestation absente du payload
+        n'est PAS touchée. Cela permet d'ajuster une seule prestation sans
+        renvoyer toutes les autres.
+      - Réaffectation AUTORISÉE même sur une prestation déjà 'planifiee' (ou
+        avec date_planifiee posée). Dans ce cas la prestation_id est ajoutée
+        à `avertissements` dans la réponse : le frontend prévient
+        l'utilisateur qu'un événement agenda associé devra peut-être être
+        recalé. L'affectation est appliquée quoi qu'il en soit.
+      - Validation préalable : tout doit passer AVANT le premier side-effect
+        (404/400 sans aucune écriture).
+
+    Recalcul de `commande.formateur_id` (cohérence d'affichage avec la liste) :
+      - 0 prestation avec formateur → NULL
+      - exactement 1 formateur distinct → ce formateur
+      - ≥2 formateurs distincts → NULL (le champ `nb_formateurs_distincts` du
+        schéma prend le relais : le frontend affiche "N formateurs")
+    """
+    commande = db.query(Commande).filter(Commande.id == commande_id).first()
+    if not commande:
+        raise HTTPException(status_code=404, detail="Commande non trouvée")
+
+    # On n'affecte que sur les commandes encore dans le flow actif. Une
+    # commande facturée/terminée ne doit plus voir ses prestations bouger.
+    statuts_actifs = ("a_planifier", "planifiee")
+    if commande.statut not in statuts_actifs:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Statut commande '{commande.statut}' incompatible avec une "
+                f"affectation (attendu : {list(statuts_actifs)})"
+            ),
+        )
+
+    # Index des prestations de la commande pour validation et application.
+    prestations_par_id = {p.id: p for p in commande.prestations}
+
+    # Pré-charge en UNE requête les formateurs actifs référencés dans le
+    # payload (évite N requêtes ponctuelles dans la boucle de validation).
+    formateur_ids_demandes = {
+        item.formateur_id for item in payload.affectations
+        if item.formateur_id is not None
+    }
+    formateurs_actifs: set = set()
+    if formateur_ids_demandes:
+        rows = db.query(Formateur.id).filter(
+            Formateur.id.in_(formateur_ids_demandes),
+            Formateur.actif == True,  # noqa: E712 (SQLAlchemy comparison)
+        ).all()
+        formateurs_actifs = {r.id for r in rows}
+
+    # Validation préalable : aucun side-effect avant d'avoir tout vérifié.
+    for item in payload.affectations:
+        if item.prestation_id not in prestations_par_id:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"prestation_id {item.prestation_id} n'appartient pas à "
+                    f"cette commande (id={commande_id})"
+                ),
+            )
+        if item.formateur_id is not None and item.formateur_id not in formateurs_actifs:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"formateur_id {item.formateur_id} inexistant ou inactif"
+                ),
+            )
+
+    # Application dans une seule transaction.
+    try:
+        avertissements: List[int] = []
+        for item in payload.affectations:
+            prestation = prestations_par_id[item.prestation_id]
+            # Avertissement si la prestation est déjà engagée dans le flow
+            # de planification (statut planifiee ou date posée). On applique
+            # quand même la réaffectation, mais on retourne l'id pour que
+            # le frontend signale qu'un évent agenda peut nécessiter un
+            # recalage manuel.
+            if prestation.statut == "planifiee" or prestation.date_planifiee is not None:
+                avertissements.append(prestation.id)
+            prestation.formateur_id = item.formateur_id
+            prestation.updated_at = datetime.utcnow()
+
+        # Recalcul de commande.formateur_id sur l'ENSEMBLE des prestations
+        # actives (on ignore les 'realisee' qui n'ont plus à influencer
+        # l'affichage du formateur "en cours").
+        formateurs_actuels = {
+            p.formateur_id
+            for p in commande.prestations
+            if p.formateur_id is not None
+            and p.statut in ("a_planifier", "planifiee")
+        }
+        if len(formateurs_actuels) == 1:
+            commande.formateur_id = next(iter(formateurs_actuels))
+        else:
+            # 0 ou ≥2 → NULL. nb_formateurs_distincts gère l'affichage côté
+            # liste (cf. CommandeResponse).
+            commande.formateur_id = None
+        commande.updated_at = datetime.utcnow()
+
+        db.commit()
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(
+            f"Erreur affectation formateurs commande {commande_id} : {e}"
+        )
+        raise HTTPException(
+            status_code=500, detail=f"Erreur d'affectation : {e}"
+        )
+
+    db.refresh(commande)
+    return AffectationFormateursResult(
+        commande=_commande_to_response(commande),
+        avertissements=sorted(avertissements),
+    )
 
 
 @router.post("/{commande_id}/terminer", response_model=CommandeResponse)
