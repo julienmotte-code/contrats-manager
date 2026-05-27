@@ -136,6 +136,8 @@ class Contrat(Base):
     created_at            = Column(DateTime(timezone=True), server_default=func.now())
     updated_at            = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
     validated_at          = Column(DateTime(timezone=True))
+    # Opportunité Karlia d'origine (NULL pour les renouvellements / saisie sans commande)
+    karlia_opportunity_id = Column(Integer, nullable=True)
 
     # Contraintes
     __table_args__ = (
