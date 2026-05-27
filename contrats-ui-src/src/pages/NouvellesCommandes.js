@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { useNavigate, useLocation } from 'react-router-dom';
 import {
   Box, Paper, Typography, Table, TableBody, TableCell, TableContainer,
   TableHead, TableRow, Button, IconButton, Chip, TextField, InputAdornment,
   Dialog, DialogTitle, DialogContent, DialogActions, CircularProgress,
-  Alert, Card, CardContent, Grid, Radio, RadioGroup, FormControlLabel,
-  FormControl, FormLabel, Checkbox, Tooltip, TablePagination, TableSortLabel
+  Alert, Card, CardContent, Grid, Tooltip, TablePagination, TableSortLabel
 } from '@mui/material';
 import {
   Search as SearchIcon, Visibility as ViewIcon,
@@ -16,6 +16,9 @@ import api from '../services/api';
 import { openPdfWithAuth } from '../services/pdfFetch';
 
 export default function NouvellesCommandes() {
+  const navigate = useNavigate();
+  const location = useLocation();
+
   const [commandes, setCommandes] = useState([]);
   const [stats, setStats] = useState({});
   const [loading, setLoading] = useState(true);
@@ -30,14 +33,7 @@ export default function NouvellesCommandes() {
   const [sortBy, setSortBy] = useState(null);
   const [sortDir, setSortDir] = useState(null);
 
-  // Dialog validation
-  const [validationOpen, setValidationOpen] = useState(false);
-  const [selectedCommande, setSelectedCommande] = useState(null);
-  const [typeTraitement, setTypeTraitement] = useState('a_planifier');
-  const [necessiteContrat, setNecessiteContrat] = useState(false);
-  const [validating, setValidating] = useState(false);
-
-  // Dialog détail
+  // Dialog détail (conservé tel quel).
   const [detailOpen, setDetailOpen] = useState(false);
   const [detailCommande, setDetailCommande] = useState(null);
 
@@ -72,31 +68,21 @@ export default function NouvellesCommandes() {
     fetchCommandes();
   }, [fetchStats, fetchCommandes]);
 
-  const openValidation = (commande) => {
-    setSelectedCommande(commande);
-    setTypeTraitement('a_planifier');
-    setNecessiteContrat(false);
-    setValidationOpen(true);
-  };
-
-  const handleValidation = async () => {
-    if (!selectedCommande) return;
-    setValidating(true);
-    try {
-      await api.post(`/api/commandes/${selectedCommande.id}/valider`, {
-        type_traitement: typeTraitement,
-        necessite_contrat: necessiteContrat
-      });
-      setSuccess('Commande validée avec succès');
-      setValidationOpen(false);
-      fetchCommandes();
-      fetchStats();
-    } catch (err) {
-      setError('Erreur lors de la validation');
-      console.error(err);
-    } finally {
-      setValidating(false);
+  // Message de succès passé via navigate({ state }) depuis RoutageCommande.
+  // Consommé une seule fois puis effacé du history state pour ne pas réapparaître.
+  useEffect(() => {
+    const msg = location.state?.successMessage;
+    if (msg) {
+      setSuccess(msg);
+      navigate(location.pathname, { replace: true, state: {} });
     }
+  }, [location, navigate]);
+
+  // Le clic "Valider" ne fait plus de POST direct : il route vers la page
+  // dédiée /commandes/:id/routage qui décompose les lignes et permet de
+  // choisir la destination de chacune (cf. backend POST /valider par-ligne).
+  const handleAllerAuRoutage = (commande) => {
+    navigate(`/commandes/${commande.id}/routage`);
   };
 
   const openDetail = async (commande) => {
@@ -305,8 +291,8 @@ export default function NouvellesCommandes() {
                         <ViewIcon />
                       </IconButton>
                     </Tooltip>
-                    <Tooltip title="Valider">
-                      <IconButton size="small" color="primary" onClick={() => openValidation(cmd)}>
+                    <Tooltip title="Valider (routage par ligne)">
+                      <IconButton size="small" color="primary" onClick={() => handleAllerAuRoutage(cmd)}>
                         <CheckIcon />
                       </IconButton>
                     </Tooltip>
@@ -328,66 +314,7 @@ export default function NouvellesCommandes() {
         />
       </TableContainer>
 
-      {/* Dialog Validation */}
-      <Dialog open={validationOpen} onClose={() => setValidationOpen(false)} maxWidth="sm" fullWidth>
-        <DialogTitle>Valider la commande</DialogTitle>
-        <DialogContent>
-          {selectedCommande && (
-            <Box sx={{ mt: 1 }}>
-              <Typography variant="subtitle1" gutterBottom>
-                {selectedCommande.reference_devis} — {selectedCommande.client_nom}
-              </Typography>
-              <Typography variant="body2" color="text.secondary" gutterBottom>
-                Montant : {formatMontant(selectedCommande.montant_ttc)}
-              </Typography>
-
-              <FormControl sx={{ mt: 3 }}>
-                <FormLabel>Type de traitement</FormLabel>
-                <RadioGroup
-                  value={typeTraitement}
-                  onChange={(e) => setTypeTraitement(e.target.value)}
-                >
-                  <FormControlLabel
-                    value="a_planifier"
-                    control={<Radio />}
-                    label="À planifier (intervention requise)"
-                  />
-                  <FormControlLabel
-                    value="sans_planification"
-                    control={<Radio />}
-                    label="Sans planification (commande directe)"
-                  />
-                </RadioGroup>
-              </FormControl>
-
-              <Box sx={{ mt: 2 }}>
-                <FormControlLabel
-                  control={
-                    <Checkbox
-                      checked={necessiteContrat}
-                      onChange={(e) => setNecessiteContrat(e.target.checked)}
-                    />
-                  }
-                  label="Cette commande nécessite la création d'un contrat/avenant"
-                />
-              </Box>
-            </Box>
-          )}
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setValidationOpen(false)}>Annuler</Button>
-          <Button
-            variant="contained"
-            onClick={handleValidation}
-            disabled={validating}
-            startIcon={validating ? <CircularProgress size={20} /> : <CheckIcon />}
-          >
-            Valider
-          </Button>
-        </DialogActions>
-      </Dialog>
-
-      {/* Dialog Détail */}
+      {/* Dialog Détail (inchangé : lecture seule du BC) */}
       <Dialog open={detailOpen} onClose={() => setDetailOpen(false)} maxWidth="md" fullWidth>
         <DialogTitle>Détail de la commande</DialogTitle>
         <DialogContent>

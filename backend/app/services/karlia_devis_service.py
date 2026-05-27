@@ -46,7 +46,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.database import SessionLocal
-from app.models.models import Commande, CommandeLigne, Parametre, ClientCache
+from app.models.models import Commande, CommandeLigne, Parametre, ClientCache, ArticleCache
 
 logger = logging.getLogger(__name__)
 
@@ -308,6 +308,58 @@ class KarliaDevisService:
         except (ValueError, TypeError):
             return None
 
+    def _parse_section(self, raw: Any, ref: str = "") -> Optional[int]:
+        """
+        Convertit products_list[i].section en entier brut (cf. Option B
+        diag_section_universel.md).
+
+        Karlia renvoie typiquement "0" ou "1" (string). Valeurs attendues
+        ∈ {0, 1} ; toute valeur hors plage est stockée TELLE QUELLE (cast
+        int) et loggée en warning pour détecter une future évolution Karlia.
+
+        - None / "" / non castable → None (inconnu)
+        - "0" / 0                  → 0
+        - "1" / 1                  → 1
+        - autre (ex "2")           → cette valeur entière + warning
+        """
+        if raw is None or raw == "":
+            return None
+        try:
+            n = int(raw)
+        except (TypeError, ValueError):
+            logger.warning(
+                f"section Karlia non castable en int sur {ref or 'ligne'} : "
+                f"valeur brute={raw!r} (type {type(raw).__name__}) — section_karlia=NULL"
+            )
+            return None
+        if n not in (0, 1):
+            logger.warning(
+                f"section inattendue: {n} sur commande {ref or '?'} "
+                f"(attendu 0 ou 1) — stockée telle quelle pour traçabilité."
+            )
+        return n
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Catégorisation des lignes (résolution locale via articles_cache)
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def _build_articles_categorie_index(self, db: Session) -> Dict[str, tuple]:
+        """
+        Construit un index `karlia_id -> (id_product_category, product_category)`
+        depuis `articles_cache`. Évite tout appel Karlia supplémentaire pendant
+        la sync des BC : la catégorie est résolue localement à partir du cache
+        produits (qui doit avoir été alimenté via POST /api/produits/synchro).
+
+        Lignes libres (id_product=0) ou produits absents du cache → resolveront
+        à (None, None) via dict.get(...), donc id_product_category sera NULL.
+        """
+        rows = db.query(
+            ArticleCache.karlia_id,
+            ArticleCache.id_product_category,
+            ArticleCache.product_category,
+        ).all()
+        return {r.karlia_id: (r.id_product_category, r.product_category) for r in rows}
+
     # ─────────────────────────────────────────────────────────────────────────
     # Synchronisation principale
     # ─────────────────────────────────────────────────────────────────────────
@@ -360,6 +412,11 @@ class KarliaDevisService:
             bc_list = await self.get_devis_acceptes(depuis_date)
             total_a_traiter = len(bc_list)
             logger.info(f"Bons de commande trouvés: {total_a_traiter}")
+
+            # Index local karlia_id -> (id_product_category, product_category)
+            # construit UNE FOIS par passe de sync (aucun appel Karlia par ligne).
+            articles_cat_index = self._build_articles_categorie_index(db)
+            logger.info(f"Index catégories articles_cache: {len(articles_cat_index)} entrées")
 
             async with httpx.AsyncClient(timeout=30.0) as http_client:
                 for index, bc_data in enumerate(bc_list, start=1):
@@ -450,6 +507,7 @@ class KarliaDevisService:
                             commande_traitee = await self._update_commande(
                                 db, existing_nouvelle, bc_data,
                                 client_cache_mem=client_cache_mem,
+                                articles_cat_index=articles_cat_index,
                             )
                             result["devis_mis_a_jour"] += 1
                         else:
@@ -458,6 +516,7 @@ class KarliaDevisService:
                                 db, bc_data,
                                 client_cache_mem=client_cache_mem,
                                 opportunity_id=opp_id_int,
+                                articles_cat_index=articles_cat_index,
                             )
                             result["nouveaux_devis"] += 1
 
@@ -587,8 +646,12 @@ class KarliaDevisService:
         devis_data: Dict[str, Any],
         client_cache_mem: Optional[Dict[Any, Optional[Dict[str, Any]]]] = None,
         opportunity_id: Optional[int] = None,
+        articles_cat_index: Optional[Dict[str, tuple]] = None,
     ) -> Commande:
         """Crée une commande à partir d'un BC Karlia."""
+        # Fallback : construire l'index si appel direct hors sync (sécurité).
+        if articles_cat_index is None:
+            articles_cat_index = self._build_articles_categorie_index(db)
         # Récupérer le détail complet du BC (produits, PDF)
         bc_detail = await self.get_devis_detail(devis_data["id"])
         if bc_detail:
@@ -652,10 +715,21 @@ class KarliaDevisService:
 
         # Ajouter les lignes de produits (même structure que les devis)
         products = devis_data.get("products_list") or []
+        ref_for_log = devis_data.get("number") or f"id={devis_data.get('id')}"
         for idx, product in enumerate(products):
+            karlia_pid = str(product.get("id_product") or "")
+            # Résolution locale de la catégorie via l'index articles_cache.
+            # Lignes libres (id_product=0 ou "") ou produit absent du cache →
+            # tuple (None, None) → id_product_category restera NULL.
+            cat_id, cat_nom = articles_cat_index.get(karlia_pid, (None, None))
+            # Marqueur Karlia 'section' : 0 = vraie ligne, 1 = intitulé/sous-total.
+            # On le PERSISTE en brut (option B, diag_section_universel.md) :
+            # rien n'est filtré à la sync, l'exclusion se fait au routage et
+            # à la facturation côté SGI.
+            section_val = self._parse_section(product.get("section"), ref_for_log)
             ligne = CommandeLigne(
                 commande_id=commande.id,
-                karlia_product_id=str(product.get("id_product") or ""),
+                karlia_product_id=karlia_pid,
                 designation=product.get("title") or product.get("description"),
                 description=product.get("description"),
                 quantite=product.get("quantity", 1),
@@ -663,7 +737,12 @@ class KarliaDevisService:
                 prix_unitaire_ht=product.get("price_without_tax"),
                 taux_tva=self._parse_tva(product.get("id_vat")) or float(product.get("vat", 0)),
                 montant_ht=product.get("total_without_tax"),
-                ordre=idx
+                ordre=idx,
+                # Catégorie figée à la sync (snapshot). destination reste NULL
+                # à ce stade : le routage métier sera ajouté à une étape ultérieure.
+                id_product_category=cat_id,
+                product_category=cat_nom,
+                section_karlia=section_val,
             )
             db.add(ligne)
 
@@ -677,12 +756,16 @@ class KarliaDevisService:
         commande: Commande,
         devis_data: Dict[str, Any],
         client_cache_mem: Optional[Dict[Any, Optional[Dict[str, Any]]]] = None,
+        articles_cat_index: Optional[Dict[str, tuple]] = None,
     ) -> Commande:
         """
         Met à jour une commande 'nouvelle' existante avec les données fraîches
         d'un nouveau BC pour la même opportunité. Régénère les lignes depuis
         le BC.
         """
+        # Fallback : construire l'index si appel direct hors sync (sécurité).
+        if articles_cat_index is None:
+            articles_cat_index = self._build_articles_categorie_index(db)
         bc_detail = await self.get_devis_detail(devis_data["id"])
         if bc_detail:
             preserved_customer = devis_data.get("id_customer_supplier")
@@ -734,14 +817,18 @@ class KarliaDevisService:
         # 'nouvelle' jamais validée → on accepte la perte des anciennes lignes
         # car elles n'ont pas encore été consommées par une prestation).
         products = devis_data.get("products_list")
+        ref_for_log = devis_data.get("number") or f"id={devis_data.get('id')}"
         if products is not None:
             for ligne in list(commande.lignes):
                 db.delete(ligne)
             db.flush()
             for idx, product in enumerate(products):
+                karlia_pid = str(product.get("id_product") or "")
+                cat_id, cat_nom = articles_cat_index.get(karlia_pid, (None, None))
+                section_val = self._parse_section(product.get("section"), ref_for_log)
                 ligne = CommandeLigne(
                     commande_id=commande.id,
-                    karlia_product_id=str(product.get("id_product") or ""),
+                    karlia_product_id=karlia_pid,
                     designation=product.get("title") or product.get("description"),
                     description=product.get("description"),
                     quantite=product.get("quantity", 1),
@@ -749,7 +836,11 @@ class KarliaDevisService:
                     prix_unitaire_ht=product.get("price_without_tax"),
                     taux_tva=self._parse_tva(product.get("id_vat")) or float(product.get("vat", 0)),
                     montant_ht=product.get("total_without_tax"),
-                    ordre=idx
+                    ordre=idx,
+                    # Catégorie figée à la sync (snapshot). destination reste NULL.
+                    id_product_category=cat_id,
+                    product_category=cat_nom,
+                    section_karlia=section_val,
                 )
                 db.add(ligne)
 
