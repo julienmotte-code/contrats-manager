@@ -239,6 +239,7 @@ async def lancer_facturation(
             "montant_ht": montant_ht,
             "lignes": lignes,
             "description": f"Facturation {annee} — Contrat {contrat.numero_contrat}",
+            "id_opportunity": contrat.karlia_opportunity_id,
         })
 
     if not factures_a_emettre:

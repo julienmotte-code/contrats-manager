@@ -261,6 +261,7 @@ class KarliaService:
                     date_echeance=f["date_echeance"],
                     montant_ht=f["montant_ht"],
                     description=f.get("description", ""),
+                    id_opportunity=f.get("id_opportunity"),
                 )
                 resultats.append({
                     "plan_id": f.get("plan_id"),

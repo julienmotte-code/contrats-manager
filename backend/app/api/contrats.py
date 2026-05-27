@@ -61,6 +61,8 @@ class ContratCreate(BaseModel):
     contrat_parent_id: Optional[str] = None
     # Indice de référence initial
     indice_reference_id: Optional[str] = None
+    # Lien Karlia : opportunité d'origine (commande source). NULL pour renouvellement / saisie sans commande.
+    karlia_opportunity_id: Optional[int] = None
 
 
 class RenouvellementAction(BaseModel):
@@ -191,6 +193,7 @@ def creer_contrat(
         prorate_note=data.prorate_note,
         type_contrat=data.type_contrat,
         contrat_parent_id=uuid.UUID(data.contrat_parent_id) if data.contrat_parent_id else None,
+        karlia_opportunity_id=data.karlia_opportunity_id,
         statut="BROUILLON",
     )
     db.add(contrat)
