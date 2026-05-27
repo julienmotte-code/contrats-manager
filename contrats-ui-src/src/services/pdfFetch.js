@@ -9,11 +9,16 @@
  * temporaire en mémoire (URL.createObjectURL), l'ouvrir dans un nouvel onglet,
  * puis révoquer cette URL après un délai pour libérer la mémoire.
  *
+ * Note : depuis le fix proxy-CORS du backend (commandes.py /pdf), l'endpoint
+ * /api/commandes/{id}/pdf renvoie directement le PDF en flux same-origin
+ * (Response application/pdf) au lieu d'une 307 vers Karlia. Le browser peut
+ * donc lire le blob sans buter sur le CORS absent de Karlia.
+ *
  * Usage :
  *   import { openPdfWithAuth } from '../services/pdfFetch';
  *   openPdfWithAuth(`/api/commandes/${id}/pdf`);
  *
- * Le helper gère les erreurs 401/403/404 et lève une exception explicite
+ * Le helper gère les erreurs 401/403/404/502 et lève une exception explicite
  * que l'appelant peut catch'er pour afficher un toast.
  */
 
@@ -30,8 +35,6 @@ export async function openPdfWithAuth(url) {
         response = await fetch(url, {
             method: 'GET',
             headers: { Authorization: `Bearer ${token}` },
-            // L'endpoint /pdf renvoie souvent un 307 vers Karlia : suivre la redirection.
-            redirect: 'follow',
         });
     } catch (e) {
         throw new Error(`PDF : erreur réseau (${e.message})`);
@@ -46,6 +49,9 @@ export async function openPdfWithAuth(url) {
         }
         if (response.status === 404) {
             throw new Error('PDF : document introuvable');
+        }
+        if (response.status === 502) {
+            throw new Error('PDF : indisponible côté Karlia (proxy)');
         }
         throw new Error(`PDF : erreur ${response.status}`);
     }

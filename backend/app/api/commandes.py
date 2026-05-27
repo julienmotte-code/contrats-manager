@@ -20,7 +20,7 @@ POST /api/commandes/{id}/terminer     → Marquer comme terminée
 GET  /api/commandes/{id}/pdf          → Télécharger le PDF du bon de commande
 """
 from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import RedirectResponse
+from fastapi.responses import Response
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import or_
 from typing import Optional, List
@@ -28,6 +28,7 @@ from pydantic import BaseModel
 from datetime import date, datetime
 from decimal import Decimal
 import logging
+import httpx
 
 from app.core.database import get_db
 from app.core.security import require_authenticated, require_role
@@ -630,13 +631,54 @@ async def get_commande_pdf(
     db: Session = Depends(get_db),
     current_user = Depends(require_role("ADMIN", "GESTIONNAIRE")),
 ):
-    """Redirige vers le PDF du bon de commande hébergé par Karlia."""
+    """
+    Proxie le PDF du bon de commande hébergé par Karlia.
+
+    Pourquoi un proxy plutôt qu'une RedirectResponse ?
+    Karlia ne renvoie aucun header CORS sur get-file.php. Quand le front
+    appelle cet endpoint via fetch+blob (helper openPdfWithAuth, requis par
+    le RBAC pour porter le JWT), le browser suivait la 307 cross-origin et
+    bloquait la lecture du blob (onglet vide). En proxyant Karlia depuis le
+    backend, on reste same-origin côté navigateur, le RBAC reste appliqué
+    via require_role, et le PDF devient lisible côté JS.
+
+    L'URL Karlia (get-file.php?token=...) est auto-portée par son token de
+    query : aucun en-tête d'auth supplémentaire n'est nécessaire pour la
+    récupérer.
+    """
     commande = db.query(Commande).filter(Commande.id == commande_id).first()
     if not commande:
         raise HTTPException(status_code=404, detail="Commande non trouvée")
     if not commande.pdf_url:
         raise HTTPException(status_code=404, detail="PDF non disponible pour cette commande")
-    return RedirectResponse(url=commande.pdf_url)
+
+    nom_fichier = f"{commande.reference_devis or f'cmd-{commande.id}'}.pdf"
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+            karlia_resp = await client.get(commande.pdf_url)
+    except httpx.HTTPError as e:
+        logger.error(
+            f"PDF Karlia erreur réseau pour commande {commande_id} "
+            f"(ref={commande.reference_devis}) : {e!r}"
+        )
+        raise HTTPException(status_code=502, detail="PDF indisponible côté Karlia (réseau)")
+
+    if karlia_resp.status_code != 200:
+        logger.error(
+            f"PDF Karlia HTTP {karlia_resp.status_code} pour commande {commande_id} "
+            f"(ref={commande.reference_devis})"
+        )
+        raise HTTPException(status_code=502, detail="PDF indisponible côté Karlia")
+
+    # On force application/pdf : Karlia renvoie 'application/force-download'
+    # qui déclencherait un téléchargement systématique alors qu'on veut
+    # l'affichage inline dans l'onglet du navigateur.
+    return Response(
+        content=karlia_resp.content,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="{nom_fichier}"'},
+    )
 
 @router.post("/{commande_id}/facturer")
 async def facturer_commande(
