@@ -308,6 +308,37 @@ class KarliaDevisService:
         except (ValueError, TypeError):
             return None
 
+    def _parse_section(self, raw: Any, ref: str = "") -> Optional[int]:
+        """
+        Convertit products_list[i].section en entier brut (cf. Option B
+        diag_section_universel.md).
+
+        Karlia renvoie typiquement "0" ou "1" (string). Valeurs attendues
+        ∈ {0, 1} ; toute valeur hors plage est stockée TELLE QUELLE (cast
+        int) et loggée en warning pour détecter une future évolution Karlia.
+
+        - None / "" / non castable → None (inconnu)
+        - "0" / 0                  → 0
+        - "1" / 1                  → 1
+        - autre (ex "2")           → cette valeur entière + warning
+        """
+        if raw is None or raw == "":
+            return None
+        try:
+            n = int(raw)
+        except (TypeError, ValueError):
+            logger.warning(
+                f"section Karlia non castable en int sur {ref or 'ligne'} : "
+                f"valeur brute={raw!r} (type {type(raw).__name__}) — section_karlia=NULL"
+            )
+            return None
+        if n not in (0, 1):
+            logger.warning(
+                f"section inattendue: {n} sur commande {ref or '?'} "
+                f"(attendu 0 ou 1) — stockée telle quelle pour traçabilité."
+            )
+        return n
+
     # ─────────────────────────────────────────────────────────────────────────
     # Catégorisation des lignes (résolution locale via articles_cache)
     # ─────────────────────────────────────────────────────────────────────────
@@ -684,12 +715,18 @@ class KarliaDevisService:
 
         # Ajouter les lignes de produits (même structure que les devis)
         products = devis_data.get("products_list") or []
+        ref_for_log = devis_data.get("number") or f"id={devis_data.get('id')}"
         for idx, product in enumerate(products):
             karlia_pid = str(product.get("id_product") or "")
             # Résolution locale de la catégorie via l'index articles_cache.
             # Lignes libres (id_product=0 ou "") ou produit absent du cache →
             # tuple (None, None) → id_product_category restera NULL.
             cat_id, cat_nom = articles_cat_index.get(karlia_pid, (None, None))
+            # Marqueur Karlia 'section' : 0 = vraie ligne, 1 = intitulé/sous-total.
+            # On le PERSISTE en brut (option B, diag_section_universel.md) :
+            # rien n'est filtré à la sync, l'exclusion se fait au routage et
+            # à la facturation côté SGI.
+            section_val = self._parse_section(product.get("section"), ref_for_log)
             ligne = CommandeLigne(
                 commande_id=commande.id,
                 karlia_product_id=karlia_pid,
@@ -705,6 +742,7 @@ class KarliaDevisService:
                 # à ce stade : le routage métier sera ajouté à une étape ultérieure.
                 id_product_category=cat_id,
                 product_category=cat_nom,
+                section_karlia=section_val,
             )
             db.add(ligne)
 
@@ -779,6 +817,7 @@ class KarliaDevisService:
         # 'nouvelle' jamais validée → on accepte la perte des anciennes lignes
         # car elles n'ont pas encore été consommées par une prestation).
         products = devis_data.get("products_list")
+        ref_for_log = devis_data.get("number") or f"id={devis_data.get('id')}"
         if products is not None:
             for ligne in list(commande.lignes):
                 db.delete(ligne)
@@ -786,6 +825,7 @@ class KarliaDevisService:
             for idx, product in enumerate(products):
                 karlia_pid = str(product.get("id_product") or "")
                 cat_id, cat_nom = articles_cat_index.get(karlia_pid, (None, None))
+                section_val = self._parse_section(product.get("section"), ref_for_log)
                 ligne = CommandeLigne(
                     commande_id=commande.id,
                     karlia_product_id=karlia_pid,
@@ -800,6 +840,7 @@ class KarliaDevisService:
                     # Catégorie figée à la sync (snapshot). destination reste NULL.
                     id_product_category=cat_id,
                     product_category=cat_nom,
+                    section_karlia=section_val,
                 )
                 db.add(ligne)
 

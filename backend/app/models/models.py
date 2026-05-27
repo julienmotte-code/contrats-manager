@@ -4,7 +4,7 @@ Modèles SQLAlchemy — Tables de la base de données PostgreSQL
 import uuid
 from datetime import datetime, date
 from sqlalchemy import (
-    Column, String, Integer, Numeric, Boolean, Date, DateTime, Time,
+    Column, String, Integer, SmallInteger, Numeric, Boolean, Date, DateTime, Time,
     Text, LargeBinary, ForeignKey, CheckConstraint, UniqueConstraint, JSON
 )
 from sqlalchemy.dialects.postgresql import UUID, JSONB
@@ -354,11 +354,17 @@ class CommandeLigne(Base):
     ordre             = Column(Integer, default=0)
     created_at        = Column(DateTime, server_default=func.now())  # timestamp without time zone en DB — cf. AUDIT_REFONTE.md § 2.19 #5
     # Catégorisation Karlia (snapshot à la sync) + destination de routage
-    # (valeurs prévues : 'a_planifier' | 'contrat' | 'facturation_directe' ;
-    # NULL = pas encore routé. Pas de CHECK constraint pour l'instant.)
+    # (valeurs prévues : 'a_planifier' | 'contrat' | 'facturation_directe' |
+    # 'intitule' ; NULL = pas encore routé. Pas de CHECK constraint pour l'instant.)
     id_product_category = Column(Integer)
     product_category    = Column(String(255))
     destination         = Column(String(30))
+    # Marqueur Karlia products_list[i].section (valeur brute) : 0 = vraie ligne,
+    # 1 = intitulé/section/sous-total à exclure de tout circuit (prestation,
+    # contrat, facturation). NULL = inconnu (ligne créée avant la migration
+    # 0003 ou non transmis par Karlia). Stocké en entier brut pour rester
+    # fidèle à la source et détecter une éventuelle valeur future inattendue.
+    section_karlia      = Column(SmallInteger)
 
     commande = relationship("Commande", back_populates="lignes")
     prestations = relationship("Prestation", back_populates="commande_ligne")

@@ -5,6 +5,10 @@ Fournit la règle de calcul de la destination par défaut d'une ligne (cf. brief
 catégories-routage) et l'éclatement unitaire d'une ligne SGI en prestations.
 
 Règle de routage par défaut :
+  - ligne d'intitulé Karlia (products_list[i].section == 1) → 'intitule'
+    PRIORITÉ ABSOLUE : ces lignes (titres de groupe, sous-totaux Karlia) ne
+    représentent pas une vraie prestation/article et doivent rester neutres,
+    quelle que soit leur catégorie déclarée.
   - ligne dont id_product_category ∈ (16374, 19028) → 'a_planifier'
   - sinon, ligne dont product_category contient "logiciel" (insensible casse
     et accents) → 'contrat'
@@ -19,7 +23,7 @@ from __future__ import annotations
 import math
 import unicodedata
 from decimal import Decimal
-from typing import List, Optional, Tuple
+from typing import List, Optional
 
 from sqlalchemy.orm import Session
 
@@ -35,10 +39,14 @@ CATEGORIES_SGI = (CATEGORIE_SGI_FORMATION, CATEGORIE_SGI_TECHNIQUE)
 DESTINATION_A_PLANIFIER         = "a_planifier"
 DESTINATION_CONTRAT             = "contrat"
 DESTINATION_FACTURATION_DIRECTE = "facturation_directe"
+# 'intitule' : ligne neutre (titre de section / sous-total Karlia). Jamais
+# routée vers un circuit actif. Cf. docs/diag_section_universel.md.
+DESTINATION_INTITULE            = "intitule"
 DESTINATIONS_VALIDES = (
     DESTINATION_A_PLANIFIER,
     DESTINATION_CONTRAT,
     DESTINATION_FACTURATION_DIRECTE,
+    DESTINATION_INTITULE,
 )
 
 
@@ -55,6 +63,7 @@ def _normaliser(s: Optional[str]) -> str:
 def destination_par_defaut(
     id_product_category: Optional[int],
     product_category: Optional[str],
+    section: Optional[int] = None,
 ) -> str:
     """
     Calcule la destination par défaut d'une ligne, selon la règle métier.
@@ -62,10 +71,18 @@ def destination_par_defaut(
     Args:
         id_product_category: ID Karlia de la catégorie (None si pas catégorisée).
         product_category: libellé Karlia de la catégorie (None possible).
+        section: valeur brute Karlia products_list[i].section
+                 (0 = vraie ligne, 1 = intitulé/sous-total, None = inconnu).
+                 Param keyword-optionnel pour rétro-compat des appels existants.
 
     Returns:
-        L'une des trois valeurs : 'a_planifier' | 'contrat' | 'facturation_directe'.
+        L'une des quatre valeurs :
+            'intitule' | 'a_planifier' | 'contrat' | 'facturation_directe'.
     """
+    # PRIORITÉ ABSOLUE : une ligne d'intitulé Karlia n'est pas une vraie
+    # prestation. Elle sort de tout circuit avant même de regarder la catégorie.
+    if section == 1:
+        return DESTINATION_INTITULE
     if id_product_category in CATEGORIES_SGI:
         return DESTINATION_A_PLANIFIER
     if "logiciel" in _normaliser(product_category):
@@ -90,6 +107,13 @@ def eclater_ligne_en_prestations(
         intervention partielle ; on évite d'arrondir à l'unité supérieure
         pour ne pas surfacturer en jours.
 
+    Défense en profondeur : si la ligne porte section_karlia == 1
+    (ligne d'intitulé), on retourne une liste vide sans rien créer.
+    Le routage métier ne devrait jamais envoyer une ligne 'intitule' ici
+    (destination_par_defaut renvoie 'intitule', valider_commande n'éclate
+    que les 'a_planifier'), mais ce garde-fou protège contre une régression
+    ou un appel direct.
+
     Les prestations sont AJOUTÉES à la session mais PAS commit ici : le
     commit est laissé à l'appelant pour rester en transaction unique sur
     toute la validation d'une commande.
@@ -102,6 +126,10 @@ def eclater_ligne_en_prestations(
     Returns:
         La liste des Prestation créées (objets ORM persistés via db.add).
     """
+    # Garde-fou : ne JAMAIS éclater une ligne d'intitulé.
+    if getattr(ligne, "section_karlia", None) == 1:
+        return []
+
     quantite_raw = ligne.quantite
     # Tolérance entrée (Decimal/float/int/None). Default 1 si pas de quantité.
     if quantite_raw is None:

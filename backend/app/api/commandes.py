@@ -41,6 +41,7 @@ from app.services.routage_service import (
     DESTINATION_A_PLANIFIER,
     DESTINATION_CONTRAT,
     DESTINATION_FACTURATION_DIRECTE,
+    DESTINATION_INTITULE,
 )
 
 logger = logging.getLogger(__name__)
@@ -66,6 +67,10 @@ class CommandeLigneResponse(BaseModel):
     # Catégorie (snapshot Karlia)
     id_product_category: Optional[int] = None
     product_category: Optional[str] = None
+    # Marqueur Karlia products_list[i].section (0 = vraie ligne, 1 = intitulé/
+    # section/sous-total, None = inconnu). Exposé pour permettre au frontend
+    # de griser/désactiver les lignes d'intitulé. Cf. diag_section_universel.md.
+    section_karlia: Optional[int] = None
     # destination = valeur stockée (NULL tant que pas routé)
     # destination_defaut = valeur calculée par le routage par défaut (jamais NULL)
     # → le frontend pré-coche destination_defaut quand destination est NULL.
@@ -253,9 +258,14 @@ def _ligne_to_response(ligne: CommandeLigne) -> CommandeLigneResponse:
         ordre=ligne.ordre,
         id_product_category=ligne.id_product_category,
         product_category=ligne.product_category,
+        section_karlia=ligne.section_karlia,
         destination=ligne.destination,
+        # Passe section_karlia au routage par défaut : section==1 force
+        # 'intitule' indépendamment de la catégorie.
         destination_defaut=destination_par_defaut(
-            ligne.id_product_category, ligne.product_category
+            ligne.id_product_category,
+            ligne.product_category,
+            section=ligne.section_karlia,
         ),
     )
 
@@ -441,6 +451,10 @@ async def valider_commande(
         des commandes en attente d'action.
       - sinon → 'deployee' (tout est en facturation directe, rien à faire
         de plus côté SGI, la commande sort des écrans actifs).
+
+    Les lignes routées 'intitule' (titres de section/sous-totaux Karlia) sont
+    acceptées mais ne déclenchent AUCUN effet : pas de prestation, pas de
+    necessite_contrat, et ignorées dans le calcul du statut final.
     """
     commande = db.query(Commande).filter(Commande.id == commande_id).first()
     if not commande:
@@ -494,10 +508,16 @@ async def valider_commande(
                 elif item.destination == DESTINATION_CONTRAT:
                     has_contrat = True
                 # facturation_directe : rien d'autre à faire ici (cf. docstring)
+                # intitule           : ligne neutre, aucun effet (pas de
+                #                       prestation, pas de contrat, pas de
+                #                       comptage pour le statut).
 
             commande.date_validation = datetime.utcnow()
             commande.necessite_contrat = has_contrat
-            # type_traitement reste à fin documentaire : valeur agrégée
+            # type_traitement reste à fin documentaire : valeur agrégée.
+            # Les lignes 'intitule' sont ignorées dans ce calcul : une
+            # commande dont toutes les vraies lignes sont en facturation
+            # directe (et le reste en intitulés) reste 'deployee'.
             if has_a_planifier:
                 commande.type_traitement = DESTINATION_A_PLANIFIER
                 commande.statut = "a_planifier"
@@ -638,9 +658,17 @@ async def facturer_commande(
     if not commande.karlia_customer_id:
         raise HTTPException(status_code=400, detail="Client Karlia non renseigné sur cette commande")
 
-    # Préparer les lignes pour Karlia
+    # Préparer les lignes pour Karlia.
+    # EXCLUSION : les lignes d'intitulé Karlia (section_karlia == 1) et celles
+    # routées explicitement 'intitule' n'ont pas de valeur facturable
+    # (montant_ht=0 chez Karlia, titre de section ou sous-total). Les inclure
+    # produirait des lignes parasites sur la facture émise. Cf. Option B
+    # diag_section_universel.md : on garde tout en DB, on filtre uniquement
+    # aux points de sortie (routage et facturation).
     lignes_karlia = []
     for ligne in commande.lignes:
+        if ligne.section_karlia == 1 or ligne.destination == DESTINATION_INTITULE:
+            continue
         lignes_karlia.append({
             "id_product": ligne.karlia_product_id,
             "quantity": float(ligne.quantite or 1),
