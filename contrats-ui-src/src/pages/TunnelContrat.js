@@ -117,7 +117,7 @@ function ArticleSearchLine({ art, i, catalogue, update, remove, isFirst }) {
 
   const resultats = useMemo(() => {
     const q = recherche.toLowerCase().trim();
-    if (!q) return [];
+    if (!q) return catalogue.slice(0, 20);
     return catalogue.filter(a =>
       ((a.designation || '').toLowerCase().includes(q)) ||
       ((a.reference || '').toLowerCase().includes(q))
@@ -165,6 +165,7 @@ function ArticleSearchLine({ art, i, catalogue, update, remove, isFirst }) {
           <input className="input text-sm"
             placeholder="Rechercher un article (désignation ou référence)..."
             value={recherche}
+            onFocus={() => setShowResults(true)}
             onChange={e => { setRecherche(e.target.value); setShowResults(true); }} />
           {showResults && resultats.length > 0 && (
             <div className="absolute z-10 left-0 right-0 mt-1 border border-gray-200 rounded-lg divide-y max-h-60 overflow-y-auto bg-white shadow">
@@ -224,8 +225,15 @@ function ArticlesEditor({ articles, setArticles }) {
 
   useEffect(() => {
     produitsAPI.liste({ limit: 1000 })
-      .then(r => setCatalogue(r.data.data || []))
-      .catch(() => {});
+      .then(r => {
+        const data = r.data.data || [];
+        console.log('[ArticlesEditor] catalogue chargé:', data.length, 'articles');
+        setCatalogue(data);
+      })
+      .catch(e => {
+        console.error('[ArticlesEditor] échec chargement catalogue', e);
+        toast.error('Impossible de charger le catalogue articles');
+      });
   }, []);
 
   const addArticle = () => setArticles(prev => [...prev, {
