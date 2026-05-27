@@ -117,11 +117,11 @@ function ArticleSearchLine({ art, i, catalogue, update, remove, isFirst }) {
 
   const resultats = useMemo(() => {
     const q = recherche.toLowerCase().trim();
-    if (!q) return catalogue.slice(0, 20);
+    if (!q) return catalogue.slice(0, 50);
     return catalogue.filter(a =>
       ((a.designation || '').toLowerCase().includes(q)) ||
       ((a.reference || '').toLowerCase().includes(q))
-    ).slice(0, 20);
+    ).slice(0, 50);
   }, [recherche, catalogue]);
 
   const selectionner = (a) => {
@@ -168,7 +168,7 @@ function ArticleSearchLine({ art, i, catalogue, update, remove, isFirst }) {
             onFocus={() => setShowResults(true)}
             onChange={e => { setRecherche(e.target.value); setShowResults(true); }} />
           {showResults && resultats.length > 0 && (
-            <div className="absolute z-10 left-0 right-0 mt-1 border border-gray-200 rounded-lg divide-y max-h-60 overflow-y-auto bg-white shadow">
+            <div className="absolute z-10 left-0 right-0 mt-1 border border-gray-200 rounded-lg divide-y max-h-80 overflow-y-auto bg-white shadow">
               {resultats.map(a => (
                 <button key={a.karlia_id} type="button" onClick={() => selectionner(a)}
                   className="w-full text-left px-3 py-2 hover:bg-blue-50 text-sm">
