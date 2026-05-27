@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { useNavigate, useLocation } from 'react-router-dom';
 import {
   Box, Paper, Typography, Table, TableBody, TableCell, TableContainer,
   TableHead, TableRow, Button, IconButton, Chip, TextField, InputAdornment,
@@ -7,7 +8,8 @@ import {
 } from '@mui/material';
 import {
   Search as SearchIcon, Visibility as ViewIcon, Schedule as ScheduleIcon,
-  PictureAsPdf as PdfIcon, PersonAdd as AssignIcon, School as PrestationIcon
+  PictureAsPdf as PdfIcon, PersonAdd as AssignIcon, School as PrestationIcon,
+  Group as GroupIcon
 } from '@mui/icons-material';
 import { format } from 'date-fns';
 import { fr } from 'date-fns/locale';
@@ -15,6 +17,9 @@ import api from '../services/api';
 import { openPdfWithAuth } from '../services/pdfFetch';
 
 export default function CommandesAPlanifier() {
+  const navigate = useNavigate();
+  const location = useLocation();
+
   const [commandes, setCommandes] = useState([]);
   const [formateurs, setFormateurs] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -25,7 +30,7 @@ export default function CommandesAPlanifier() {
   const [error, setError] = useState(null);
   const [success, setSuccess] = useState(null);
 
-  // Dialog attribution
+  // Dialog attribution (raccourci "tout à un formateur" — conservé)
   const [attribOpen, setAttribOpen] = useState(false);
   const [selectedCommande, setSelectedCommande] = useState(null);
   const [selectedFormateur, setSelectedFormateur] = useState(null);
@@ -66,8 +71,18 @@ export default function CommandesAPlanifier() {
     fetchFormateurs();
   }, [fetchCommandes]);
 
+  // Message de succès passé via navigate({ state }) depuis AffectationFormateurs.
+  // Consommé une seule fois puis effacé du history state pour ne pas réapparaître.
+  useEffect(() => {
+    const msg = location.state?.successMessage;
+    if (msg) {
+      setSuccess(msg);
+      navigate(location.pathname, { replace: true, state: {} });
+    }
+  }, [location, navigate]);
+
+  // Raccourci "tout à un formateur" (modale conservée pour le cas simple).
   const openAttribution = async (commande) => {
-    // Charger le détail complet avec les lignes
     try {
       const res = await api.get(`/api/commandes/${commande.id}`);
       setSelectedCommande(res.data);
@@ -82,25 +97,21 @@ export default function CommandesAPlanifier() {
     if (!selectedCommande || !selectedFormateur) return;
     setAttribLoading(true);
     try {
-      // Vérifier si des prestations existent déjà (réattribution)
       const prestRes = await api.get(`/api/prestations?commande_id=${selectedCommande.id}`);
       const hasExistingPrestations = prestRes.data.prestations?.length > 0;
 
       if (hasExistingPrestations) {
-        // Réattribuer les prestations existantes
         await api.post(`/api/prestations/reattribuer-commande/${selectedCommande.id}?formateur_id=${selectedFormateur.id}`);
         setSuccess(`Prestations réattribuées à ${selectedFormateur.prenom || ''} ${selectedFormateur.nom}`);
       } else {
-        // Créer les prestations depuis les lignes de commande
         await api.post(`/api/prestations/from-commande/${selectedCommande.id}?formateur_id=${selectedFormateur.id}`);
-        // Mettre à jour le statut de la commande
         await api.put(`/api/commandes/${selectedCommande.id}`, {
           statut: 'a_planifier',
           formateur_id: selectedFormateur.id
         });
         setSuccess(`Commande attribuée à ${selectedFormateur.prenom || ''} ${selectedFormateur.nom}`);
       }
-      
+
       setAttribOpen(false);
       fetchCommandes();
     } catch (err) {
@@ -109,6 +120,11 @@ export default function CommandesAPlanifier() {
     } finally {
       setAttribLoading(false);
     }
+  };
+
+  // Affectation par prestation (nouvel écran dédié).
+  const handleAllerAffectation = (commande) => {
+    navigate(`/commandes/${commande.id}/affectation`);
   };
 
   const openDetail = async (commande) => {
@@ -139,10 +155,45 @@ export default function CommandesAPlanifier() {
     return new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'EUR' }).format(montant);
   };
 
-  // Calcule le nombre total de prestations à créer (somme des quantités)
+  // Calcule le nombre total de prestations à créer (somme des quantités).
+  // Utile pour la modale "tout à un" quand les prestations n'existent pas
+  // encore (cas legacy from-commande).
   const getNbPrestations = (lignes) => {
     if (!lignes || lignes.length === 0) return 0;
     return lignes.reduce((sum, l) => sum + (parseInt(l.quantite) || 1), 0);
+  };
+
+  // Affichage de la colonne "Formateur" : tient compte de nb_formateurs_distincts
+  // pour distinguer mono-formateur / répartition multi-formateurs.
+  // - 0 → "Non attribué" (chip gris)
+  // - 1 → nom du formateur (chip vert)
+  // - ≥2 → "N formateurs" (chip info)
+  const renderFormateurCell = (cmd) => {
+    const n = cmd.nb_formateurs_distincts ?? 0;
+    if (n >= 2) {
+      return (
+        <Chip
+          icon={<GroupIcon sx={{ fontSize: 16 }} />}
+          label={`${n} formateurs`}
+          size="small"
+          color="info"
+          variant="outlined"
+        />
+      );
+    }
+    if (n === 1 || cmd.formateur_nom) {
+      return (
+        <Chip
+          label={cmd.formateur_nom || `Formateur #${cmd.formateur_id}`}
+          size="small"
+          color="success"
+          variant="outlined"
+        />
+      );
+    }
+    return (
+      <Chip label="Non attribué" size="small" color="default" variant="outlined" />
+    );
   };
 
   return (
@@ -208,22 +259,15 @@ export default function CommandesAPlanifier() {
                   <TableCell>{cmd.client_nom || '-'}</TableCell>
                   <TableCell>{formatDate(cmd.date_acceptation)}</TableCell>
                   <TableCell align="center">
-                    <Chip 
+                    <Chip
                       icon={<PrestationIcon sx={{ fontSize: 16 }} />}
                       label={`${cmd.nb_prestations || 0} prestation(s)`}
-                      color={cmd.nb_prestations_attribuees === cmd.nb_prestations && cmd.nb_prestations > 0 ? "success" : cmd.nb_prestations_attribuees > 0 ? "warning" : "default"} 
-                      size="small" 
-                      color="primary"
+                      color={cmd.nb_prestations_attribuees === cmd.nb_prestations && cmd.nb_prestations > 0 ? "success" : cmd.nb_prestations_attribuees > 0 ? "warning" : "default"}
+                      size="small"
                       variant="outlined"
                     />
                   </TableCell>
-                  <TableCell>
-                    {cmd.formateur_nom ? (
-                      <Chip label={cmd.formateur_nom} size="small" color="success" variant="outlined" />
-                    ) : (
-                      <Chip label="Non attribué" size="small" color="default" variant="outlined" />
-                    )}
-                  </TableCell>
+                  <TableCell>{renderFormateurCell(cmd)}</TableCell>
                   <TableCell align="right">
                     <Typography fontWeight="medium">{formatMontant(cmd.montant_ttc)}</Typography>
                   </TableCell>
@@ -240,8 +284,13 @@ export default function CommandesAPlanifier() {
                         <ViewIcon />
                       </IconButton>
                     </Tooltip>
-                    <Tooltip title="Attribuer à un formateur">
-                      <IconButton size="small" color="primary" onClick={() => openAttribution(cmd)}>
+                    <Tooltip title="Affecter par prestation (répartition fine)">
+                      <IconButton size="small" color="primary" onClick={() => handleAllerAffectation(cmd)}>
+                        <GroupIcon />
+                      </IconButton>
+                    </Tooltip>
+                    <Tooltip title="Tout attribuer à un formateur (raccourci)">
+                      <IconButton size="small" onClick={() => openAttribution(cmd)}>
                         <AssignIcon />
                       </IconButton>
                     </Tooltip>
@@ -263,7 +312,7 @@ export default function CommandesAPlanifier() {
         />
       </TableContainer>
 
-      {/* Dialog Attribution Formateur */}
+      {/* Dialog Attribution Formateur — raccourci "tout à un" (conservé) */}
       <Dialog open={attribOpen} onClose={() => setAttribOpen(false)} maxWidth="md" fullWidth>
         <DialogTitle>
           {selectedCommande?.formateur_nom ? 'Réattribuer la commande' : 'Attribuer la commande à un formateur'}
@@ -277,16 +326,22 @@ export default function CommandesAPlanifier() {
                     {selectedCommande.reference_devis} — {selectedCommande.client_nom}
                   </Typography>
                   <Typography variant="body2" color="text.secondary">
-                    Montant : {formatMontant(selectedCommande.montant_ttc)} • 
+                    Montant : {formatMontant(selectedCommande.montant_ttc)} •
                     Date acceptation : {formatDate(selectedCommande.date_acceptation)}
                   </Typography>
                 </CardContent>
               </Card>
 
+              <Alert severity="info" sx={{ mb: 2 }}>
+                Ce raccourci attribue le MÊME formateur à toutes les prestations.
+                Pour répartir les prestations entre plusieurs formateurs, utilisez
+                l'écran « Affecter par prestation » (icône <GroupIcon fontSize="inherit" sx={{ verticalAlign: 'middle' }} />).
+              </Alert>
+
               <Typography variant="subtitle1" gutterBottom sx={{ fontWeight: 'bold' }}>
                 Prestations à planifier ({getNbPrestations(selectedCommande.lignes)})
               </Typography>
-              
+
               <TableContainer component={Paper} variant="outlined" sx={{ mb: 3 }}>
                 <Table size="small">
                   <TableHead>
@@ -322,7 +377,7 @@ export default function CommandesAPlanifier() {
               <Typography variant="subtitle1" gutterBottom sx={{ fontWeight: 'bold' }}>
                 Assigner à un formateur
               </Typography>
-              
+
               <Autocomplete
                 options={formateurs}
                 getOptionLabel={(opt) => `${opt.prenom || ''} ${opt.nom}`.trim()}
@@ -331,17 +386,17 @@ export default function CommandesAPlanifier() {
                 renderOption={(props, option) => (
                   <li {...props}>
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                      <Box sx={{ 
-                        width: 12, 
-                        height: 12, 
-                        borderRadius: '50%', 
-                        backgroundColor: option.couleur 
+                      <Box sx={{
+                        width: 12,
+                        height: 12,
+                        borderRadius: '50%',
+                        backgroundColor: option.couleur
                       }} />
                       <span>{option.prenom || ''} {option.nom}</span>
                       {option.nb_prestations_a_planifier > 0 && (
-                        <Chip 
-                          label={`${option.nb_prestations_a_planifier} en cours`} 
-                          size="small" 
+                        <Chip
+                          label={`${option.nb_prestations_a_planifier} en cours`}
+                          size="small"
                           color="warning"
                           sx={{ ml: 1 }}
                         />
@@ -372,8 +427,8 @@ export default function CommandesAPlanifier() {
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setAttribOpen(false)}>Annuler</Button>
-          <Button 
-            variant="contained" 
+          <Button
+            variant="contained"
             onClick={handleAttribuer}
             disabled={!selectedFormateur || attribLoading}
             startIcon={attribLoading ? <CircularProgress size={16} /> : <AssignIcon />}
