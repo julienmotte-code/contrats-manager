@@ -958,7 +958,8 @@ async def facturer_commande(
             reference_contrat=commande.reference_devis or f"CMD-{commande.id}",
             date_echeance=date.today(),
             montant_ht=float(commande.montant_ht or 0),
-            description=f"Facturation prestation - {commande.reference_devis}"
+            description=f"Facturation prestation - {commande.reference_devis}",
+            id_opportunity=commande.karlia_opportunity_id,
         )
 
         # Mettre à jour la commande
