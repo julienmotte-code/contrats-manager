@@ -21,14 +21,9 @@ function calculerProrata(dateDebut, montantAnnuel, demiMois) {
   return { prorate: true, nbMois, demiMois, bonusDemiMois, montant: montantTotal, montantBase, detail: regle + detailDemi };
 }
 
-const FAMILLES = [
-  { code: 'COSOLUCE', label: 'Cosoluce', description: 'Révision Syntec Août' },
-  { code: 'CANTINE', label: 'Cantine de France', description: 'Révision Syntec Octobre' },
-  { code: 'DIGITECH', label: 'Digitech', description: 'Révision manuelle' },
-  { code: 'MAINTENANCE', label: 'Maintenance matériel', description: 'Révision Syntec Août' },
-  { code: 'ASSISTANCE_TEL', label: 'Assistance Téléphonique', description: 'Révision Syntec Août' },
-  { code: 'KIWI_BACKUP', label: 'Kiwi Backup', description: 'Prix fixe' },
-];
+// Les familles ne sont plus codées en dur ici : elles sont chargées dynamiquement
+// depuis GET /api/indices/familles (source de vérité unique, cf. revision_service
+// .FAMILLES_CONTRAT côté backend). L'ancienne constante omettait 'AUTRE'.
 
 const ETAPES = ['Informations', 'Articles', 'Récapitulatif', 'Première facture'];
 
@@ -271,6 +266,15 @@ export default function TunnelContrat() {
   const [contratParent, setContratParent] = useState(null);
   const [contratCree, setContratCree] = useState(null);
   const [factureCree, setFactureCree] = useState(null);
+  const [familles, setFamilles] = useState([]);
+
+  // Charger les familles (source unique : backend). Même pattern que
+  // NouveauContrat.js / ModifierContrat.js.
+  useEffect(() => {
+    api.get('/api/indices/familles')
+      .then(r => setFamilles(r.data.data || []))
+      .catch(() => toast.error('Impossible de charger la liste des familles'));
+  }, []);
 
   const [form, setForm] = useState({
     numero_contrat: '',
@@ -493,9 +497,10 @@ export default function TunnelContrat() {
             </div>
             <div className="col-span-2">
               <label className="label">Famille de contrat *</label>
-              <select className="input" value={form.famille_contrat}
+              <select className="input" value={form.famille_contrat} disabled={familles.length === 0}
                 onChange={e => setForm(f => ({ ...f, famille_contrat: e.target.value }))}>
-                {FAMILLES.map(f => <option key={f.code} value={f.code}>{f.label} — {f.description}</option>)}
+                {familles.length === 0 && <option value={form.famille_contrat}>Chargement…</option>}
+                {familles.map(f => <option key={f.code} value={f.code}>{f.label} — {f.description}</option>)}
               </select>
             </div>
             <div>
@@ -579,7 +584,7 @@ export default function TunnelContrat() {
             {[
               ['Numéro', form.numero_contrat],
               ['Client', clientSelectionne?.nom],
-              ['Famille', FAMILLES.find(f => f.code === form.famille_contrat)?.label],
+              ['Famille', familles.find(f => f.code === form.famille_contrat)?.label || form.famille_contrat],
               ['Montant annuel HT', `${parseFloat(form.montant_annuel_ht || 0).toLocaleString('fr-FR', { minimumFractionDigits: 2 })} €`],
               ['Début', form.date_debut ? format(new Date(form.date_debut + 'T12:00:00'), 'dd/MM/yyyy', { locale: fr }) : '—'],
               ['Fin', form.date_fin ? format(new Date(form.date_fin + 'T12:00:00'), 'dd/MM/yyyy', { locale: fr }) : '—'],

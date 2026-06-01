@@ -121,7 +121,26 @@ export default function ModifierContrat() {
 
   if (loading || !form) return <div className="flex items-center justify-center h-64 text-gray-400">Chargement...</div>;
 
-  const nbAnnees = form.date_debut && form.date_fin ? new Date(form.date_fin).getFullYear() - new Date(form.date_debut).getFullYear() + 1 : null;
+  // Cohérent avec le backend (contrat_service.calculer_nombre_annees) :
+  // famille 'AUTRE' (prix fixe) → durée réelle anniversaire ; autres familles →
+  // modèle Syntec (années civiles couvertes, +1, inchangé).
+  const calculerNbAnnees = (dateDebut, dateFin, famille) => {
+    if (!dateDebut || !dateFin) return null;
+    const debut = new Date(dateDebut);
+    const fin = new Date(dateFin);
+    if (famille === 'AUTRE') {
+      const finPlusUn = new Date(fin);
+      finPlusUn.setDate(finPlusUn.getDate() + 1);  // date_fin inclusive
+      let annees = finPlusUn.getFullYear() - debut.getFullYear();
+      if (finPlusUn.getMonth() < debut.getMonth() ||
+          (finPlusUn.getMonth() === debut.getMonth() && finPlusUn.getDate() < debut.getDate())) {
+        annees -= 1;
+      }
+      return annees;
+    }
+    return fin.getFullYear() - debut.getFullYear() + 1;
+  };
+  const nbAnnees = calculerNbAnnees(form.date_debut, form.date_fin, form.famille_contrat);
 
   return (
     <div className="space-y-6 max-w-4xl">
