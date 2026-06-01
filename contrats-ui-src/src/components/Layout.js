@@ -9,7 +9,7 @@ const MENU_COMPLET = [
   { path: '/commandes/a-planifier', label: 'À planifier', icon: '📅', droit: 'formateurs' },
   { path: '/commandes/planifiees', label: 'Planifiées', icon: '✅', droit: 'commandes' },
   { path: '/commandes/terminees', label: 'Terminées', icon: '🏁', droit: 'commandes' },
-  { path: '/mes-prestations', label: 'Mes prestations', icon: '📋', droit: null, forFormateur: true },
+  { path: '/mes-prestations', label: 'Mes prestations', icon: '📋', droit: null, allowedRoles: ['ADMIN', 'GESTIONNAIRE', 'FORMATEUR'] },
   { type: 'separator', label: 'Contrats' },
   { path: '/contrats', label: 'Liste des contrats', icon: '📄', droit: 'contrats_lecture' },
   { path: '/contrats/tunnel?mode=nouveau', label: 'Nouveau contrat', icon: '➕', droit: 'contrats_ecriture' },
@@ -59,8 +59,9 @@ export default function Layout({ children }) {
 
   const menu = menuSource.filter(item => {
     if (item.type === 'separator') return true;
-    // Masquer "Mes prestations" pour non-formateurs/techniciens sans formateur_id dans le menu complet
-    if (item.forFormateur && !user?.formateur_id && !['FORMATEUR', 'TECHNICIEN'].includes(user?.role)) return false;
+    // Visibilité par rôle explicite (ex "Mes prestations" : ADMIN, GESTIONNAIRE,
+    // FORMATEUR). Quand allowedRoles est défini, il prime sur le gating par droit.
+    if (item.allowedRoles && !item.allowedRoles.includes(user?.role)) return false;
     return !item.droit || (droits && droits[item.droit]);
   });
 
