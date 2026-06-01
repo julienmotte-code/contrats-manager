@@ -156,7 +156,28 @@ export default function NouveauContrat() {
       toast.success(`Client ${r.data.numero_client} créé dans Karlia`);
     } catch (e) { toast.error(e.response?.data?.detail || 'Erreur création client'); }
   };
-  const nbAnnees = form.date_debut && form.date_fin ? new Date(form.date_fin).getFullYear() - new Date(form.date_debut).getFullYear() + 1 : null;
+  // Calcul du nombre d'années, cohérent AVEC LE BACKEND (contrat_service
+  // .calculer_nombre_annees) :
+  //  - famille 'AUTRE' (prix fixe) → durée RÉELLE en années anniversaire,
+  //    équivalent JS de relativedelta(date_fin + 1j, date_debut).years ;
+  //  - toutes les autres familles → modèle Syntec (années civiles couvertes, +1).
+  const calculerNbAnnees = (dateDebut, dateFin, famille) => {
+    if (!dateDebut || !dateFin) return null;
+    const debut = new Date(dateDebut);
+    const fin = new Date(dateFin);
+    if (famille === 'AUTRE') {
+      const finPlusUn = new Date(fin);
+      finPlusUn.setDate(finPlusUn.getDate() + 1);  // date_fin inclusive
+      let annees = finPlusUn.getFullYear() - debut.getFullYear();
+      if (finPlusUn.getMonth() < debut.getMonth() ||
+          (finPlusUn.getMonth() === debut.getMonth() && finPlusUn.getDate() < debut.getDate())) {
+        annees -= 1;  // l'anniversaire n'est pas atteint → année pleine non complétée
+      }
+      return annees;
+    }
+    return fin.getFullYear() - debut.getFullYear() + 1;  // Syntec, inchangé
+  };
+  const nbAnnees = calculerNbAnnees(form.date_debut, form.date_fin, form.famille_contrat);
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!clientSelectionne) { toast.error('Veuillez sélectionner un client'); return; }

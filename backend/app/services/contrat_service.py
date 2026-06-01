@@ -2,9 +2,10 @@
 Service métier — Gestion des contrats
 Logique de calcul : prorata, plan de facturation, révision par indice
 """
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 from typing import List, Dict
+from dateutil.relativedelta import relativedelta
 
 
 def calculer_prorata(date_debut: date, montant_annuel_ht: Decimal, demi_mois: bool = False) -> Dict:
@@ -42,13 +43,27 @@ def calculer_prorata(date_debut: date, montant_annuel_ht: Decimal, demi_mois: bo
         "detail": detail_final,
     }
 
-def calculer_nombre_annees(date_debut: date, date_fin: date) -> int:
+def calculer_nombre_annees(date_debut: date, date_fin: date, famille_code: str) -> int:
     """
-    Calcule le nombre d'années du contrat.
-    Arrondi à l'année supérieure si la fin dépasse l'anniversaire.
-    Ex: 01/03/2026 → 31/12/2028 = 3 factures (2026 proraté, 2027, 2028)
+    Calcule le nombre d'années d'un contrat.
+
+    Deux sémantiques selon la famille :
+
+    - Famille 'AUTRE' (contrats à prix fixe, révision AUCUNE) : DURÉE RÉELLE en
+      années pleines (dates anniversaire). date_fin est inclusive (dernier jour
+      du contrat), donc on calcule relativedelta(date_fin + 1 jour, date_debut).years.
+      Ex : 01/03/2026 → 28/02/2027 = 1 an (et non 2).
+
+    - Toutes les autres familles (COSOLUCE, CANTINE, MAINTENANCE, ASSISTANCE_TEL,
+      DIGITECH, KIWI_BACKUP…) : modèle Syntec = nombre d'ANNÉES CIVILES COUVERTES,
+      car la facturation produit une facture par année civile (an 1 proraté).
+      Ex : 01/03/2026 → 31/12/2028 = 3 factures (2026 proraté, 2027, 2028).
+      Comportement INCHANGÉ (intentionnel).
     """
-    # Nombre d'années civiles couvertes
+    if famille_code == "AUTRE":
+        diff = relativedelta(date_fin + timedelta(days=1), date_debut)
+        return diff.years
+    # Modèle Syntec : années civiles couvertes
     return date_fin.year - date_debut.year + 1
 
 

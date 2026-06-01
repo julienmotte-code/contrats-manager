@@ -49,6 +49,10 @@ class ContratCreate(BaseModel):
     client_karlia_id: str
     client_nom: str
     client_numero: Optional[str] = None
+    # Famille de contrat (détermine la règle de révision ET le calcul de durée).
+    # Auparavant ABSENT du schéma → le champ envoyé par le front était ignoré
+    # par Pydantic et tout contrat retombait sur le défaut modèle 'COSOLUCE'.
+    famille_contrat: str = "COSOLUCE"
     date_debut: date
     date_fin: date
     montant_annuel_ht: float
@@ -173,7 +177,7 @@ def creer_contrat(
     # Calculs
     montant_ht = Decimal(str(data.montant_annuel_ht))
     prorata = calculer_prorata(data.date_debut, montant_ht)
-    nombre_annees = calculer_nombre_annees(data.date_debut, data.date_fin)
+    nombre_annees = calculer_nombre_annees(data.date_debut, data.date_fin, data.famille_contrat)
 
     # Créer le contrat
     contrat = Contrat(
@@ -181,6 +185,7 @@ def creer_contrat(
         client_karlia_id=data.client_karlia_id,
         client_nom=data.client_nom,
         client_numero=data.client_numero,
+        famille_contrat=data.famille_contrat,
         date_debut=data.date_debut,
         date_fin=data.date_fin,
         nombre_annees=nombre_annees,
@@ -353,7 +358,9 @@ def modifier_contrat(
     if "date_fin" in data and data["date_fin"]:
         from datetime import date as date_type
         contrat.date_fin = date_type.fromisoformat(data["date_fin"])
-        contrat.nombre_annees = contrat.date_fin.year - contrat.date_debut.year + 1
+        contrat.nombre_annees = calculer_nombre_annees(
+            contrat.date_debut, contrat.date_fin, contrat.famille_contrat
+        )
 
     # Recalcul prorata
     if "date_debut" in data or "montant_annuel_ht" in data:
@@ -455,7 +462,7 @@ def renouveler_contrat(
         from dateutil.relativedelta import relativedelta
         nouvelle_fin = contrat.date_fin + relativedelta(years=1)
         contrat.date_fin = nouvelle_fin
-        contrat.nombre_annees = calculer_nombre_annees(contrat.date_debut, nouvelle_fin)
+        contrat.nombre_annees = calculer_nombre_annees(contrat.date_debut, nouvelle_fin, contrat.famille_contrat)
         contrat.statut = "EN_COURS"
         contrat.date_statut_change = date.today()
 
@@ -499,13 +506,16 @@ def renouveler_contrat(
             nouvelle_date_fin = nouvelle_date_debut + rdelta(years=contrat.nombre_annees) - timedelta(days=1)
 
         prorata = calculer_prorata(nouvelle_date_debut, contrat.montant_annuel_ht)
-        nb_annees = calculer_nombre_annees(nouvelle_date_debut, nouvelle_date_fin)
+        nb_annees = calculer_nombre_annees(nouvelle_date_debut, nouvelle_date_fin, contrat.famille_contrat)
 
         nouveau = Contrat(
             numero_contrat=nouveau_numero,
             client_karlia_id=contrat.client_karlia_id,
             client_nom=contrat.client_nom,
             client_numero=contrat.client_numero,
+            # Le renouvellement hérite de la famille du contrat parent (était
+            # omis → retombait sur le défaut 'COSOLUCE').
+            famille_contrat=contrat.famille_contrat,
             date_debut=nouvelle_date_debut,
             date_fin=nouvelle_date_fin,
             nombre_annees=nb_annees,
@@ -649,7 +659,7 @@ def renouveler_lot(
                 from dateutil.relativedelta import relativedelta
                 nouvelle_fin = contrat.date_fin + relativedelta(years=1)
                 contrat.date_fin = nouvelle_fin
-                contrat.nombre_annees = calculer_nombre_annees(contrat.date_debut, nouvelle_fin)
+                contrat.nombre_annees = calculer_nombre_annees(contrat.date_debut, nouvelle_fin, contrat.famille_contrat)
                 contrat.statut = "EN_COURS"
                 contrat.date_statut_change = date.today()
                 prochaine_annee = nouvelle_fin.year
