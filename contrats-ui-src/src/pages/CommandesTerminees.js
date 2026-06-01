@@ -1,119 +1,174 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   Box, Paper, Typography, Table, TableBody, TableCell, TableContainer,
-  TableHead, TableRow, IconButton, Chip, TextField, InputAdornment,
-  Dialog, DialogTitle, DialogContent, DialogActions, CircularProgress,
-  Alert, Tooltip, TablePagination, Button
+  TableHead, TableRow, Checkbox, Chip, TextField, InputAdornment,
+  CircularProgress, Alert, Tooltip, Button, Snackbar
 } from '@mui/material';
 import {
-  Search as SearchIcon, Visibility as ViewIcon, Receipt as FactureIcon,
-  PictureAsPdf as PdfIcon, CheckCircle as DoneIcon
+  Search as SearchIcon, Receipt as FactureIcon, ReceiptLong as TitleIcon
 } from '@mui/icons-material';
-import { format } from 'date-fns';
-import { fr } from 'date-fns/locale';
 import api from '../services/api';
-import { openPdfWithAuth } from '../services/pdfFetch';
+
+// L'écran historique "Terminées" listait des COMMANDES au statut 'deployee'.
+// Depuis la refonte par lignes (v3.5.0), il liste des LIGNES routées
+// 'facturation_directe' non encore facturées (cf. backend
+// GET /api/commandes/lignes-a-facturer). La route /commandes/terminees est
+// CONSERVÉE (liens existants), seul le titre et l'intention changent.
+//
+// Contrainte métier : une facture Karlia = un seul client (id_customer unique).
+// On regroupe donc visuellement par client et on n'autorise la facturation
+// que d'une sélection MONO-CLIENT (le backend revalide, double sécurité).
+
+// Chargement en une fois : le regroupement par client serait incohérent si un
+// client était coupé entre deux pages. 1000 = plafond actuel du backend ;
+// au-delà, prévoir une pagination par client côté serveur.
+const PAGE_SIZE = 1000;
 
 export default function CommandesTerminees() {
-  const [commandes, setCommandes] = useState([]);
+  const [lignes, setLignes] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
-  const [page, setPage] = useState(0);
-  const [rowsPerPage, setRowsPerPage] = useState(20);
-  const [total, setTotal] = useState(0);
   const [error, setError] = useState(null);
   const [success, setSuccess] = useState(null);
+  const [facturant, setFacturant] = useState(false);
+  // Set des ligne_ids cochés
+  const [selected, setSelected] = useState(() => new Set());
 
-  // Dialog détail
-  const [detailOpen, setDetailOpen] = useState(false);
-  const [detailCommande, setDetailCommande] = useState(null);
-
-  const fetchCommandes = useCallback(async () => {
+  const fetchLignes = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await api.get('/api/commandes/terminees', {
-        params: { page: page + 1, page_size: rowsPerPage, search: search || undefined }
+      const res = await api.get('/api/commandes/lignes-a-facturer', {
+        params: { page: 1, page_size: PAGE_SIZE, search: search || undefined }
       });
-      setCommandes(res.data.items);
-      setTotal(res.data.total);
+      setLignes(res.data.items || []);
+      setSelected(new Set());
       setError(null);
     } catch (err) {
-      setError('Erreur lors du chargement des commandes');
+      setError('Erreur lors du chargement des lignes à facturer');
       console.error(err);
     } finally {
       setLoading(false);
     }
-  }, [page, rowsPerPage, search]);
+  }, [search]);
 
-  useEffect(() => {
-    fetchCommandes();
-  }, [fetchCommandes]);
+  useEffect(() => { fetchLignes(); }, [fetchLignes]);
 
-  const openDetail = async (commande) => {
-    try {
-      const res = await api.get(`/api/commandes/${commande.id}`);
-      setDetailCommande(res.data);
-      setDetailOpen(true);
-    } catch (err) {
-      setError('Erreur lors du chargement du détail');
+  const formatMontant = (montant) => {
+    if (montant === null || montant === undefined || montant === '') return '-';
+    return new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'EUR' }).format(Number(montant));
+  };
+  const num = (v) => (v === null || v === undefined || v === '' ? 0 : Number(v));
+
+  // ── Regroupement par client ────────────────────────────────────────────────
+  // Tri : client_nom → commande_reference → ordre. Groupes = Map(customer_id →
+  // { customer_id, client_nom, lignes: [...] }) en préservant l'ordre trié.
+  const groupes = useMemo(() => {
+    const sorted = [...lignes].sort((a, b) => {
+      const cn = (a.client_nom || '').localeCompare(b.client_nom || '');
+      if (cn !== 0) return cn;
+      const cr = (a.commande_reference || '').localeCompare(b.commande_reference || '');
+      if (cr !== 0) return cr;
+      return (a.ordre ?? 0) - (b.ordre ?? 0);
+    });
+    const map = new Map();
+    for (const l of sorted) {
+      const key = l.karlia_customer_id ?? `nc-${l.commande_id}`;
+      if (!map.has(key)) {
+        map.set(key, { customer_id: l.karlia_customer_id, client_nom: l.client_nom, lignes: [] });
+      }
+      map.get(key).lignes.push(l);
     }
+    return Array.from(map.values());
+  }, [lignes]);
+
+  // ── Sélection ────────────────────────────────────────────────────────────
+  const toggleLine = (ligneId) => {
+    setSelected(prev => {
+      const next = new Set(prev);
+      if (next.has(ligneId)) next.delete(ligneId); else next.add(ligneId);
+      return next;
+    });
   };
 
-  const handleDownloadPdf = (commande) => {
-    openPdfWithAuth(`/api/commandes/${commande.id}/pdf`);
+  const toggleGroup = (groupe) => {
+    const ids = groupe.lignes.map(l => l.ligne_id);
+    const allSelected = ids.every(id => selected.has(id));
+    setSelected(prev => {
+      const next = new Set(prev);
+      if (allSelected) ids.forEach(id => next.delete(id));
+      else ids.forEach(id => next.add(id));
+      return next;
+    });
   };
 
-  const [facturant, setFacturant] = useState(null);
+  const groupState = (groupe) => {
+    const ids = groupe.lignes.map(l => l.ligne_id);
+    const nb = ids.filter(id => selected.has(id)).length;
+    return { all: nb === ids.length && nb > 0, some: nb > 0 && nb < ids.length };
+  };
 
-  const handleFacturer = async (commande) => {
-    if (!commande.karlia_customer_id) {
-      setError('Client Karlia non renseigné - impossible de facturer');
-      return;
-    }
-    setFacturant(commande.id);
+  // ── Synthèse sélection ───────────────────────────────────────────────────
+  const selectedLignes = useMemo(
+    () => lignes.filter(l => selected.has(l.ligne_id)),
+    [lignes, selected]
+  );
+  const clientsSelectionnes = useMemo(
+    () => new Set(selectedLignes.map(l => l.karlia_customer_id)),
+    [selectedLignes]
+  );
+  const totalHT = selectedLignes.reduce((s, l) => s + num(l.montant_ht), 0);
+  const totalTTC = selectedLignes.reduce((s, l) => s + num(l.montant_ttc), 0);
+  const monoClient = clientsSelectionnes.size === 1;
+  const canFacturer = selectedLignes.length > 0 && monoClient && !facturant;
+
+  const tooltipMultiClient = clientsSelectionnes.size > 1
+    ? `Une facture Karlia ne peut couvrir qu'un seul client. Sélection actuelle : `
+      + `${clientsSelectionnes.size} clients différents. Décochez les lignes des autres clients.`
+    : '';
+
+  const handleFacturer = async () => {
+    if (!canFacturer) return;
+    setFacturant(true);
+    setError(null);
+    const ligneIds = selectedLignes.map(l => l.ligne_id);
     try {
-      const res = await api.post(`/api/commandes/${commande.id}/facturer`);
-      setSuccess(res.data.message || 'Facture émise avec succès');
-      fetchCommandes();
+      const res = await api.post('/api/commandes/facturer-lignes', { ligne_ids: ligneIds });
+      const data = res.data || {};
+      const ref = data.facture_karlia_ref || data.facture_karlia_id || '';
+      setSuccess(
+        `Facture brouillon créée dans Karlia (${data.nb_lignes_facturees ?? ligneIds.length} ligne(s)`
+        + `${ref ? `, réf ${ref}` : ''}).`
+      );
+      // Retirer les lignes facturées de la liste affichée + vider la sélection.
+      const facturees = new Set(data.ligne_ids || ligneIds);
+      setLignes(prev => prev.filter(l => !facturees.has(l.ligne_id)));
+      setSelected(new Set());
     } catch (err) {
       setError(err.response?.data?.detail || 'Erreur lors de la facturation');
     } finally {
-      setFacturant(null);
+      setFacturant(false);
     }
   };
 
-  const formatDate = (dateStr) => {
-    if (!dateStr) return '-';
-    try {
-      return format(new Date(dateStr + 'T12:00:00'), 'd MMM yyyy', { locale: fr });
-    } catch {
-      return dateStr;
-    }
-  };
-
-  const formatMontant = (montant) => {
-    if (montant === null || montant === undefined) return '-';
-    return new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'EUR' }).format(montant);
-  };
+  const truncate = (s, n = 70) => (s && s.length > n ? `${s.slice(0, n)}…` : (s || ''));
 
   return (
-    <Box sx={{ p: 3 }}>
+    <Box sx={{ p: 3, pb: selectedLignes.length > 0 ? 12 : 3 }}>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
         <Typography variant="h4" sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-          <DoneIcon color="success" /> Commandes terminées
+          <TitleIcon color="success" /> Lignes à facturer
         </Typography>
-        <Chip label={`${total} commande(s)`} color="success" />
+        <Chip label={`${lignes.length} ligne(s)`} color="success" />
       </Box>
 
       {error && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError(null)}>{error}</Alert>}
-      {success && <Alert severity="success" sx={{ mb: 2 }} onClose={() => setSuccess(null)}>{success}</Alert>}
 
       <Paper sx={{ mb: 2, p: 2 }}>
         <TextField
           size="small"
           placeholder="Rechercher par client ou référence..."
           value={search}
-          onChange={(e) => { setSearch(e.target.value); setPage(0); }}
+          onChange={(e) => setSearch(e.target.value)}
           InputProps={{
             startAdornment: <InputAdornment position="start"><SearchIcon /></InputAdornment>
           }}
@@ -125,111 +180,142 @@ export default function CommandesTerminees() {
         <Table size="small">
           <TableHead>
             <TableRow sx={{ backgroundColor: 'grey.100' }}>
-              <TableCell>Référence</TableCell>
-              <TableCell>Client</TableCell>
-              <TableCell>Formateur</TableCell>
-              <TableCell align="center">Prestations</TableCell>
+              <TableCell padding="checkbox" />
+              <TableCell>Commande</TableCell>
+              <TableCell>Ligne</TableCell>
+              <TableCell align="right">Qté</TableCell>
+              <TableCell align="right">PU HT</TableCell>
+              <TableCell align="right">Montant HT</TableCell>
               <TableCell align="right">Montant TTC</TableCell>
-              <TableCell align="center">PDF</TableCell>
-              <TableCell align="center">Actions</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
             {loading ? (
               <TableRow>
-                <TableCell colSpan={7} align="center" sx={{ py: 4 }}>
-                  <CircularProgress />
-                </TableCell>
+                <TableCell colSpan={7} align="center" sx={{ py: 4 }}><CircularProgress /></TableCell>
               </TableRow>
-            ) : commandes.length === 0 ? (
+            ) : lignes.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={7} align="center" sx={{ py: 4 }}>
-                  Aucune commande terminée
-                </TableCell>
+                <TableCell colSpan={7} align="center" sx={{ py: 4 }}>Aucune ligne à facturer</TableCell>
               </TableRow>
             ) : (
-              commandes.map((cmd) => (
-                <TableRow key={cmd.id} hover>
-                  <TableCell>
-                    <Typography variant="body2" fontWeight="medium">{cmd.reference_devis}</Typography>
-                  </TableCell>
-                  <TableCell>{cmd.client_nom || '-'}</TableCell>
-                  <TableCell>
-                    {cmd.formateur_nom ? (
-                      <Chip label={cmd.formateur_nom} size="small" color="primary" variant="outlined" />
-                    ) : '-'}
-                  </TableCell>
-                  <TableCell align="center">
-                    <Chip
-                      label={`${cmd.nb_prestations_planifiees}/${cmd.nb_prestations} réalisée(s)`}
-                      color="success"
-                      size="small"
-                      variant="outlined"
-                    />
-                  </TableCell>
-                  <TableCell align="right">
-                    <Typography fontWeight="medium">{formatMontant(cmd.montant_ttc)}</Typography>
-                  </TableCell>
-                  <TableCell align="center">
-                    {cmd.pdf_disponible && (
-                      <IconButton size="small" color="error" onClick={() => handleDownloadPdf(cmd)}>
-                        <PdfIcon />
-                      </IconButton>
-                    )}
-                  </TableCell>
-                  <TableCell align="center">
-                    <Tooltip title="Voir détail">
-                      <IconButton size="small" onClick={() => openDetail(cmd)}>
-                        <ViewIcon />
-                      </IconButton>
-                    </Tooltip>
-                    <Tooltip title="Émettre facture Karlia">
-                      <IconButton size="small" color="success" onClick={() => handleFacturer(cmd)} disabled={facturant === cmd.id}>
-                        <FactureIcon />
-                      </IconButton>
-                    </Tooltip>
-                  </TableCell>
-                </TableRow>
-              ))
+              groupes.map((groupe) => {
+                const gs = groupState(groupe);
+                const groupKey = groupe.customer_id ?? `nc-${groupe.lignes[0].commande_id}`;
+                return (
+                  <React.Fragment key={groupKey}>
+                    {/* Sous-en-tête CLIENT */}
+                    <TableRow sx={{ backgroundColor: 'grey.50' }}>
+                      <TableCell padding="checkbox">
+                        <Checkbox
+                          size="small"
+                          checked={gs.all}
+                          indeterminate={gs.some}
+                          onChange={() => toggleGroup(groupe)}
+                        />
+                      </TableCell>
+                      <TableCell colSpan={6}>
+                        <Typography variant="subtitle2" sx={{ fontWeight: 'bold' }}>
+                          {groupe.client_nom || 'Client inconnu'}
+                          {' '}
+                          <Chip
+                            label={`${groupe.lignes.length} ligne(s)`}
+                            size="small"
+                            variant="outlined"
+                            sx={{ ml: 1 }}
+                          />
+                          {groupe.customer_id == null && (
+                            <Chip label="client Karlia non renseigné" size="small" color="warning" sx={{ ml: 1 }} />
+                          )}
+                        </Typography>
+                      </TableCell>
+                    </TableRow>
+                    {/* Lignes du client */}
+                    {groupe.lignes.map((l) => (
+                      <TableRow key={l.ligne_id} hover selected={selected.has(l.ligne_id)}>
+                        <TableCell padding="checkbox">
+                          <Checkbox
+                            size="small"
+                            checked={selected.has(l.ligne_id)}
+                            onChange={() => toggleLine(l.ligne_id)}
+                          />
+                        </TableCell>
+                        <TableCell>
+                          <Chip label={l.commande_reference || '-'} size="small" variant="outlined" />
+                        </TableCell>
+                        <TableCell>
+                          <Tooltip title={l.designation || ''}>
+                            <Typography variant="body2">
+                              <Box component="span" sx={{ color: 'text.secondary', mr: 1 }}>
+                                #{l.ordre ?? '-'}
+                              </Box>
+                              {truncate(l.designation)}
+                            </Typography>
+                          </Tooltip>
+                        </TableCell>
+                        <TableCell align="right">{num(l.quantite)}</TableCell>
+                        <TableCell align="right">{formatMontant(l.prix_unitaire_ht)}</TableCell>
+                        <TableCell align="right">{formatMontant(l.montant_ht)}</TableCell>
+                        <TableCell align="right">{formatMontant(l.montant_ttc)}</TableCell>
+                      </TableRow>
+                    ))}
+                  </React.Fragment>
+                );
+              })
             )}
           </TableBody>
         </Table>
-        <TablePagination
-          component="div"
-          count={total}
-          page={page}
-          onPageChange={(e, p) => setPage(p)}
-          rowsPerPage={rowsPerPage}
-          onRowsPerPageChange={(e) => { setRowsPerPage(parseInt(e.target.value)); setPage(0); }}
-          rowsPerPageOptions={[10, 20, 50]}
-          labelRowsPerPage="Par page"
-          labelDisplayedRows={({ from, to, count }) => `${from}-${to} of ${count}`}
-        />
       </TableContainer>
 
-      {/* Dialog Détail */}
-      <Dialog open={detailOpen} onClose={() => setDetailOpen(false)} maxWidth="md" fullWidth>
-        <DialogTitle>Détail de la commande</DialogTitle>
-        <DialogContent>
-          {detailCommande && (
-            <Box sx={{ mt: 2 }}>
-              <Typography variant="h6" gutterBottom>{detailCommande.reference_devis}</Typography>
-              <Typography>Client : {detailCommande.client_nom || '-'}</Typography>
-              <Typography>Montant TTC : {formatMontant(detailCommande.montant_ttc)}</Typography>
-              <Typography>Formateur : {detailCommande.formateur_nom || '-'}</Typography>
-              <Typography sx={{ mt: 2, fontWeight: 'bold' }}>Lignes :</Typography>
-              {detailCommande.lignes?.map((l, i) => (
-                <Typography key={i} variant="body2" sx={{ ml: 2 }}>
-                  • {l.designation || 'Article'} - {formatMontant(l.montant_ht)} HT x {l.quantite}
-                </Typography>
-              ))}
-            </Box>
+      {/* Barre flottante de sélection */}
+      {selectedLignes.length > 0 && (
+        <Paper
+          elevation={6}
+          sx={{
+            position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 1200,
+            p: 2, display: 'flex', alignItems: 'center', gap: 3,
+            borderTop: '1px solid', borderColor: 'divider'
+          }}
+        >
+          <Box>
+            <Typography variant="subtitle1" sx={{ fontWeight: 'bold' }}>
+              {selectedLignes.length} ligne(s) sélectionnée(s)
+            </Typography>
+            <Typography variant="body2" color="text.secondary">
+              Total HT {formatMontant(totalHT)} · Total TTC {formatMontant(totalTTC)}
+            </Typography>
+          </Box>
+          {clientsSelectionnes.size > 1 && (
+            <Chip color="error" label={`${clientsSelectionnes.size} clients différents`} />
           )}
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setDetailOpen(false)}>Fermer</Button>
-        </DialogActions>
-      </Dialog>
+          <Box sx={{ flexGrow: 1 }} />
+          <Tooltip title={tooltipMultiClient}>
+            {/* span requis : Tooltip ne s'affiche pas sur un bouton désactivé */}
+            <span>
+              <Button
+                variant="contained"
+                color="success"
+                startIcon={facturant ? <CircularProgress size={18} color="inherit" /> : <FactureIcon />}
+                disabled={!canFacturer}
+                onClick={handleFacturer}
+              >
+                Facturer la sélection (brouillon Karlia)
+              </Button>
+            </span>
+          </Tooltip>
+        </Paper>
+      )}
+
+      <Snackbar
+        open={!!success}
+        autoHideDuration={6000}
+        onClose={() => setSuccess(null)}
+        anchorOrigin={{ vertical: 'top', horizontal: 'center' }}
+      >
+        <Alert severity="success" onClose={() => setSuccess(null)} sx={{ width: '100%' }}>
+          {success}
+        </Alert>
+      </Snackbar>
     </Box>
   );
 }
