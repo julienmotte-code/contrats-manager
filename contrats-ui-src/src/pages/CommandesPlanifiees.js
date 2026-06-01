@@ -32,6 +32,8 @@ export default function CommandesPlanifiees() {
   // Dialog détail
   const [detailOpen, setDetailOpen] = useState(false);
   const [detailCommande, setDetailCommande] = useState(null);
+  const [detailPrestations, setDetailPrestations] = useState([]);
+  const [realisantId, setRealisantId] = useState(null);
 
   const fetchCommandes = useCallback(async () => {
     setLoading(true);
@@ -77,11 +79,40 @@ export default function CommandesPlanifiees() {
 
   const openDetail = async (commande) => {
     try {
-      const res = await api.get(`/api/commandes/${commande.id}`);
-      setDetailCommande(res.data);
+      // En parallèle : détail commande (lignes du BC) + prestations associées.
+      const [cmdRes, prestRes] = await Promise.all([
+        api.get(`/api/commandes/${commande.id}`),
+        api.get('/api/prestations', { params: { commande_id: commande.id } }),
+      ]);
+      setDetailCommande(cmdRes.data);
+      setDetailPrestations(prestRes.data.prestations || []);
       setDetailOpen(true);
     } catch (err) {
       setError('Erreur lors du chargement du détail');
+    }
+  };
+
+  // Marque une prestation réalisée (suivi fin, distinct du "terminer" commande).
+  const handleRealiserPrestation = async (prestationId) => {
+    setRealisantId(prestationId);
+    try {
+      await api.post(`/api/prestations/${prestationId}/realiser`);
+      setDetailPrestations((prev) => prev.map((p) =>
+        p.id === prestationId ? { ...p, statut: 'realisee' } : p));
+      setSuccess('Prestation marquée comme réalisée');
+    } catch (err) {
+      setError(err.response?.data?.detail || 'Erreur lors du marquage réalisé');
+    } finally {
+      setRealisantId(null);
+    }
+  };
+
+  const prestStatutChip = (statut) => {
+    switch (statut) {
+      case 'a_planifier': return <Chip label="À planifier" size="small" color="warning" />;
+      case 'planifiee': return <Chip label="Planifiée" size="small" color="info" />;
+      case 'realisee': return <Chip label="Réalisée" size="small" color="success" />;
+      default: return <Chip label={statut} size="small" />;
     }
   };
 
@@ -297,6 +328,55 @@ export default function CommandesPlanifiees() {
               <Box sx={{ mt: 2, textAlign: 'right' }}>
                 <Typography variant="h6">Total TTC : {formatMontant(detailCommande.montant_ttc)}</Typography>
               </Box>
+
+              {/* Prestations de la commande : suivi fin par prestation. */}
+              <Typography variant="h6" sx={{ mt: 3, mb: 1 }}>Prestations de cette commande</Typography>
+              {detailPrestations.length === 0 ? (
+                <Typography variant="body2" color="text.secondary">
+                  Aucune prestation pour cette commande.
+                </Typography>
+              ) : (
+                <TableContainer>
+                  <Table size="small">
+                    <TableHead>
+                      <TableRow>
+                        <TableCell>Désignation</TableCell>
+                        <TableCell>Formateur</TableCell>
+                        <TableCell>Date planifiée</TableCell>
+                        <TableCell align="center">Statut</TableCell>
+                        <TableCell align="center">Action</TableCell>
+                      </TableRow>
+                    </TableHead>
+                    <TableBody>
+                      {detailPrestations.map((p) => (
+                        <TableRow key={p.id}>
+                          <TableCell>{p.designation || `Prestation #${p.id}`}</TableCell>
+                          <TableCell>{p.formateur_nom || '-'}</TableCell>
+                          <TableCell>{formatDate(p.date_planifiee)}</TableCell>
+                          <TableCell align="center">{prestStatutChip(p.statut)}</TableCell>
+                          <TableCell align="center">
+                            {p.statut === 'planifiee' && (
+                              <Button
+                                size="small"
+                                variant="outlined"
+                                color="success"
+                                startIcon={realisantId === p.id ? <CircularProgress size={16} /> : <DoneIcon />}
+                                disabled={realisantId === p.id}
+                                onClick={() => handleRealiserPrestation(p.id)}
+                              >
+                                Marquer réalisée
+                              </Button>
+                            )}
+                            {p.statut === 'realisee' && (
+                              <Chip label="Réalisée" size="small" color="success" variant="outlined" />
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </TableContainer>
+              )}
             </Box>
           )}
         </DialogContent>

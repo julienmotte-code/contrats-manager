@@ -3,12 +3,19 @@ import { useParams, useNavigate } from 'react-router-dom';
 import {
   Box, Paper, Typography, Table, TableBody, TableCell, TableContainer,
   TableHead, TableRow, Button, Chip, CircularProgress, Alert, Card, CardContent,
-  Grid, Select, MenuItem, FormControl, IconButton, Tooltip, Divider, InputLabel
+  Grid, Select, MenuItem, FormControl, IconButton, Tooltip, Divider, InputLabel,
+  TextField
 } from '@mui/material';
 import {
   ArrowBack as ArrowBackIcon, Check as CheckIcon, Close as CloseIcon,
   Group as GroupIcon, Warning as WarningIcon, DoneAll as DoneAllIcon
 } from '@mui/icons-material';
+import { DatePicker } from '@mui/x-date-pickers/DatePicker';
+import { TimePicker } from '@mui/x-date-pickers/TimePicker';
+import { LocalizationProvider } from '@mui/x-date-pickers/LocalizationProvider';
+import { AdapterDateFns } from '@mui/x-date-pickers/AdapterDateFns';
+import { format, parseISO } from 'date-fns';
+import { fr } from 'date-fns/locale';
 import api from '../services/api';
 
 // Valeur sentinelle pour "non affecté" dans le Select MUI : un MenuItem ne peut
@@ -32,6 +39,10 @@ const STATUT_CHIP = {
 
 const formateurLabel = (f) => `${f.prenom || ''} ${f.nom || ''}`.trim() || `Formateur #${f.id}`;
 
+// Parse une heure "HH:mm:ss" (stockage backend) en Date (sur une date pivot
+// arbitraire) pour alimenter le TimePicker. Même pattern que MesPrestations.js.
+const parseHeure = (h) => (h ? parseISO(`2000-01-01T${h}`) : null);
+
 export default function AffectationFormateurs() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -42,6 +53,9 @@ export default function AffectationFormateurs() {
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
+  // Erreurs de planification par prestation (étape 2 du Valider), affichées
+  // sans annuler l'affectation déjà committée.
+  const [planifErrors, setPlanifErrors] = useState([]);
 
   // Map prestation_id -> formateur_id (string, '' = non affecté), initialisée
   // depuis les prestations courantes. Une prestation absente du payload final
@@ -49,6 +63,10 @@ export default function AffectationFormateurs() {
   // l'écran pour qu'il reflète l'intention de l'utilisateur (et qu'une
   // désaffectation manuelle soit possible).
   const [routage, setRoutage] = useState({});
+
+  // Map prestation_id -> { date, debut, fin, lieu } (planification optionnelle,
+  // saisie inline). date/debut/fin = objets Date (pickers) ou null ; lieu = str.
+  const [planification, setPlanification] = useState({});
 
   // Sélecteur global "Appliquer à tous" — indépendant de la map des prestations.
   const [globalFormateur, setGlobalFormateur] = useState(UNASSIGNED);
@@ -83,14 +101,22 @@ export default function AffectationFormateurs() {
       );
       setPrestations(prests);
       setFormateurs(formRes.data.formateurs || []);
-      // Init de la map depuis les prestations AFFICHÉES (intitulés exclus).
-      const init = {};
+      // Init des maps depuis les prestations AFFICHÉES (intitulés exclus).
+      const initRoutage = {};
+      const initPlanif = {};
       for (const p of prests) {
-        init[p.id] = p.formateur_id !== null && p.formateur_id !== undefined
+        initRoutage[p.id] = p.formateur_id !== null && p.formateur_id !== undefined
           ? String(p.formateur_id)
           : UNASSIGNED;
+        initPlanif[p.id] = {
+          date: p.date_planifiee ? parseISO(p.date_planifiee) : null,
+          debut: parseHeure(p.heure_debut),
+          fin: parseHeure(p.heure_fin),
+          lieu: p.lieu || '',
+        };
       }
-      setRoutage(init);
+      setRoutage(initRoutage);
+      setPlanification(initPlanif);
       setError(null);
     } catch (err) {
       setError("Erreur lors du chargement de l'affectation");
@@ -136,6 +162,13 @@ export default function AffectationFormateurs() {
     setRoutage((prev) => ({ ...prev, [prestationId]: value }));
   };
 
+  const handleChangePlanif = (prestationId, field, value) => {
+    setPlanification((prev) => ({
+      ...prev,
+      [prestationId]: { ...(prev[prestationId] || {}), [field]: value },
+    }));
+  };
+
   const handleApplyToAll = () => {
     // Copie le formateur global sur TOUTES les prestations affichées (y compris
     // celles déjà 'planifiee' — le backend ajoutera ces ids dans 'avertissements').
@@ -146,14 +179,20 @@ export default function AffectationFormateurs() {
     setRoutage(next);
   };
 
+  // Une planification (heure/lieu) sans date ne partira pas → signalée à l'UI.
+  const planifIncomplete = (p) => {
+    const pl = planification[p.id] || {};
+    const aHeureOuLieu = !!pl.debut || !!pl.fin || !!(pl.lieu && pl.lieu.trim());
+    return aHeureOuLieu && !pl.date;
+  };
+
   const handleValider = async () => {
     if (!commande) return;
     setSubmitting(true);
     setError(null);
+    setPlanifErrors([]);
     try {
-      // Payload complet : on envoie l'état de TOUTES les prestations affichées.
-      // Le backend tolère l'affectation partielle, mais ici l'écran reflète
-      // l'intention globale de l'utilisateur.
+      // ── Étape 1 : affectation des formateurs (payload inchangé) ──────────
       const affectations = prestationsTriees.map((p) => ({
         prestation_id: p.id,
         formateur_id: routage[p.id] && routage[p.id] !== UNASSIGNED
@@ -165,11 +204,41 @@ export default function AffectationFormateurs() {
         { affectations },
       );
       const avert = res.data?.avertissements || [];
-      let successMessage = `Affectation enregistrée pour ${commande.reference_devis || `commande ${id}`}`;
-      if (avert.length > 0) {
-        successMessage += ` — attention : ${avert.length} prestation(s) déjà planifiée(s) ont été réaffectée(s) (id ${avert.join(', ')}). Vérifiez l'agenda associé.`;
+
+      // ── Étape 2 : planification — UNIQUEMENT les prestations avec une date.
+      // Heure début/fin/lieu envoyés seulement s'ils sont remplis. Les erreurs
+      // sont collectées par prestation, sans annuler l'affectation committée.
+      const erreurs = [];
+      for (const p of prestationsTriees) {
+        const pl = planification[p.id] || {};
+        if (!pl.date) continue; // pas de date → on n'appelle PAS /planifier
+        const payload = { date_planifiee: format(pl.date, 'yyyy-MM-dd') };
+        if (pl.debut) payload.heure_debut = format(pl.debut, 'HH:mm:ss');
+        if (pl.fin) payload.heure_fin = format(pl.fin, 'HH:mm:ss');
+        if (pl.lieu && pl.lieu.trim()) payload.lieu = pl.lieu.trim();
+        try {
+          await api.post(`/api/prestations/${p.id}/planifier`, payload);
+        } catch (e) {
+          erreurs.push({
+            id: p.id,
+            designation: p.designation || `Prestation #${p.id}`,
+            detail: e.response?.data?.detail || 'Erreur de planification',
+          });
+        }
       }
-      navigate('/commandes/a-planifier', { state: { successMessage } });
+
+      // ── Étape 3 : succès total → redirection ; sinon → on reste + Alert.
+      if (erreurs.length === 0) {
+        let successMessage = `Affectation enregistrée pour ${commande.reference_devis || `commande ${id}`}`;
+        if (avert.length > 0) {
+          successMessage += ` — attention : ${avert.length} prestation(s) déjà planifiée(s) ont été réaffectée(s) (id ${avert.join(', ')}). Vérifiez l'agenda associé.`;
+        }
+        navigate('/commandes/a-planifier', { state: { successMessage } });
+      } else {
+        setPlanifErrors(erreurs);
+        // Recharge l'état réel (affectation + planifications réussies).
+        await fetchAll();
+      }
     } catch (err) {
       const detail = err.response?.data?.detail;
       setError(detail ? `Erreur d'affectation : ${detail}` : "Erreur lors de l'affectation");
@@ -201,6 +270,7 @@ export default function AffectationFormateurs() {
   }
 
   return (
+    <LocalizationProvider dateAdapter={AdapterDateFns} adapterLocale={fr}>
     <Box sx={{ p: 3 }}>
       {/* En-tête */}
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
@@ -208,7 +278,7 @@ export default function AffectationFormateurs() {
           <IconButton onClick={handleAnnuler}><ArrowBackIcon /></IconButton>
         </Tooltip>
         <Typography variant="h4" sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-          <GroupIcon color="primary" /> Affectation des formateurs
+          <GroupIcon color="primary" /> Affecter et planifier
         </Typography>
       </Box>
 
@@ -233,6 +303,17 @@ export default function AffectationFormateurs() {
       </Card>
 
       {error && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError(null)}>{error}</Alert>}
+
+      {planifErrors.length > 0 && (
+        <Alert severity="warning" sx={{ mb: 2 }} onClose={() => setPlanifErrors([])}>
+          L'affectation a été enregistrée, mais la planification a échoué pour&nbsp;:
+          <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>
+            {planifErrors.map((e) => (
+              <li key={e.id}>{e.designation} — {e.detail}</li>
+            ))}
+          </ul>
+        </Alert>
+      )}
 
       {prestationsTriees.length === 0 ? (
         <Alert severity="info">
@@ -280,6 +361,10 @@ export default function AffectationFormateurs() {
                 Appliquer aux {prestationsTriees.length} prestation(s)
               </Button>
             </Box>
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
+              Date, heures et lieu sont optionnels et se saisissent par prestation.
+              La planification n'est enregistrée que si une date est renseignée.
+            </Typography>
           </Paper>
 
           {/* Tableau prestations */}
@@ -287,17 +372,23 @@ export default function AffectationFormateurs() {
             <Table size="small">
               <TableHead>
                 <TableRow sx={{ backgroundColor: 'grey.100' }}>
-                  <TableCell sx={{ width: 60 }} align="center">#</TableCell>
+                  <TableCell sx={{ width: 50 }} align="center">#</TableCell>
                   <TableCell>Désignation</TableCell>
-                  <TableCell sx={{ width: 140 }} align="center">Statut</TableCell>
-                  <TableCell sx={{ width: 120 }} align="center">Durée (j)</TableCell>
-                  <TableCell sx={{ width: 280 }}>Formateur</TableCell>
+                  <TableCell sx={{ width: 130 }} align="center">Statut</TableCell>
+                  <TableCell sx={{ width: 70 }} align="center">Durée (j)</TableCell>
+                  <TableCell sx={{ width: 220 }}>Formateur</TableCell>
+                  <TableCell sx={{ width: 150 }}>Date</TableCell>
+                  <TableCell sx={{ width: 105 }} align="center">Début</TableCell>
+                  <TableCell sx={{ width: 105 }} align="center">Fin</TableCell>
+                  <TableCell sx={{ width: 240 }}>Lieu</TableCell>
                 </TableRow>
               </TableHead>
               <TableBody>
                 {prestationsTriees.map((p, idx) => {
                   const dejaPlanifiee = p.statut === 'planifiee' || p.date_planifiee;
                   const statutConf = STATUT_CHIP[p.statut] || { label: p.statut, color: 'default' };
+                  const pl = planification[p.id] || {};
+                  const dateManquante = planifIncomplete(p);
                   return (
                     <TableRow key={p.id} hover>
                       <TableCell align="center">
@@ -306,14 +397,12 @@ export default function AffectationFormateurs() {
                         </Typography>
                       </TableCell>
                       <TableCell>
+                        {/* description NON affichée : c'est du HTML Karlia brut
+                            (balises échappées + <p> vides) qui polluait l'écran.
+                            designation suffit à identifier la prestation. */}
                         <Typography variant="body2">
                           {p.designation || `Prestation #${p.id}`}
                         </Typography>
-                        {p.description && p.description !== p.designation && (
-                          <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
-                            {p.description}
-                          </Typography>
-                        )}
                       </TableCell>
                       <TableCell align="center">
                         <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0.5 }}>
@@ -335,7 +424,7 @@ export default function AffectationFormateurs() {
                         {p.duree_jours ?? '-'}
                       </TableCell>
                       <TableCell>
-                        <FormControl size="small" sx={{ minWidth: 240 }}>
+                        <FormControl size="small" sx={{ minWidth: 220 }}>
                           <Select
                             value={routage[p.id] ?? UNASSIGNED}
                             onChange={(e) => handleChangeFormateur(p.id, e.target.value)}
@@ -354,6 +443,49 @@ export default function AffectationFormateurs() {
                             ))}
                           </Select>
                         </FormControl>
+                      </TableCell>
+                      <TableCell>
+                        <DatePicker
+                          value={pl.date ?? null}
+                          onChange={(v) => handleChangePlanif(p.id, 'date', v)}
+                          format="dd/MM/yyyy"
+                          slotProps={{
+                            textField: {
+                              size: 'small',
+                              fullWidth: true,
+                              error: dateManquante,
+                              helperText: dateManquante
+                                ? 'Renseignez une date pour enregistrer ces informations'
+                                : undefined,
+                            },
+                            field: { clearable: true },
+                          }}
+                        />
+                      </TableCell>
+                      <TableCell align="center">
+                        <TimePicker
+                          value={pl.debut ?? null}
+                          onChange={(v) => handleChangePlanif(p.id, 'debut', v)}
+                          ampm={false}
+                          slotProps={{ textField: { size: 'small', sx: { width: 95 } }, field: { clearable: true } }}
+                        />
+                      </TableCell>
+                      <TableCell align="center">
+                        <TimePicker
+                          value={pl.fin ?? null}
+                          onChange={(v) => handleChangePlanif(p.id, 'fin', v)}
+                          ampm={false}
+                          slotProps={{ textField: { size: 'small', sx: { width: 95 } }, field: { clearable: true } }}
+                        />
+                      </TableCell>
+                      <TableCell>
+                        <TextField
+                          size="small"
+                          fullWidth
+                          placeholder="Lieu"
+                          value={pl.lieu ?? ''}
+                          onChange={(e) => handleChangePlanif(p.id, 'lieu', e.target.value)}
+                        />
                       </TableCell>
                     </TableRow>
                   );
@@ -419,5 +551,6 @@ export default function AffectationFormateurs() {
         </>
       )}
     </Box>
+    </LocalizationProvider>
   );
 }
