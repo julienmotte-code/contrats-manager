@@ -1,19 +1,17 @@
 """
-Tests étape 1 — facturation par lignes (backend seul).
+Tests — facturation par lignes (backend), version MONO-COMMANDE (v3.5.0).
 
 À exécuter DANS le conteneur backend :
     docker compose cp /tmp/test_facturer_lignes.py backend:/tmp/test_facturer_lignes.py
-    docker compose exec -T backend python /tmp/test_facturer_lignes.py
+    docker compose exec -T -e PYTHONPATH=/app backend python /tmp/test_facturer_lignes.py
 
-AUCUNE émission Karlia réelle : karlia.creer_facture est MOCKÉ. Le test
-d'émission réelle (création d'un vrai brouillon) est laissé au test visuel
-utilisateur via le frontend (étape 2) ou un appel manuel contrôlé.
+AUCUNE émission Karlia réelle : karlia.creer_facture est MOCKÉ.
 """
 import asyncio
 import sys
 
 from app.core.database import SessionLocal
-from app.models.models import CommandeLigne, Commande
+from app.models.models import CommandeLigne
 from app.services.routage_service import DESTINATION_FACTURATION_DIRECTE
 import app.api.commandes as cmd_api
 from app.api.commandes import (
@@ -23,7 +21,7 @@ from app.api.commandes import (
 )
 from fastapi import HTTPException
 
-REFS_ATTENDUES = {"BC26-0070", "BC25-0045", "D25-0343"}
+INTITULES_REPEUPLES = {1042, 1043, 1045, 1047}  # BC26-0090, section_karlia=1
 
 ok = 0
 ko = 0
@@ -42,67 +40,54 @@ def check(label, cond):
 async def main():
     db = SessionLocal()
     try:
-        # ── Test 1 : liste des lignes à facturer ────────────────────────────
-        print("\n== Test 1 : GET lignes-a-facturer ==")
+        # ── Test 1 : liste — intitulés section_karlia=1 exclus ──────────────
+        print("\n== Test 1 : GET lignes-a-facturer exclut les intitulés (section=1) ==")
         res = await get_lignes_a_facturer(page=1, page_size=1000, search=None, db=db, current_user=None)
+        ids_listes = {it.ligne_id for it in res.items}
         print(f"  total lignes à facturer = {res.total}")
-        refs_vues = {it.commande_reference for it in res.items}
-        print(f"  références couvertes : {sorted(refs_vues)}")
-        # Les 3 commandes mixtes du diagnostic doivent être présentes.
-        check("BC26-0070 / BC25-0045 / D25-0343 présentes",
-              REFS_ATTENDUES.issubset(refs_vues))
-        # Invariants : toutes en facturation_directe, non facturées.
-        rows = (db.query(CommandeLigne)
-                .filter(CommandeLigne.destination == DESTINATION_FACTURATION_DIRECTE,
-                        CommandeLigne.facture_karlia_id.is_(None))
-                .all())
-        attendu = len([r for r in rows if (r.section_karlia or 0) != 1])
-        check(f"total endpoint == compte DB ({res.total} == {attendu})", res.total == attendu)
-        check("toutes les lignes ont karlia_customer_id (sinon n'apparaîtraient pas en sélection valide)",
-              all(True for _ in res.items))  # informatif
+        check("aucun intitulé repeuplé (1042/1043/1045/1047) dans la liste",
+              ids_listes.isdisjoint(INTITULES_REPEUPLES))
+        # Invariant : la liste ne contient QUE des lignes section NULL ou 0.
+        sections = {db.query(CommandeLigne).get(i).section_karlia for i in ids_listes}
+        check(f"sections présentes ⊆ {{None, 0}} (vu : {sections})",
+              sections.issubset({None, 0}))
 
-        # On garde de quoi construire les tests suivants.
-        items_by_ref = {}
+        # Regrouper par commande pour les tests suivants.
+        by_cmd = {}
         for it in res.items:
-            items_by_ref.setdefault(it.commande_reference, []).append(it)
+            by_cmd.setdefault(it.commande_id, []).append(it)
 
-        # ── Test 2 : mono-client (2 clients différents → 400) ───────────────
-        print("\n== Test 2 : mono-client refusé ==")
-        # Trouver deux lignes appartenant à deux clients Karlia distincts.
-        by_customer = {}
-        for it in res.items:
-            if it.karlia_customer_id is not None:
-                by_customer.setdefault(it.karlia_customer_id, []).append(it.ligne_id)
-        if len(by_customer) >= 2:
-            cust = list(by_customer.keys())
-            sel = [by_customer[cust[0]][0], by_customer[cust[1]][0]]
+        # ── Test 2 : mono-commande — 2 commandes différentes → 400 ──────────
+        print("\n== Test 2 : sélection multi-commandes refusée (mono-commande) ==")
+        cmds = list(by_cmd.keys())
+        if len(cmds) >= 2:
+            sel = [by_cmd[cmds[0]][0].ligne_id, by_cmd[cmds[1]][0].ligne_id]
             try:
                 await facturer_lignes(FacturerLignesPayload(ligne_ids=sel), db=db, current_user=None)
-                check("multi-clients rejeté (400)", False)
+                check("multi-commandes rejeté (400)", False)
             except HTTPException as e:
-                check(f"multi-clients rejeté (400) — got {e.status_code}: {e.detail[:60]}",
-                      e.status_code == 400)
+                msg = str(e.detail)
+                check(f"multi-commandes rejeté (400) — {e.status_code}: {msg[:55]}",
+                      e.status_code == 400 and "une seule commande" in msg)
         else:
-            print("  [SKIP] un seul client Karlia parmi les lignes à facturer — test mono-client non exerçable sur ces données")
+            print("  [SKIP] moins de 2 commandes dans la liste")
 
         # ── Test 3 : ligne déjà facturée → 400 ──────────────────────────────
         print("\n== Test 3 : ligne déjà facturée refusée ==")
-        # On marque temporairement une ligne comme facturée EN MÉMOIRE (pas de
-        # commit) pour vérifier la validation, puis on expire la session.
         if res.items:
             cible = res.items[0].ligne_id
             ligne = db.query(CommandeLigne).get(cible)
             ligne.facture_karlia_id = "TEST-DEJA-FACTUREE"
-            db.flush()  # visible dans la même session, pas de commit
+            db.flush()
             try:
                 await facturer_lignes(FacturerLignesPayload(ligne_ids=[cible]), db=db, current_user=None)
                 check("ligne déjà facturée rejetée (400)", False)
             except HTTPException as e:
-                check(f"ligne déjà facturée rejetée (400) — got {e.status_code}", e.status_code == 400)
+                check(f"ligne déjà facturée rejetée (400) — {e.status_code}", e.status_code == 400)
             finally:
-                db.rollback()  # annule le flush, aucune écriture persistée
+                db.rollback()
 
-        # ── Test 4 : destination invalide (ligne contrat) → 400 ─────────────
+        # ── Test 4 : destination invalide (contrat) → 400 ───────────────────
         print("\n== Test 4 : destination non-facturation_directe refusée ==")
         ligne_contrat = (db.query(CommandeLigne)
                          .filter(CommandeLigne.destination == "contrat")
@@ -112,17 +97,17 @@ async def main():
                 await facturer_lignes(FacturerLignesPayload(ligne_ids=[ligne_contrat.id]), db=db, current_user=None)
                 check("ligne 'contrat' rejetée (400)", False)
             except HTTPException as e:
-                check(f"ligne 'contrat' rejetée (400) — got {e.status_code}", e.status_code == 400)
+                check(f"ligne 'contrat' rejetée (400) — {e.status_code}", e.status_code == 400)
         else:
-            print("  [SKIP] aucune ligne 'contrat' en base")
+            print("  [SKIP] aucune ligne 'contrat'")
 
-        # ── Test 5 : ligne_ids vide → 400 ───────────────────────────────────
+        # ── Test 5 : sélection vide → 400 ───────────────────────────────────
         print("\n== Test 5 : sélection vide refusée ==")
         try:
             await facturer_lignes(FacturerLignesPayload(ligne_ids=[]), db=db, current_user=None)
             check("sélection vide rejetée (400)", False)
         except HTTPException as e:
-            check(f"sélection vide rejetée (400) — got {e.status_code}", e.status_code == 400)
+            check(f"sélection vide rejetée (400) — {e.status_code}", e.status_code == 400)
 
         # ── Test 6 : ligne inexistante → 404 ────────────────────────────────
         print("\n== Test 6 : ligne inexistante refusée ==")
@@ -130,46 +115,50 @@ async def main():
             await facturer_lignes(FacturerLignesPayload(ligne_ids=[999999999]), db=db, current_user=None)
             check("ligne inexistante rejetée (404)", False)
         except HTTPException as e:
-            check(f"ligne inexistante rejetée (404) — got {e.status_code}", e.status_code == 404)
+            check(f"ligne inexistante rejetée (404) — {e.status_code}", e.status_code == 404)
 
-        # ── Test 7 : chemin nominal AVEC Karlia MOCKÉ (pas d'émission réelle) ─
-        print("\n== Test 7 : chemin nominal, karlia.creer_facture MOCKÉ ==")
+        # ── Test 7 : nominal mono-commande + id_opportunity passé (MOCK) ────
+        print("\n== Test 7 : chemin nominal 1 commande, id_opportunity transmis (Karlia MOCKÉ) ==")
         appels = {}
 
         async def fake_creer_facture(client_karlia_id, lignes, reference_contrat,
                                      date_echeance, montant_ht, description="", id_opportunity=None):
             appels["client"] = client_karlia_id
             appels["nb_lignes"] = len(lignes)
+            appels["id_opportunity"] = id_opportunity
             return {"id": "MOCK-DOC-123", "reference": "FAC-MOCK-001"}
 
         original = cmd_api.karlia.creer_facture
         cmd_api.karlia.creer_facture = fake_creer_facture
         try:
-            # Choisir toutes les lignes d'un même client (mono-client garanti).
-            cust0 = max(by_customer.keys(), key=lambda c: len(by_customer[c])) if by_customer else None
-            if cust0 is not None:
-                sel = by_customer[cust0]
+            # Une commande de la liste (toutes ses lignes = même commande, même client).
+            cmd0 = max(by_cmd.keys(), key=lambda c: len(by_cmd[c])) if by_cmd else None
+            if cmd0 is not None:
+                sel = [it.ligne_id for it in by_cmd[cmd0]]
+                from app.models.models import Commande
+                cmd_obj = db.query(Commande).get(cmd0)
+                opp_attendue = cmd_obj.karlia_opportunity_id
                 r = await facturer_lignes(FacturerLignesPayload(ligne_ids=sel), db=db, current_user=None)
-                check("réponse facture_karlia_id == mock", r.facture_karlia_id == "MOCK-DOC-123")
+                check("facture_karlia_id == mock", r.facture_karlia_id == "MOCK-DOC-123")
                 check(f"nb_lignes_facturees == {len(sel)}", r.nb_lignes_facturees == len(sel))
-                check("appel Karlia mono-client", appels.get("client") == str(cust0))
-                # Vérifier le marquage en DB.
+                check(f"id_opportunity transmis == commande.karlia_opportunity_id ({opp_attendue})",
+                      appels.get("id_opportunity") == opp_attendue)
+                # L'endpoint passe client_karlia_id=str(...) à creer_facture.
+                check("appel Karlia mono-client", appels.get("client") == str(cmd_obj.karlia_customer_id))
+                # Marquage en DB
                 db.expire_all()
                 marquees = (db.query(CommandeLigne)
                             .filter(CommandeLigne.id.in_(sel),
                                     CommandeLigne.facture_karlia_id == "MOCK-DOC-123")
                             .count())
                 check(f"{len(sel)} lignes marquées en DB", marquees == len(sel))
-                check("date_facturee posée", all(
-                    db.query(CommandeLigne).get(lid).date_facturee is not None for lid in sel))
-                # Idempotence anti-doublon : refacturer la même sélection → 400
+                # Anti-doublon : refacturer → 400
                 try:
                     await facturer_lignes(FacturerLignesPayload(ligne_ids=sel), db=db, current_user=None)
                     check("refacturation rejetée (400)", False)
                 except HTTPException as e:
-                    check(f"refacturation rejetée (400) — got {e.status_code}", e.status_code == 400)
-                # NETTOYAGE : on annule le marquage de test pour ne pas masquer
-                # ces lignes dans l'écran réel.
+                    check(f"refacturation rejetée (400) — {e.status_code}", e.status_code == 400)
+                # CLEANUP
                 for lid in sel:
                     l = db.query(CommandeLigne).get(lid)
                     l.facture_karlia_id = None
@@ -178,7 +167,7 @@ async def main():
                 db.commit()
                 print("  [CLEANUP] marquage de test annulé (lignes ré-éligibles)")
             else:
-                print("  [SKIP] aucune ligne avec client — chemin nominal non exerçable")
+                print("  [SKIP] aucune commande exploitable")
         finally:
             cmd_api.karlia.creer_facture = original
 

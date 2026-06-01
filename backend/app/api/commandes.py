@@ -510,10 +510,13 @@ async def get_lignes_a_facturer(
         .filter(
             CommandeLigne.destination == DESTINATION_FACTURATION_DIRECTE,
             CommandeLigne.facture_karlia_id.is_(None),
-            # Sécurité défensive : les lignes d'intitulé (section==1) ne doivent
-            # jamais être facturables même si elles portaient par erreur la
-            # destination 'facturation_directe'.
-            or_(CommandeLigne.section_karlia != 1, CommandeLigne.section_karlia.is_(None)),
+            # Exclusion des intitulés Karlia (titres de section / sous-totaux,
+            # montant 0€) : seul le VRAI MARQUEUR section_karlia fait foi, jamais
+            # le montant. section_karlia=1 = intitulé → exclu. On ne garde que
+            # les vraies lignes (0) et les lignes non encore qualifiées (NULL,
+            # anciennes commandes). Cf. repeuplement ciblé des intitulés non
+            # marqués (ex BC26-0090 : ids 1042/1043/1045/1047 passés à 1).
+            or_(CommandeLigne.section_karlia.is_(None), CommandeLigne.section_karlia == 0),
         )
     )
     if search:
@@ -567,8 +570,10 @@ async def facturer_lignes(
 ):
     """Émet UNE facture Karlia BROUILLON pour une sélection de lignes.
 
-    Contrainte Karlia : 1 facture = 1 client → toutes les lignes de la
-    sélection doivent appartenir à des commandes du MÊME karlia_customer_id.
+    MONO-COMMANDE : une facture ne couvre qu'UNE SEULE commande (décision
+    métier v3.5.0). Cela rend la contrainte mono-client automatique (une
+    commande = un client) et permet de poser sans ambiguïté l'id_opportunity
+    de la commande (parité avec l'ancien facturer_commande).
 
     VALIDATION intégrale AVANT tout effet de bord (aucune écriture, aucun appel
     Karlia tant que la sélection n'est pas entièrement valide). APPLICATION en
@@ -598,6 +603,7 @@ async def facturer_lignes(
     if manquants:
         raise HTTPException(status_code=404, detail=f"Lignes introuvables : {manquants}")
 
+    commande_ids = set()
     customer_ids = set()
     for lid in ligne_ids:
         ligne = lignes_par_id[lid]
@@ -617,9 +623,22 @@ async def facturer_lignes(
                 status_code=400,
                 detail=f"Ligne {lid} : client Karlia non renseigné sur la commande",
             )
+        commande_ids.add(ligne.commande_id)
         customer_ids.add(commande.karlia_customer_id)
 
-    # MONO-CLIENT : une facture Karlia ne peut couvrir qu'un seul client.
+    # MONO-COMMANDE : une facture ne peut couvrir qu'une seule commande.
+    if len(commande_ids) > 1:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Une facture ne peut couvrir qu'une seule commande à la fois. "
+                f"Sélection actuelle : {len(commande_ids)} commandes "
+                f"(ids {sorted(commande_ids)})."
+            ),
+        )
+
+    # MONO-CLIENT : redondant avec mono-commande (1 commande = 1 client) mais
+    # conservé comme garde-fou inoffensif.
     if len(customer_ids) > 1:
         raise HTTPException(
             status_code=400,
@@ -628,22 +647,29 @@ async def facturer_lignes(
                 f"client. Clients distincts dans la sélection : {sorted(customer_ids)}"
             ),
         )
-    client_karlia_id = customer_ids.pop()
+
+    commande_unique = lignes_par_id[ligne_ids[0]].commande
+    client_karlia_id = commande_unique.karlia_customer_id
 
     # ── Construction du payload Karlia ───────────────────────────────────────
-    # Référence : si toutes les lignes viennent de la même commande on reprend
-    # sa référence, sinon on agrège les références distinctes des commandes
-    # concernées (même client, BC multiples possibles).
-    refs = []
-    for lid in ligne_ids:
-        ref = lignes_par_id[lid].commande.reference_devis
-        if ref and ref not in refs:
-            refs.append(ref)
-    reference = " / ".join(refs) if refs else f"CLIENT-{client_karlia_id}"
-    montant_ht_total = sum(float(lignes_par_id[lid].montant_ht or 0) for lid in ligne_ids)
+    reference = commande_unique.reference_devis or f"CMD-{commande_unique.id}"
+
+    # Exclusion défensive des intitulés (section_karlia==1 ou destination
+    # 'intitule') : titres de section / sous-totaux à 0€ qui produiraient des
+    # lignes parasites sur la facture. Parité avec facturer_commande. Seules les
+    # lignes réellement facturables sont envoyées ET marquées.
+    ids_facturables = [
+        lid for lid in ligne_ids
+        if not (lignes_par_id[lid].section_karlia == 1
+                or lignes_par_id[lid].destination == DESTINATION_INTITULE)
+    ]
+    if not ids_facturables:
+        raise HTTPException(status_code=400, detail="Aucune ligne facturable (intitulés exclus)")
+
+    montant_ht_total = sum(float(lignes_par_id[lid].montant_ht or 0) for lid in ids_facturables)
 
     lignes_karlia = []
-    for lid in ligne_ids:
+    for lid in ids_facturables:
         ligne = lignes_par_id[lid]
         lignes_karlia.append({
             "id_product": ligne.karlia_product_id,
@@ -665,6 +691,9 @@ async def facturer_lignes(
             date_echeance=date.today(),
             montant_ht=montant_ht_total,
             description=f"Facturation prestation(s) - {reference}",
+            # Lien à l'opportunité Karlia de la commande (parité avec l'ancien
+            # facturer_commande). None si la commande n'a pas d'opportunité.
+            id_opportunity=commande_unique.karlia_opportunity_id,
         )
     except Exception as e:
         # Aucune écriture n'a eu lieu avant cet appel → rien à rollback côté DB,
@@ -675,7 +704,7 @@ async def facturer_lignes(
         facture_id = str(result.get("id", ""))
         facture_ref = result.get("reference", "")
         now = datetime.utcnow()
-        for lid in ligne_ids:
+        for lid in ids_facturables:
             ligne = lignes_par_id[lid]
             ligne.facture_karlia_id = facture_id
             ligne.facture_karlia_ref = facture_ref
@@ -697,8 +726,8 @@ async def facturer_lignes(
     return FacturerLignesResponse(
         facture_karlia_id=facture_id,
         facture_karlia_ref=facture_ref,
-        nb_lignes_facturees=len(ligne_ids),
-        ligne_ids=ligne_ids,
+        nb_lignes_facturees=len(ids_facturables),
+        ligne_ids=ids_facturables,
     )
 
 
