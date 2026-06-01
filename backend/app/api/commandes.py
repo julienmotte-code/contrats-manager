@@ -352,6 +352,35 @@ def _ligne_to_response(ligne: CommandeLigne) -> CommandeLigneResponse:
     )
 
 
+def construire_ligne_karlia(ligne: CommandeLigne) -> dict:
+    """Construit LE dict d'une ligne du payload Karlia depuis une commande_ligne.
+
+    POINT D'ENTRÉE UNIQUE : toute facturation issue d'une commande_ligne
+    (facturer-lignes, facturer_commande, et tout futur endpoint) DOIT passer
+    par ici. Anti-récidive du bug de remise (cf. diag remise-non-transmise).
+
+    SOURCE DU PRIX = montant_ht / quantite (prix APRÈS remise Karlia), arrondi
+    à 2 décimales. Ne JAMAIS utiliser prix_unitaire_ht : c'est le prix BRUT
+    (avant remise) ; l'envoyer surfacture le client. On conserve la quantité
+    réelle (plus lisible côté Karlia : « 2 × 468,75 € » plutôt que « 1 × 937,50 € »).
+
+    Les clés du dict correspondent exactement à ce que consomme
+    karlia_service.creer_facture (unit_price → price_without_tax, etc.).
+    """
+    quantite = float(ligne.quantite or 1)
+    if quantite <= 0:
+        quantite = 1.0
+    montant_ht = float(ligne.montant_ht or 0)
+    unit_price = round(montant_ht / quantite, 2)
+    return {
+        "id_product": ligne.karlia_product_id,
+        "quantity": quantite,
+        "unit_price": unit_price,
+        "vat_rate": float(ligne.taux_tva or 20),
+        "description": ligne.designation or "",
+    }
+
+
 def _get_commandes_by_statut(db: Session, statut: str, page: int, page_size: int, search: Optional[str]) -> CommandeListResponse:
     query = db.query(Commande).options(joinedload(Commande.lignes), joinedload(Commande.prestations), joinedload(Commande.formateur)).filter(Commande.statut == statut)
     if search:
@@ -668,16 +697,9 @@ async def facturer_lignes(
 
     montant_ht_total = sum(float(lignes_par_id[lid].montant_ht or 0) for lid in ids_facturables)
 
-    lignes_karlia = []
-    for lid in ids_facturables:
-        ligne = lignes_par_id[lid]
-        lignes_karlia.append({
-            "id_product": ligne.karlia_product_id,
-            "quantity": float(ligne.quantite or 1),
-            "unit_price": float(ligne.prix_unitaire_ht or 0),
-            "vat_rate": float(ligne.taux_tva or 20),
-            "description": ligne.designation or "",
-        })
+    lignes_karlia = [
+        construire_ligne_karlia(lignes_par_id[lid]) for lid in ids_facturables
+    ]
 
     # ── APPLICATION (transaction unique) ─────────────────────────────────────
     try:
@@ -1227,13 +1249,7 @@ async def facturer_commande(
     for ligne in commande.lignes:
         if ligne.section_karlia == 1 or ligne.destination == DESTINATION_INTITULE:
             continue
-        lignes_karlia.append({
-            "id_product": ligne.karlia_product_id,
-            "quantity": float(ligne.quantite or 1),
-            "unit_price": float(ligne.prix_unitaire_ht or 0),
-            "vat_rate": float(ligne.taux_tva or 20),
-            "description": ligne.designation or ""
-        })
+        lignes_karlia.append(construire_ligne_karlia(ligne))
 
     if not lignes_karlia:
         raise HTTPException(status_code=400, detail="Aucune ligne à facturer")
