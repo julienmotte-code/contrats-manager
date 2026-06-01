@@ -376,11 +376,11 @@ export default function AffectationFormateurs() {
                   <TableCell>Désignation</TableCell>
                   <TableCell sx={{ width: 130 }} align="center">Statut</TableCell>
                   <TableCell sx={{ width: 70 }} align="center">Durée (j)</TableCell>
-                  <TableCell sx={{ width: 240 }}>Formateur</TableCell>
-                  <TableCell sx={{ width: 160 }}>Date</TableCell>
-                  <TableCell sx={{ width: 120 }}>Heure début</TableCell>
-                  <TableCell sx={{ width: 120 }}>Heure fin</TableCell>
-                  <TableCell sx={{ width: 180 }}>Lieu</TableCell>
+                  <TableCell sx={{ width: 220 }}>Formateur</TableCell>
+                  <TableCell sx={{ width: 150 }}>Date</TableCell>
+                  <TableCell sx={{ width: 105 }} align="center">Début</TableCell>
+                  <TableCell sx={{ width: 105 }} align="center">Fin</TableCell>
+                  <TableCell sx={{ width: 240 }}>Lieu</TableCell>
                 </TableRow>
               </TableHead>
               <TableBody>
@@ -397,14 +397,12 @@ export default function AffectationFormateurs() {
                         </Typography>
                       </TableCell>
                       <TableCell>
+                        {/* description NON affichée : c'est du HTML Karlia brut
+                            (balises échappées + <p> vides) qui polluait l'écran.
+                            designation suffit à identifier la prestation. */}
                         <Typography variant="body2">
                           {p.designation || `Prestation #${p.id}`}
                         </Typography>
-                        {p.description && p.description !== p.designation && (
-                          <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
-                            {p.description}
-                          </Typography>
-                        )}
                       </TableCell>
                       <TableCell align="center">
                         <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0.5 }}>
@@ -464,20 +462,20 @@ export default function AffectationFormateurs() {
                           }}
                         />
                       </TableCell>
-                      <TableCell>
+                      <TableCell align="center">
                         <TimePicker
                           value={pl.debut ?? null}
                           onChange={(v) => handleChangePlanif(p.id, 'debut', v)}
                           ampm={false}
-                          slotProps={{ textField: { size: 'small', fullWidth: true }, field: { clearable: true } }}
+                          slotProps={{ textField: { size: 'small', sx: { width: 95 } }, field: { clearable: true } }}
                         />
                       </TableCell>
-                      <TableCell>
+                      <TableCell align="center">
                         <TimePicker
                           value={pl.fin ?? null}
                           onChange={(v) => handleChangePlanif(p.id, 'fin', v)}
                           ampm={false}
-                          slotProps={{ textField: { size: 'small', fullWidth: true }, field: { clearable: true } }}
+                          slotProps={{ textField: { size: 'small', sx: { width: 95 } }, field: { clearable: true } }}
                         />
                       </TableCell>
                       <TableCell>

@@ -264,11 +264,9 @@ export default function RoutageCommande() {
                     >
                       {ligne.designation || '-'}
                     </Typography>
-                    {ligne.description && ligne.description !== ligne.designation && (
-                      <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
-                        {ligne.description}
-                      </Typography>
-                    )}
+                    {/* description NON affichée : HTML Karlia brut (balises
+                        échappées + <p> vides) qui polluait l'écran. designation
+                        suffit à identifier la ligne. */}
                   </TableCell>
                   <TableCell sx={cellSx}>
                     {estIntitule ? (
