@@ -367,6 +367,16 @@ class CommandeLigne(Base):
     # 0003 ou non transmis par Karlia). Stocké en entier brut pour rester
     # fidèle à la source et détecter une éventuelle valeur future inattendue.
     section_karlia      = Column(SmallInteger)
+    # Trace de facturation AU NIVEAU LIGNE (migration 0006). Permet la
+    # facturation par sélection de lignes 'facturation_directe' indépendamment
+    # du statut de la commande parente : une ligne peut être facturée alors que
+    # d'autres lignes de la même commande sont encore 'a_planifier' / 'contrat'.
+    # facture_karlia_id NULL = ligne pas encore facturée (= éligible à l'écran
+    # "Terminées" / liste lignes-a-facturer). Non NULL = anti-doublon, la ligne
+    # disparaît de la sélection.
+    facture_karlia_id   = Column(String(255))
+    facture_karlia_ref  = Column(String(255))
+    date_facturee       = Column(DateTime)
 
     commande = relationship("Commande", back_populates="lignes")
     prestations = relationship("Prestation", back_populates="commande_ligne")
