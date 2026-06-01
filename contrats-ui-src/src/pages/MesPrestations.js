@@ -210,7 +210,10 @@ export default function MesPrestations() {
       <Box sx={{ p: 3 }}>
         <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
           <Typography variant="h4" sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-            <ScheduleIcon color="primary" /> Mes Prestations
+            {/* Titre dynamique : ADMIN/GESTIONNAIRE voient les prestations de
+                tous les formateurs (via le sélecteur) → « Prestations ».
+                FORMATEUR/TECHNICIEN ne voient que les leurs → « Mes Prestations ». */}
+            <ScheduleIcon color="primary" /> {(user?.role === 'ADMIN' || user?.role === 'GESTIONNAIRE') ? 'Prestations' : 'Mes Prestations'}
           </Typography>
 
           {/* Sélecteur formateur - visible uniquement pour admin/gestionnaire */}
