@@ -353,14 +353,12 @@ async def realiser_prestation(
     prestation.updated_at = datetime.utcnow()
     db.commit()
     db.refresh(prestation)
-    
-    commande = db.query(Commande).filter(Commande.id == prestation.commande_id).first()
-    if commande:
-        all_prestations = db.query(Prestation).filter(Prestation.commande_id == commande.id).all()
-        if all(p.statut == 'realisee' for p in all_prestations):
-            commande.statut = 'deployee'
-            db.commit()
-    
+
+    # Bascule commande.statut='deployee' RETIRÉE à v3.10.0 — la facturation se
+    # fait désormais par prestation (cf POST /commandes/facturer-lignes), plus
+    # par commande entière. La basculer en 'deployee' réactivait l'ancien
+    # chemin facturer_commande et créait un risque de double facturation.
+
     return _prestation_to_response(prestation, db)
 
 
