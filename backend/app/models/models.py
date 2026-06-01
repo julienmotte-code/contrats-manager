@@ -517,6 +517,16 @@ class Prestation(Base):
     google_sync_error  = Column(Text)
     google_synced_at   = Column(DateTime(timezone=True))
 
+    # Trace de facturation AU NIVEAU PRESTATION (migration 0008). Miroir de
+    # commande_lignes : permet de facturer une prestation réalisée vers Karlia
+    # (seule ou groupée avec des lignes facturation_directe). Le prix est dérivé
+    # de la ligne parente (commande_ligne.montant_ht / quantite, après remise) ;
+    # la prestation elle-même ne porte pas de prix. facture_karlia_id NULL =
+    # prestation pas encore facturée (= éligible). Non NULL = anti-doublon.
+    facture_karlia_id   = Column(String(255))
+    facture_karlia_ref  = Column(String(255))
+    date_facturee       = Column(DateTime)
+
     commande       = relationship("Commande", back_populates="prestations")
     commande_ligne = relationship("CommandeLigne", back_populates="prestations")
     formateur      = relationship("Formateur", back_populates="prestations", foreign_keys=[formateur_id])

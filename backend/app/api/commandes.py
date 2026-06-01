@@ -177,6 +177,58 @@ class FacturerLignesResponse(BaseModel):
     ligne_ids: List[int]
 
 
+# ── Schémas unifiés ligne + prestation (écran "Terminées" v3.10.0) ───────────
+
+class ElementAFacturerResponse(BaseModel):
+    """Élément facturable unifié : une ligne 'facturation_directe' OU une
+    prestation réalisée. `type` discrimine, `id` est l'id de l'objet source
+    (commande_ligne.id ou prestation.id)."""
+    type: str  # 'ligne' | 'prestation'
+    id: int
+    commande_id: int
+    commande_reference: Optional[str] = None
+    karlia_customer_id: Optional[int] = None
+    client_nom: Optional[str] = None
+    designation: Optional[str] = None
+    quantite: Optional[float] = None          # info ; prestation = 1
+    prix_unitaire_ht: Optional[float] = None  # unit_price calculé (montant_ht/quantite)
+    taux_tva: Optional[float] = None
+    montant_ht: Optional[float] = None        # part facturable
+    montant_ttc: Optional[float] = None
+    date_acceptation: Optional[date] = None
+    ordre: Optional[int] = None
+
+
+class ElementAFacturerListResponse(BaseModel):
+    items: List[ElementAFacturerResponse]
+    total: int
+    page: int
+    page_size: int
+    total_pages: int
+
+
+class FacturerElementItem(BaseModel):
+    type: str  # 'ligne' | 'prestation'
+    id: int
+
+
+class FacturerElementsPayload(BaseModel):
+    """Sélection d'éléments à facturer ensemble (une seule facture Karlia).
+
+    `elements` = nouveau format typé. `ligne_ids` = compat ascendante (ancien
+    format v3.9.x) : converti en éléments type='ligne'.
+    """
+    elements: Optional[List[FacturerElementItem]] = None
+    ligne_ids: Optional[List[int]] = None
+
+
+class FacturerElementsResponse(BaseModel):
+    facture_karlia_id: Optional[str] = None
+    facture_karlia_ref: Optional[str] = None
+    nb_elements_factures: int
+    elements: List[FacturerElementItem]
+
+
 class CommandeStats(BaseModel):
     nouvelles: int = 0
     a_planifier: int = 0
@@ -381,6 +433,56 @@ def construire_ligne_karlia(ligne: CommandeLigne) -> dict:
     }
 
 
+def ligne_facturable_pour_prestation(ligne: Optional[CommandeLigne]) -> bool:
+    """Une prestation n'est facturable que si sa ligne parente porte des données
+    facturables : pas un intitulé, un vrai produit Karlia, un montant > 0.
+
+    (Les lignes 'facturation_directe' classiques ne passent PAS par ce filtre —
+    cf. source A inchangée ; ceci ne concerne que les prestations issues de
+    lignes SGI 'a_planifier'.)
+    """
+    if ligne is None:
+        return False
+    if ligne.section_karlia == 1 or ligne.destination == DESTINATION_INTITULE:
+        return False
+    if not ligne.karlia_product_id or str(ligne.karlia_product_id) == "0":
+        return False
+    if float(ligne.montant_ht or 0) <= 0:
+        return False
+    return True
+
+
+def _unit_price_prestation(ligne: CommandeLigne) -> float:
+    """Part facturable d'UNE prestation = montant_ht ligne / quantite ligne
+    (après remise, même formule que les lignes), arrondie à 2 décimales."""
+    quantite = float(ligne.quantite or 1)
+    if quantite <= 0:
+        quantite = 1.0
+    return round(float(ligne.montant_ht or 0) / quantite, 2)
+
+
+def construire_ligne_karlia_depuis_prestation(prestation: Prestation) -> dict:
+    """Construit le dict d'une ligne Karlia depuis une PRESTATION.
+
+    Une prestation représente UNE UNITÉ de sa ligne parente : quantity=1 et
+    unit_price = la part de la ligne attribuée à cette prestation
+    (commande_ligne.montant_ht / quantite, APRÈS remise — même formule que
+    construire_ligne_karlia, anti-récidive du bug de remise).
+
+    Lève ValueError si la prestation n'a pas de commande_ligne (non facturable).
+    """
+    ligne = prestation.commande_ligne
+    if ligne is None:
+        raise ValueError(f"Prestation {prestation.id} sans commande_ligne, non facturable")
+    return {
+        "id_product": ligne.karlia_product_id,
+        "quantity": 1.0,
+        "unit_price": _unit_price_prestation(ligne),
+        "vat_rate": float(ligne.taux_tva or 20),
+        "description": prestation.designation or ligne.designation or "",
+    }
+
+
 def _get_commandes_by_statut(db: Session, statut: str, page: int, page_size: int, search: Optional[str]) -> CommandeListResponse:
     query = db.query(Commande).options(joinedload(Commande.lignes), joinedload(Commande.prestations), joinedload(Commande.formateur)).filter(Commande.statut == statut)
     if search:
@@ -515,7 +617,7 @@ async def get_contrats_a_creer(
     )
 
 
-@router.get("/lignes-a-facturer", response_model=LigneAFacturerListResponse)
+@router.get("/lignes-a-facturer", response_model=ElementAFacturerListResponse)
 async def get_lignes_a_facturer(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=1000),
@@ -523,67 +625,108 @@ async def get_lignes_a_facturer(
     db: Session = Depends(get_db),
     current_user = Depends(require_role("ADMIN", "GESTIONNAIRE")),
 ):
-    """Liste des LIGNES routées 'facturation_directe' non encore facturées.
+    """Liste unifiée des ÉLÉMENTS facturables non encore facturés.
 
-    Granularité = la ligne (et non la commande). Indépendant du statut de la
-    commande parente : une commande mixte (lignes a_planifier/contrat + lignes
-    facturation_directe) expose ici uniquement ses lignes facturation directe
-    non facturées. Une ligne facturée (facture_karlia_id non NULL) disparaît.
+    Deux sources fusionnées (v3.10.0) :
+      - type='ligne' : commande_lignes destination='facturation_directe',
+        facture_karlia_id NULL, hors intitulés (section_karlia=1). [source A,
+        inchangée]
+      - type='prestation' : prestations statut='realisee', facture_karlia_id
+        NULL, dont la ligne parente est facturable (vrai produit, montant>0,
+        non intitulé). [source B, nouvelle]
 
-    NB : cette route DOIT rester déclarée avant GET /{commande_id} (segment
-    unique typé int) sinon "lignes-a-facturer" serait capturé par le catch-all.
+    Tri : client → commande → ordre. Pagination appliquée en mémoire sur la
+    liste fusionnée (volumes faibles ; le front charge tout en une page).
+
+    NB : route déclarée avant GET /{commande_id} (catch-all int).
     """
-    query = (
+    s = f"%{search}%" if search else None
+
+    # ── Source A : lignes facturation_directe non facturées ─────────────────
+    qa = (
         db.query(CommandeLigne, Commande)
         .join(Commande, Commande.id == CommandeLigne.commande_id)
         .filter(
             CommandeLigne.destination == DESTINATION_FACTURATION_DIRECTE,
             CommandeLigne.facture_karlia_id.is_(None),
-            # Exclusion des intitulés Karlia (titres de section / sous-totaux,
-            # montant 0€) : seul le VRAI MARQUEUR section_karlia fait foi, jamais
-            # le montant. section_karlia=1 = intitulé → exclu. On ne garde que
-            # les vraies lignes (0) et les lignes non encore qualifiées (NULL,
-            # anciennes commandes). Cf. repeuplement ciblé des intitulés non
-            # marqués (ex BC26-0090 : ids 1042/1043/1045/1047 passés à 1).
+            # Seul le VRAI MARQUEUR section_karlia fait foi (jamais le montant).
             or_(CommandeLigne.section_karlia.is_(None), CommandeLigne.section_karlia == 0),
         )
     )
-    if search:
-        query = query.filter(or_(
-            Commande.client_nom.ilike(f"%{search}%"),
-            Commande.reference_devis.ilike(f"%{search}%"),
-        ))
+    if s:
+        qa = qa.filter(or_(Commande.client_nom.ilike(s), Commande.reference_devis.ilike(s)))
 
-    total = query.count()
-    total_pages = (total + page_size - 1) // page_size
-    rows = (
-        query
-        .order_by(Commande.date_acceptation.desc().nullslast(), CommandeLigne.commande_id.desc(), CommandeLigne.ordre.asc())
-        .offset((page - 1) * page_size)
-        .limit(page_size)
-        .all()
-    )
-
-    items = [
-        LigneAFacturerResponse(
-            ligne_id=ligne.id,
+    items: List[ElementAFacturerResponse] = []
+    for ligne, commande in qa.all():
+        items.append(ElementAFacturerResponse(
+            type="ligne",
+            id=ligne.id,
             commande_id=ligne.commande_id,
             commande_reference=commande.reference_devis,
             karlia_customer_id=commande.karlia_customer_id,
             client_nom=commande.client_nom,
             designation=ligne.designation,
-            quantite=ligne.quantite,
-            prix_unitaire_ht=ligne.prix_unitaire_ht,
-            taux_tva=ligne.taux_tva,
-            montant_ht=ligne.montant_ht,
-            montant_ttc=ligne.montant_ttc,
+            quantite=float(ligne.quantite) if ligne.quantite is not None else None,
+            prix_unitaire_ht=construire_ligne_karlia(ligne)["unit_price"],
+            taux_tva=float(ligne.taux_tva) if ligne.taux_tva is not None else None,
+            montant_ht=float(ligne.montant_ht) if ligne.montant_ht is not None else None,
+            montant_ttc=float(ligne.montant_ttc) if ligne.montant_ttc is not None else None,
             date_acceptation=commande.date_acceptation,
             ordre=ligne.ordre,
+        ))
+
+    # ── Source B : prestations réalisées non facturées ──────────────────────
+    qb = (
+        db.query(Prestation, CommandeLigne, Commande)
+        .join(Commande, Commande.id == Prestation.commande_id)
+        .outerjoin(CommandeLigne, CommandeLigne.id == Prestation.commande_ligne_id)
+        .filter(
+            Prestation.statut == "realisee",
+            Prestation.facture_karlia_id.is_(None),
         )
-        for ligne, commande in rows
-    ]
-    return LigneAFacturerListResponse(
-        items=items,
+    )
+    if s:
+        qb = qb.filter(or_(Commande.client_nom.ilike(s), Commande.reference_devis.ilike(s)))
+
+    for prestation, ligne, commande in qb.all():
+        # Ligne parente facturable seulement (vrai produit, montant>0, non intitulé).
+        if not ligne_facturable_pour_prestation(ligne):
+            continue
+        unit = _unit_price_prestation(ligne)
+        tva = float(ligne.taux_tva or 0)
+        items.append(ElementAFacturerResponse(
+            type="prestation",
+            id=prestation.id,
+            commande_id=prestation.commande_id,
+            commande_reference=commande.reference_devis,
+            karlia_customer_id=commande.karlia_customer_id,
+            client_nom=commande.client_nom,
+            designation=prestation.designation or ligne.designation,
+            quantite=1.0,
+            prix_unitaire_ht=unit,
+            taux_tva=tva,
+            montant_ht=unit,                       # part facturable d'1 prestation
+            montant_ttc=round(unit * (1 + tva / 100), 2),
+            date_acceptation=commande.date_acceptation,
+            ordre=ligne.ordre,
+        ))
+
+    # ── Tri unifié : client → commande → ordre → type/id ────────────────────
+    items.sort(key=lambda e: (
+        (e.client_nom or "").lower(),
+        e.commande_reference or "",
+        e.ordre if e.ordre is not None else 0,
+        e.type,
+        e.id,
+    ))
+
+    total = len(items)
+    total_pages = (total + page_size - 1) // page_size
+    start = (page - 1) * page_size
+    page_items = items[start:start + page_size]
+
+    return ElementAFacturerListResponse(
+        items=page_items,
         total=total,
         page=page,
         page_size=page_size,
@@ -591,121 +734,131 @@ async def get_lignes_a_facturer(
     )
 
 
-@router.post("/facturer-lignes", response_model=FacturerLignesResponse)
+@router.post("/facturer-lignes", response_model=FacturerElementsResponse)
 async def facturer_lignes(
-    payload: FacturerLignesPayload,
+    payload: FacturerElementsPayload,
     db: Session = Depends(get_db),
     current_user = Depends(require_role("ADMIN", "GESTIONNAIRE")),
 ):
-    """Émet UNE facture Karlia BROUILLON pour une sélection de lignes.
+    """Émet UNE facture Karlia BROUILLON pour une sélection d'ÉLÉMENTS.
 
-    MONO-COMMANDE : une facture ne couvre qu'UNE SEULE commande (décision
-    métier v3.5.0). Cela rend la contrainte mono-client automatique (une
-    commande = un client) et permet de poser sans ambiguïté l'id_opportunity
-    de la commande (parité avec l'ancien facturer_commande).
+    Élément = ligne 'facturation_directe' OU prestation réalisée. Mélange
+    autorisé sur une même facture (même commande, même client).
 
-    VALIDATION intégrale AVANT tout effet de bord (aucune écriture, aucun appel
-    Karlia tant que la sélection n'est pas entièrement valide). APPLICATION en
-    transaction unique : succès Karlia → marquage de TOUTES les lignes ; échec
-    Karlia → rollback complet, jamais de marquage partiel.
+    MONO-COMMANDE : une facture ne couvre qu'UNE SEULE commande → mono-client
+    automatique + id_opportunity sans ambiguïté.
 
-    Ne touche PAS au statut de la commande parente : les lignes facturation
-    directe vivent indépendamment des lignes a_planifier / contrat.
+    Compat ascendante : si le payload arrive en {ligne_ids:[...]} (format v3.9.x),
+    il est converti en éléments type='ligne'.
+
+    VALIDATION intégrale AVANT tout effet de bord. APPLICATION en transaction
+    unique : succès Karlia → marquage de TOUS les éléments (commande_lignes ET
+    prestations) ; échec Karlia → rollback complet, jamais de marquage partiel.
+    Ne touche PAS au statut de la commande parente.
     """
-    # ── VALIDATION (aucun effet de bord) ─────────────────────────────────────
-    if not payload.ligne_ids:
-        raise HTTPException(status_code=400, detail="Aucune ligne sélectionnée")
+    # ── Normalisation du payload (compat ligne_ids) ──────────────────────────
+    elements = payload.elements
+    if not elements and payload.ligne_ids:
+        elements = [FacturerElementItem(type="ligne", id=i) for i in payload.ligne_ids]
+    if not elements:
+        raise HTTPException(status_code=400, detail="Aucun élément sélectionné")
 
-    # Dédoublonnage défensif tout en conservant l'ordre d'origine.
-    ligne_ids = list(dict.fromkeys(payload.ligne_ids))
+    # Dédoublonnage (type, id) en conservant l'ordre.
+    vus = set()
+    elements = [e for e in elements if (e.type, e.id) not in vus and not vus.add((e.type, e.id))]
 
-    lignes = (
-        db.query(CommandeLigne)
-        .options(joinedload(CommandeLigne.commande))
-        .filter(CommandeLigne.id.in_(ligne_ids))
-        .all()
-    )
-    lignes_par_id = {l.id: l for l in lignes}
+    ligne_ids = [e.id for e in elements if e.type == "ligne"]
+    prestation_ids = [e.id for e in elements if e.type == "prestation"]
+    types_invalides = {e.type for e in elements} - {"ligne", "prestation"}
+    if types_invalides:
+        raise HTTPException(status_code=400, detail=f"Types d'élément invalides : {sorted(types_invalides)}")
 
-    # Existence : chaque id demandé doit avoir été retrouvé.
-    manquants = [lid for lid in ligne_ids if lid not in lignes_par_id]
+    # ── Chargement ───────────────────────────────────────────────────────────
+    lignes_par_id = {}
+    if ligne_ids:
+        for l in (db.query(CommandeLigne).options(joinedload(CommandeLigne.commande))
+                  .filter(CommandeLigne.id.in_(ligne_ids)).all()):
+            lignes_par_id[l.id] = l
+    prestations_par_id = {}
+    if prestation_ids:
+        for p in (db.query(Prestation)
+                  .options(joinedload(Prestation.commande), joinedload(Prestation.commande_ligne))
+                  .filter(Prestation.id.in_(prestation_ids)).all()):
+            prestations_par_id[p.id] = p
+
+    manquants = ([("ligne", i) for i in ligne_ids if i not in lignes_par_id]
+                 + [("prestation", i) for i in prestation_ids if i not in prestations_par_id])
     if manquants:
-        raise HTTPException(status_code=404, detail=f"Lignes introuvables : {manquants}")
+        raise HTTPException(status_code=404, detail=f"Éléments introuvables : {manquants}")
 
+    # ── VALIDATION (aucun effet de bord) ─────────────────────────────────────
     commande_ids = set()
     customer_ids = set()
+
     for lid in ligne_ids:
         ligne = lignes_par_id[lid]
         if ligne.destination != DESTINATION_FACTURATION_DIRECTE:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Ligne {lid} n'est pas en facturation directe (destination={ligne.destination!r})",
-            )
+            raise HTTPException(status_code=400,
+                detail=f"Ligne {lid} n'est pas en facturation directe (destination={ligne.destination!r})")
+        if ligne.section_karlia == 1 or ligne.destination == DESTINATION_INTITULE:
+            raise HTTPException(status_code=400, detail=f"Ligne {lid} est un intitulé, non facturable")
         if ligne.facture_karlia_id is not None:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Ligne {lid} est déjà facturée (facture {ligne.facture_karlia_ref or ligne.facture_karlia_id})",
-            )
+            raise HTTPException(status_code=400,
+                detail=f"Ligne {lid} est déjà facturée (facture {ligne.facture_karlia_ref or ligne.facture_karlia_id})")
         commande = ligne.commande
         if commande is None or not commande.karlia_customer_id:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Ligne {lid} : client Karlia non renseigné sur la commande",
-            )
+            raise HTTPException(status_code=400, detail=f"Ligne {lid} : client Karlia non renseigné sur la commande")
         commande_ids.add(ligne.commande_id)
         customer_ids.add(commande.karlia_customer_id)
 
-    # MONO-COMMANDE : une facture ne peut couvrir qu'une seule commande.
+    for pid in prestation_ids:
+        p = prestations_par_id[pid]
+        if p.statut != "realisee":
+            raise HTTPException(status_code=400,
+                detail=f"Prestation {pid} n'est pas réalisée (statut={p.statut!r})")
+        if p.facture_karlia_id is not None:
+            raise HTTPException(status_code=400,
+                detail=f"Prestation {pid} est déjà facturée (facture {p.facture_karlia_ref or p.facture_karlia_id})")
+        if p.commande_ligne is None:
+            raise HTTPException(status_code=400,
+                detail=f"Prestation {pid} sans ligne de commande associée, non facturable")
+        if not ligne_facturable_pour_prestation(p.commande_ligne):
+            raise HTTPException(status_code=400,
+                detail=f"Prestation {pid} : ligne parente non facturable (intitulé, montant 0 ou produit Karlia invalide)")
+        commande = p.commande
+        if commande is None or not commande.karlia_customer_id:
+            raise HTTPException(status_code=400, detail=f"Prestation {pid} : client Karlia non renseigné sur la commande")
+        commande_ids.add(p.commande_id)
+        customer_ids.add(commande.karlia_customer_id)
+
+    # MONO-COMMANDE (rend mono-client automatique).
     if len(commande_ids) > 1:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "Une facture ne peut couvrir qu'une seule commande à la fois. "
-                f"Sélection actuelle : {len(commande_ids)} commandes "
-                f"(ids {sorted(commande_ids)})."
-            ),
-        )
-
-    # MONO-CLIENT : redondant avec mono-commande (1 commande = 1 client) mais
-    # conservé comme garde-fou inoffensif.
+        raise HTTPException(status_code=400, detail=(
+            "Une facture ne peut couvrir qu'une seule commande à la fois. "
+            f"Sélection actuelle : {len(commande_ids)} commandes (ids {sorted(commande_ids)})."))
     if len(customer_ids) > 1:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "Sélection multi-clients impossible : une facture Karlia = un seul "
-                f"client. Clients distincts dans la sélection : {sorted(customer_ids)}"
-            ),
-        )
+        raise HTTPException(status_code=400, detail=(
+            "Sélection multi-clients impossible : une facture Karlia = un seul client. "
+            f"Clients distincts : {sorted(customer_ids)}"))
 
-    commande_unique = lignes_par_id[ligne_ids[0]].commande
+    # Commande unique (depuis n'importe quel élément).
+    if ligne_ids:
+        commande_unique = lignes_par_id[ligne_ids[0]].commande
+    else:
+        commande_unique = prestations_par_id[prestation_ids[0]].commande
     client_karlia_id = commande_unique.karlia_customer_id
-
-    # ── Construction du payload Karlia ───────────────────────────────────────
     reference = commande_unique.reference_devis or f"CMD-{commande_unique.id}"
 
-    # Exclusion défensive des intitulés (section_karlia==1 ou destination
-    # 'intitule') : titres de section / sous-totaux à 0€ qui produiraient des
-    # lignes parasites sur la facture. Parité avec facturer_commande. Seules les
-    # lignes réellement facturables sont envoyées ET marquées.
-    ids_facturables = [
-        lid for lid in ligne_ids
-        if not (lignes_par_id[lid].section_karlia == 1
-                or lignes_par_id[lid].destination == DESTINATION_INTITULE)
-    ]
-    if not ids_facturables:
-        raise HTTPException(status_code=400, detail="Aucune ligne facturable (intitulés exclus)")
-
-    montant_ht_total = sum(float(lignes_par_id[lid].montant_ht or 0) for lid in ids_facturables)
-
-    lignes_karlia = [
-        construire_ligne_karlia(lignes_par_id[lid]) for lid in ids_facturables
-    ]
+    # ── Construction du payload Karlia ───────────────────────────────────────
+    lignes_karlia = (
+        [construire_ligne_karlia(lignes_par_id[lid]) for lid in ligne_ids]
+        + [construire_ligne_karlia_depuis_prestation(prestations_par_id[pid]) for pid in prestation_ids]
+    )
+    montant_ht_total = sum(l["unit_price"] * l["quantity"] for l in lignes_karlia)
 
     # ── APPLICATION (transaction unique) ─────────────────────────────────────
     try:
-        # id_status=0 (BROUILLON) est le défaut de creer_facture (cf.
-        # karlia_service.creer_facture, payload id_status:0). Émission en
-        # brouillon impérative : la facture reste éditable côté Karlia.
+        # id_status=0 (BROUILLON) = défaut de creer_facture, facture éditable.
         result = await karlia.creer_facture(
             client_karlia_id=str(client_karlia_id),
             lignes=lignes_karlia,
@@ -713,43 +866,38 @@ async def facturer_lignes(
             date_echeance=date.today(),
             montant_ht=montant_ht_total,
             description=f"Facturation prestation(s) - {reference}",
-            # Lien à l'opportunité Karlia de la commande (parité avec l'ancien
-            # facturer_commande). None si la commande n'a pas d'opportunité.
             id_opportunity=commande_unique.karlia_opportunity_id,
         )
     except Exception as e:
-        # Aucune écriture n'a eu lieu avant cet appel → rien à rollback côté DB,
-        # mais on garantit l'absence de marquage partiel.
+        # Aucune écriture avant cet appel → pas de marquage partiel possible.
         raise HTTPException(status_code=500, detail=f"Erreur Karlia: {str(e)}")
 
     try:
         facture_id = str(result.get("id", ""))
         facture_ref = result.get("reference", "")
         now = datetime.utcnow()
-        for lid in ids_facturables:
-            ligne = lignes_par_id[lid]
-            ligne.facture_karlia_id = facture_id
-            ligne.facture_karlia_ref = facture_ref
-            ligne.date_facturee = now
+        for lid in ligne_ids:
+            l = lignes_par_id[lid]
+            l.facture_karlia_id = facture_id
+            l.facture_karlia_ref = facture_ref
+            l.date_facturee = now
+        for pid in prestation_ids:
+            p = prestations_par_id[pid]
+            p.facture_karlia_id = facture_id
+            p.facture_karlia_ref = facture_ref
+            p.date_facturee = now
         db.commit()
     except Exception as e:
         db.rollback()
-        # La facture Karlia (brouillon) a été créée mais le marquage local a
-        # échoué : on remonte une 500 explicite pour intervention manuelle
-        # (la facture brouillon est supprimable côté Karlia).
-        raise HTTPException(
-            status_code=500,
-            detail=(
-                f"Facture Karlia {facture_ref or facture_id} créée mais marquage local "
-                f"échoué (aucune ligne marquée) : {e}"
-            ),
-        )
+        raise HTTPException(status_code=500, detail=(
+            f"Facture Karlia {facture_ref or facture_id} créée mais marquage local "
+            f"échoué (aucun élément marqué) : {e}"))
 
-    return FacturerLignesResponse(
+    return FacturerElementsResponse(
         facture_karlia_id=facture_id,
         facture_karlia_ref=facture_ref,
-        nb_lignes_facturees=len(ids_facturables),
-        ligne_ids=ids_facturables,
+        nb_elements_factures=len(elements),
+        elements=elements,
     )
 
 
@@ -1231,6 +1379,29 @@ async def facturer_commande(
 
     if not commande:
         raise HTTPException(status_code=404, detail="Commande non trouvée")
+
+    # Garde-fou anti-double-facturation (v3.10.0) : facturer_commande est
+    # DÉPRÉCIÉ au profit de POST /commandes/facturer-lignes (facturation par
+    # élément : ligne ou prestation). Si un élément de la commande a déjà été
+    # facturé individuellement, on refuse la facturation par commande entière
+    # qui re-facturerait ces éléments.
+    ligne_deja = any(l.facture_karlia_id for l in commande.lignes)
+    prestation_deja = (
+        db.query(Prestation)
+        .filter(Prestation.commande_id == commande.id,
+                Prestation.facture_karlia_id.isnot(None))
+        .first()
+        is not None
+    )
+    if ligne_deja or prestation_deja:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Cette commande contient des éléments déjà facturés "
+                "individuellement. La facturation par commande entière est "
+                "dépréciée, utilisez POST /commandes/facturer-lignes."
+            ),
+        )
 
     if commande.statut != "deployee":
         raise HTTPException(status_code=400, detail="Seules les commandes terminées peuvent être facturées")
