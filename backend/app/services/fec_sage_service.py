@@ -219,7 +219,7 @@ def convertir_fec_vers_sage(contenu_xlsx: bytes,
         lignes.extend(b)
     octets = ("\r\n".join(lignes) + "\r\n").encode(ENCODAGE_SAGE, errors="replace")
 
-    dates.sort()
+    dates.sort(key=lambda s: s[4:8] + s[2:4] + s[0:2])   # tri chronologique AAAAMMJJ
     fmtd = lambda s: f"{s[0:2]}/{s[2:4]}/{s[4:8]}" if s else ""
     recap = RecapConversion(
         nb_lignes=len(blocs),
