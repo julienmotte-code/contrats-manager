@@ -27,6 +27,7 @@ import ContratsACreer from './pages/ContratsACreer';
 import Formateurs from './pages/Formateurs';
 import MesPrestations from './pages/MesPrestations';
 import ChorusProPage from './pages/ChorusProPage';
+import TransfertSage from './pages/TransfertSage';
 import FacturesFournisseurs from './pages/FacturesFournisseurs';
 import FactureFournisseurSelection from './pages/FactureFournisseurSelection';
 import FactureFournisseurEdition from './pages/FactureFournisseurEdition';
@@ -83,6 +84,7 @@ function AppRoutes() {
       <Route path="/factures-fournisseurs" element={<PrivateRoute><FacturesFournisseurs /></PrivateRoute>} />
       <Route path="/factures-fournisseurs/nouvelle" element={<PrivateRoute><FactureFournisseurSelection /></PrivateRoute>} />
       <Route path="/factures-fournisseurs/:id" element={<PrivateRoute><FactureFournisseurEdition /></PrivateRoute>} />
+      <Route path="/comptabilite/transfert-sage" element={<PrivateRoute><TransfertSage /></PrivateRoute>} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );
