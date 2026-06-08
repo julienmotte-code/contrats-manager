@@ -36,6 +36,7 @@ _TAIL = ["", "", "0", "__SENS__", "__MONTANT__", "", "", "", "0", "0", "0",
          "", "", "0", "0", "0", "", "", "", "", "0", "", "", "", "0"]
 ENTETE_SAGE = ["#FLG 001", "#VER 15"]
 ENCODAGE_SAGE = "latin-1"
+LIBELLE_MAX = 35
 
 
 class FecIntegriteError(ValueError):
@@ -93,6 +94,11 @@ def _map_aux(auxnum: str, comptenum: str) -> str:
 
 def _fmt(x: float) -> str:
     return f"{abs(float(x)):.2f}"
+
+
+def _sans_tiret_initial(s: str) -> str:
+    s = str(s).strip()
+    return s[1:].lstrip() if s.startswith("-") else s
 
 
 def convertir_fec_vers_sage(contenu_xlsx: bytes,
@@ -171,10 +177,10 @@ def convertir_fec_vers_sage(contenu_xlsx: bytes,
         b[1] = _to_ddmmyy(de)
         b[2] = _to_ddmmyy(cell(row, "PieceDate"))
         b[3] = str(cell(row, "EcritureNum")).strip()
-        b[4] = str(cell(row, "PieceRef")).strip()
+        b[4] = _sans_tiret_initial(cell(row, "PieceRef"))
         b[6] = cmpt
         b[8] = aux
-        b[10] = str(cell(row, "EcritureLib")).strip()
+        b[10] = _sans_tiret_initial(cell(row, "EcritureLib"))[:LIBELLE_MAX]
         b[11] = "0"
         b[12] = _to_ddmmyy(cell(row, "DateRglt") or cell(row, "PieceDate"))
         for i, tv in enumerate(_TAIL, start=13):
@@ -213,7 +219,7 @@ def convertir_fec_vers_sage(contenu_xlsx: bytes,
         lignes.extend(b)
     octets = ("\r\n".join(lignes) + "\r\n").encode(ENCODAGE_SAGE, errors="replace")
 
-    dates.sort()
+    dates.sort(key=lambda s: s[4:8] + s[2:4] + s[0:2])   # tri chronologique AAAAMMJJ
     fmtd = lambda s: f"{s[0:2]}/{s[2:4]}/{s[4:8]}" if s else ""
     recap = RecapConversion(
         nb_lignes=len(blocs),
