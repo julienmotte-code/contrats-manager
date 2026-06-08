@@ -1315,7 +1315,7 @@ async def lier_contrat_commande(
 async def get_commande_pdf(
     commande_id: int,
     db: Session = Depends(get_db),
-    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE")),
+    current_user = Depends(require_authenticated),
 ):
     """
     Proxie le PDF du bon de commande hébergé par Karlia.
@@ -1331,7 +1331,24 @@ async def get_commande_pdf(
     L'URL Karlia (get-file.php?token=...) est auto-portée par son token de
     query : aucun en-tête d'auth supplémentaire n'est nécessaire pour la
     récupérer.
+
+    Accès : ADMIN/GESTIONNAIRE total ; FORMATEUR/TECHNICIEN uniquement si une
+    prestation de cette commande leur est attribuée (formateur_id ou
+    agenda_formateur_id), même règle d'ownership que check_prestation_ownership.
     """
+    if current_user.role not in ("ADMIN", "GESTIONNAIRE"):
+        if not current_user.formateur_id:
+            raise HTTPException(status_code=403, detail="Aucun formateur associe a votre compte")
+        owns = db.query(Prestation).filter(
+            Prestation.commande_id == commande_id,
+            or_(
+                Prestation.formateur_id == current_user.formateur_id,
+                Prestation.agenda_formateur_id == current_user.formateur_id,
+            ),
+        ).first()
+        if not owns:
+            raise HTTPException(status_code=403, detail="Ce bon de commande ne vous est pas attribue")
+
     commande = db.query(Commande).filter(Commande.id == commande_id).first()
     if not commande:
         raise HTTPException(status_code=404, detail="Commande non trouvée")
