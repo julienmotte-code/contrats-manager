@@ -17,7 +17,9 @@ import { LocalizationProvider } from '@mui/x-date-pickers/LocalizationProvider';
 import { AdapterDateFns } from '@mui/x-date-pickers/AdapterDateFns';
 import { format, parseISO } from 'date-fns';
 import { fr } from 'date-fns/locale';
+import toast from 'react-hot-toast';
 import api from '../services/api';
+import { openPdfWithAuth } from '../services/pdfFetch';
 import { useAuth } from '../context/AuthContext';
 
 const TAB_INDEX_BY_STATUT = { a_planifier: 0, planifiee: 1, realisee: 2 };
@@ -336,6 +338,20 @@ export default function MesPrestations() {
                       )}
                     </TableCell>
                     <TableCell align="center">
+                      {prest.commande_id && (
+                        <Tooltip title="Bon de commande">
+                          <IconButton
+                            size="small"
+                            color="primary"
+                            onClick={() =>
+                              openPdfWithAuth(`/api/commandes/${prest.commande_id}/pdf`)
+                                .catch((e) => toast.error(e.message || 'PDF indisponible'))
+                            }
+                          >
+                            <PdfIcon />
+                          </IconButton>
+                        </Tooltip>
+                      )}
                       {prest.statut === 'a_planifier' && (
                         <Tooltip title="Planifier">
                           <IconButton size="small" color="primary" onClick={() => openPlanification(prest)}>
