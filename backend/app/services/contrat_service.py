@@ -47,7 +47,14 @@ def calculer_nombre_annees(date_debut: date, date_fin: date, famille_code: str) 
     """
     Calcule le nombre d'années d'un contrat.
 
-    Deux sémantiques selon la famille :
+    Trois sémantiques selon la famille :
+
+    - Famille 'DIVERS' (dates et montant libres, révision AUCUNE, aucun prorata) :
+      DURÉE RÉELLE en années pleines (dates anniversaire), comme 'AUTRE', MAIS
+      plancher à 1 : un contrat de moins d'un an compte 1 an. date_fin est
+      inclusive (dernier jour du contrat), donc relativedelta(date_fin + 1 jour,
+      date_debut).years, borné par max(1, …).
+      Ex : 15/03/2026 → 14/03/2027 = 1 ; 15/03/2026 → 14/09/2026 (6 mois) = 1.
 
     - Famille 'AUTRE' (contrats à prix fixe, révision AUCUNE) : DURÉE RÉELLE en
       années pleines (dates anniversaire). date_fin est inclusive (dernier jour
@@ -60,6 +67,9 @@ def calculer_nombre_annees(date_debut: date, date_fin: date, famille_code: str) 
       Ex : 01/03/2026 → 31/12/2028 = 3 factures (2026 proraté, 2027, 2028).
       Comportement INCHANGÉ (intentionnel).
     """
+    if famille_code == "DIVERS":
+        annees = relativedelta(date_fin + timedelta(days=1), date_debut).years
+        return max(1, annees)
     if famille_code == "AUTRE":
         diff = relativedelta(date_fin + timedelta(days=1), date_debut)
         return diff.years
