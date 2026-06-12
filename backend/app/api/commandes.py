@@ -1274,12 +1274,28 @@ async def terminer_commande(
     db: Session = Depends(get_db),
     current_user = Depends(require_role("ADMIN", "GESTIONNAIRE")),
 ):
-    """Marque une commande comme terminée."""
+    """Marque une commande comme terminée.
+
+    Le gestionnaire clôt la commande au-dessus du technicien/formateur :
+      - TOUTES les prestations passent en 'realisee' (elles deviennent ainsi
+        facturables par la voie par-prestation : GET /commandes/lignes-a-facturer).
+      - La commande passe en 'deployee' (valeur lue par GET /commandes/terminees),
+        et NON 'terminee' qui était orpheline (aucune liste ne la filtrait).
+    Cohérent v3.10.0 : la facturation reste par prestation (facturer-lignes) ;
+    le chemin par-commande facturer_commande garde son garde-fou anti-double-
+    facturation. Bascule sur action explicite gestionnaire (≠ cascade realiser
+    retirée, qui basculait dès une seule prestation réalisée).
+    """
     commande = db.query(Commande).filter(Commande.id == commande_id).first()
     if not commande:
         raise HTTPException(status_code=404, detail="Commande non trouvée")
 
-    commande.statut = "terminee"
+    for p in db.query(Prestation).filter(Prestation.commande_id == commande.id).all():
+        if p.statut != 'realisee':
+            p.statut = 'realisee'
+            p.updated_at = datetime.utcnow()
+
+    commande.statut = "deployee"
     commande.updated_at = datetime.utcnow()
 
     db.commit()
