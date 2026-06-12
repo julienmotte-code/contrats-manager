@@ -23,6 +23,7 @@ export default function DetailContrat() {
   const [prorataValidating, setProrataValidating] = useState(false);
   const [docs, setDocs] = useState([]);
   const [generatingDoc, setGeneratingDoc] = useState(false);
+  const [generationEnCours, setGenerationEnCours] = useState(false);
 
   useEffect(() => {
     contratsAPI.detail(id).then(r => setContrat(r.data)).catch(() => toast.error('Contrat introuvable')).finally(() => setLoading(false));
@@ -100,6 +101,19 @@ export default function DetailContrat() {
     }
   };
 
+  const genererBrouillon = async () => {
+    if (!window.confirm("Générer une facture brouillon dans Karlia pour ce contrat ?")) return;
+    setGenerationEnCours(true);
+    try {
+      const res = await contratsAPI.facturerBrouillon(contrat.id);
+      toast.success(`Brouillon créé dans Karlia : ${res.data.karlia_doc_ref || res.data.karlia_doc_id}`);
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || "Échec de la génération du brouillon");
+    } finally {
+      setGenerationEnCours(false);
+    }
+  };
+
   if (loading) return <div className="flex items-center justify-center h-64 text-gray-400">Chargement...</div>;
   if (!contrat) return <div className="text-center py-12 text-gray-400">Contrat introuvable</div>;
 
@@ -127,6 +141,11 @@ export default function DetailContrat() {
             </button>
           </>)}
           {contrat.statut === 'EN_COURS' && (<>
+            {contrat.famille_contrat === 'DIVERS' && (
+              <button onClick={genererBrouillon} disabled={generationEnCours} className="btn-primary text-sm disabled:opacity-50">
+                {generationEnCours ? '⟳ Génération...' : '🧾 Générer facture brouillon Karlia'}
+              </button>
+            )}
             <button onClick={() => setShowRenouveler(true)} className="btn-secondary text-sm">🔄 Renouveler</button>
             <button onClick={() => setShowTerminer(true)} className="btn-danger text-sm">🚫 Terminer</button>
           </>)}
@@ -193,9 +212,11 @@ export default function DetailContrat() {
       <div className="card space-y-4">
         <div className="flex items-center justify-between border-b pb-2">
           <h2 className="font-semibold text-gray-900">📄 Contrat papier</h2>
-          <button onClick={genererDocument} disabled={generatingDoc} className="btn-primary text-sm disabled:opacity-50">
-            {generatingDoc ? '⟳ Génération...' : '📄 Générer le contrat Word'}
-          </button>
+          {contrat.famille_contrat !== 'DIVERS' && (
+            <button onClick={genererDocument} disabled={generatingDoc} className="btn-primary text-sm disabled:opacity-50">
+              {generatingDoc ? '⟳ Génération...' : '📄 Générer le contrat Word'}
+            </button>
+          )}
         </div>
         {docs.length === 0 ? (
           <p className="text-sm text-gray-400 italic">Aucun contrat généré pour l'instant.</p>

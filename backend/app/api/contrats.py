@@ -21,11 +21,12 @@ import logging
 
 from app.core.database import get_db
 from app.core.security import require_authenticated, require_role
-from app.models.models import Contrat, ContratArticle, PlanFacturation, IndiceRevision
+from app.models.models import Contrat, ContratArticle, PlanFacturation, IndiceRevision, Commande
 from app.services.contrat_service import (
     calculer_prorata, calculer_nombre_annees,
     generer_plan_facturation,
 )
+from app.services.karlia_service import karlia, KarliaError
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -326,9 +327,29 @@ def valider_contrat(
     contrat.statut = "EN_COURS"
     contrat.validated_at = datetime.utcnow()
     contrat.date_statut_change = date.today()
+
+    # Liaison best-effort commande↔contrat : toute commande de la même opportunité
+    # marquée "nécessite contrat" et non encore liée est rattachée à ce contrat
+    # (sort de l'écran "Contrats à créer"). Aligné sur lier_contrat_commande (str).
+    nb_commandes_liees = 0
+    if contrat.karlia_opportunity_id:
+        cmds = db.query(Commande).filter(
+            Commande.karlia_opportunity_id == contrat.karlia_opportunity_id,
+            Commande.necessite_contrat == True,
+            Commande.contrat_id == None,
+        ).all()
+        for cmd in cmds:
+            cmd.contrat_id = str(contrat.id)
+            cmd.updated_at = datetime.utcnow()
+            nb_commandes_liees += 1
+
     db.commit()
 
-    return {"message": f"Contrat {contrat.numero_contrat} validé — statut EN_COURS", "id": contrat_id}
+    return {
+        "message": f"Contrat {contrat.numero_contrat} validé — statut EN_COURS",
+        "id": contrat_id,
+        "nb_commandes_liees": nb_commandes_liees,
+    }
 
 
 @router.delete("/{contrat_id}")
@@ -716,6 +737,7 @@ def _contrat_to_dict(c: Contrat) -> dict:
         "prorate_nb_mois": float(c.prorate_nb_mois) if c.prorate_nb_mois else None,
         "prorate_montant_ht": float(c.prorate_montant_ht) if c.prorate_montant_ht else None,
         "prorate_validated": c.prorate_validated,
+        "famille_contrat": c.famille_contrat,
         "type_contrat": c.type_contrat,
         "numero_avenant": c.numero_avenant,
         "contrat_parent_id": str(c.contrat_parent_id) if c.contrat_parent_id else None,
@@ -807,4 +829,72 @@ def renouveler_lot(
         "erreurs": len(erreurs),
         "resultats": resultats,
         "detail_erreurs": erreurs,
+    }
+
+
+@router.post("/{contrat_id}/facturer-brouillon")
+async def facturer_brouillon(
+    contrat_id: str,
+    db: Session = Depends(get_db),
+    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE")),
+):
+    """
+    Génère une facture BROUILLON dans Karlia directement depuis un contrat DIVERS.
+
+    Aucune révision, aucun prorata : les prix et quantités sont envoyés TELS QUE
+    saisis sur le contrat. La facture est créée en brouillon côté Karlia
+    (id_status=0, id_type=4 — gérés par karlia.creer_facture), éditable et
+    supprimable là-bas. Aucune persistance en base pour ce lot.
+    """
+    contrat = _get_or_404(contrat_id, db)
+
+    # ── Gardes métier (avant tout appel Karlia) ──
+    if contrat.famille_contrat != "DIVERS":
+        raise HTTPException(400, "Génération de facture brouillon réservée aux contrats DIVERS")
+    if contrat.statut != "EN_COURS":
+        raise HTTPException(400, "Le contrat doit être EN_COURS pour générer une facture brouillon")
+    if not contrat.client_karlia_id:
+        raise HTTPException(400, "Client Karlia manquant sur ce contrat")
+
+    # ── Construction des lignes (prix tels que saisis, aucune révision) ──
+    articles_contrat = sorted(contrat.articles, key=lambda a: a.rang)
+    if articles_contrat:
+        lignes = [
+            {
+                "id_product": art.article_karlia_id or None,
+                "description": art.designation or "",
+                "unit_price": float(art.prix_unitaire_ht or 0),
+                "quantity": float(art.quantite or 1),
+                "vat_rate": float(art.taux_tva or 20.0),
+            }
+            for art in articles_contrat
+        ]
+    else:
+        # Fallback : aucun article → ligne unique au montant du contrat
+        lignes = [{
+            "description": f"Contrat {contrat.numero_contrat}",
+            "unit_price": float(contrat.montant_annuel_ht),
+            "quantity": 1,
+            "vat_rate": 20.0,
+        }]
+
+    # ── Appel Karlia (brouillon : id_status=0 / id_type=4 gérés par creer_facture) ──
+    try:
+        res = await karlia.creer_facture(
+            client_karlia_id=contrat.client_karlia_id,
+            lignes=lignes,
+            reference_contrat=contrat.numero_contrat,
+            date_echeance=contrat.date_fin,          # date_end Karlia = fin du contrat
+            montant_ht=float(contrat.montant_annuel_ht),
+            description=f"Contrat {contrat.numero_contrat}",
+            id_opportunity=contrat.karlia_opportunity_id,
+        )
+    except KarliaError as e:
+        raise HTTPException(502, f"Erreur Karlia : {e}")
+
+    return {
+        "ok": True,
+        "karlia_doc_id": res.get("id"),
+        "karlia_doc_ref": res.get("reference"),
+        "numero_contrat": contrat.numero_contrat,
     }
