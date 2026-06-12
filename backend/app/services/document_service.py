@@ -33,6 +33,7 @@ FAMILLE_LABEL = {
     "ASSISTANCE_TEL": "Assistance Téléphonique",
     "DIGITECH":       "Digitech",
     "KIWI_BACKUP":    "Kiwi Backup",
+    "DIVERS":         "Divers",
 }
 
 CHAMPS = {

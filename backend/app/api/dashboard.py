@@ -25,6 +25,7 @@ FAMILLE_LABELS = {
     "AUTRE": "Autres",
     "CANTINE": "Cantine de France",
     "ASSISTANCE_TEL": "Assistance téléphonique",
+    "DIVERS": "Divers",
 }
 
 

@@ -21,11 +21,12 @@ import logging
 
 from app.core.database import get_db
 from app.core.security import require_authenticated, require_role
-from app.models.models import Contrat, ContratArticle, PlanFacturation, IndiceRevision
+from app.models.models import Contrat, ContratArticle, PlanFacturation, IndiceRevision, Commande
 from app.services.contrat_service import (
     calculer_prorata, calculer_nombre_annees,
     generer_plan_facturation,
 )
+from app.services.karlia_service import karlia, KarliaError
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -165,6 +166,9 @@ def creer_contrat(
     """
     Crée un nouveau contrat en statut BROUILLON.
     Calcule le prorata et génère le plan de facturation prévisionnaire.
+
+    Famille DIVERS : dates et montant libres, AUCUN prorata, AUCUN plan de
+    facturation, contrat validable sans étape prorata.
     """
     # Vérifier unicité du numéro
     if db.query(Contrat).filter(Contrat.numero_contrat == data.numero_contrat).first():
@@ -176,7 +180,17 @@ def creer_contrat(
 
     # Calculs
     montant_ht = Decimal(str(data.montant_annuel_ht))
-    prorata = calculer_prorata(data.date_debut, montant_ht)
+    is_divers = (data.famille_contrat == "DIVERS")
+    if is_divers:
+        # Prorata neutre : aucun prorata pour la famille DIVERS.
+        prorata = {
+            "prorate": False,
+            "nb_mois": Decimal("12"),
+            "montant_ht": montant_ht,
+            "detail": "Famille DIVERS — dates et montant libres, aucun prorata",
+        }
+    else:
+        prorata = calculer_prorata(data.date_debut, montant_ht)
     nombre_annees = calculer_nombre_annees(data.date_debut, data.date_fin, data.famille_contrat)
 
     # Créer le contrat
@@ -194,7 +208,8 @@ def creer_contrat(
         prorate_annee1=prorata["prorate"],
         prorate_nb_mois=prorata["nb_mois"],
         prorate_montant_ht=prorata["montant_ht"],
-        prorate_validated=data.prorate_validated,
+        # DIVERS : jamais de blocage de validation par le prorata.
+        prorate_validated=True if is_divers else data.prorate_validated,
         prorate_note=data.prorate_note,
         type_contrat=data.type_contrat,
         contrat_parent_id=uuid.UUID(data.contrat_parent_id) if data.contrat_parent_id else None,
@@ -218,24 +233,27 @@ def creer_contrat(
             taux_tva=art.taux_tva,
         ))
 
-    # Générer le plan de facturation
-    plan = generer_plan_facturation(
-        contrat_id=str(contrat.id),
-        date_debut=data.date_debut,
-        date_fin=data.date_fin,
-        montant_annuel_ht=montant_ht,
-        prorata=prorata,
-    )
-    for p in plan:
-        db.add(PlanFacturation(
-            contrat_id=contrat.id,
-            numero_facture=p["numero_facture"],
-            annee_facturation=p["annee_facturation"],
-            date_echeance=p["date_echeance"],
-            type_facture=p["type_facture"],
-            montant_ht_prevu=p["montant_ht_prevu"],
-            statut="PLANIFIEE",
-        ))
+    # Générer le plan de facturation — sauf DIVERS (aucune ligne de plan)
+    if is_divers:
+        plan = []
+    else:
+        plan = generer_plan_facturation(
+            contrat_id=str(contrat.id),
+            date_debut=data.date_debut,
+            date_fin=data.date_fin,
+            montant_annuel_ht=montant_ht,
+            prorata=prorata,
+        )
+        for p in plan:
+            db.add(PlanFacturation(
+                contrat_id=contrat.id,
+                numero_facture=p["numero_facture"],
+                annee_facturation=p["annee_facturation"],
+                date_echeance=p["date_echeance"],
+                type_facture=p["type_facture"],
+                montant_ht_prevu=p["montant_ht_prevu"],
+                statut="PLANIFIEE",
+            ))
 
     db.commit()
     db.refresh(contrat)
@@ -309,9 +327,29 @@ def valider_contrat(
     contrat.statut = "EN_COURS"
     contrat.validated_at = datetime.utcnow()
     contrat.date_statut_change = date.today()
+
+    # Liaison best-effort commande↔contrat : toute commande de la même opportunité
+    # marquée "nécessite contrat" et non encore liée est rattachée à ce contrat
+    # (sort de l'écran "Contrats à créer"). Aligné sur lier_contrat_commande (str).
+    nb_commandes_liees = 0
+    if contrat.karlia_opportunity_id:
+        cmds = db.query(Commande).filter(
+            Commande.karlia_opportunity_id == contrat.karlia_opportunity_id,
+            Commande.necessite_contrat == True,
+            Commande.contrat_id == None,
+        ).all()
+        for cmd in cmds:
+            cmd.contrat_id = str(contrat.id)
+            cmd.updated_at = datetime.utcnow()
+            nb_commandes_liees += 1
+
     db.commit()
 
-    return {"message": f"Contrat {contrat.numero_contrat} validé — statut EN_COURS", "id": contrat_id}
+    return {
+        "message": f"Contrat {contrat.numero_contrat} validé — statut EN_COURS",
+        "id": contrat_id,
+        "nb_commandes_liees": nb_commandes_liees,
+    }
 
 
 @router.delete("/{contrat_id}")
@@ -335,7 +373,10 @@ def modifier_contrat(
     db: Session = Depends(get_db),
     current_user = Depends(require_role("ADMIN", "GESTIONNAIRE")),
 ):
-    """Modifie un contrat en statut BROUILLON uniquement."""
+    """Modifie un contrat en statut BROUILLON uniquement.
+
+    Famille DIVERS : aucun prorata, aucun plan de facturation (ni régénération).
+    """
     from app.models.models import ContratArticle, PlanFacturation
     contrat = _get_or_404(contrat_id, db)
     if contrat.statut != "BROUILLON":
@@ -362,19 +403,28 @@ def modifier_contrat(
             contrat.date_debut, contrat.date_fin, contrat.famille_contrat
         )
 
-    # Recalcul prorata
-    if "date_debut" in data or "montant_annuel_ht" in data:
-        from app.services.contrat_service import calculer_prorata
+    is_divers = (contrat.famille_contrat == "DIVERS")
+
+    if is_divers:
+        # DIVERS : aucun prorata, jamais de blocage de validation.
         from decimal import Decimal
-        prorata = calculer_prorata(
-            contrat.date_debut,
-            Decimal(str(contrat.montant_annuel_ht)),
-            data.get("prorate_demi_mois", contrat.prorate_demi_mois or False)
-        )
-        contrat.prorate_annee1 = prorata["prorate"]
-        if prorata["prorate"]:
-            contrat.prorate_nb_mois = float(prorata["nb_mois"])
-            contrat.prorate_montant_ht = float(prorata["montant_ht"])
+        contrat.prorate_annee1 = False
+        contrat.prorate_montant_ht = Decimal(str(contrat.montant_annuel_ht)) if contrat.montant_annuel_ht is not None else None
+        contrat.prorate_validated = True
+    else:
+        # Recalcul prorata
+        if "date_debut" in data or "montant_annuel_ht" in data:
+            from app.services.contrat_service import calculer_prorata
+            from decimal import Decimal
+            prorata = calculer_prorata(
+                contrat.date_debut,
+                Decimal(str(contrat.montant_annuel_ht)),
+                data.get("prorate_demi_mois", contrat.prorate_demi_mois or False)
+            )
+            contrat.prorate_annee1 = prorata["prorate"]
+            if prorata["prorate"]:
+                contrat.prorate_nb_mois = float(prorata["nb_mois"])
+                contrat.prorate_montant_ht = float(prorata["montant_ht"])
 
     # Articles — remplacer complètement
     if "articles" in data:
@@ -390,8 +440,8 @@ def modifier_contrat(
                 taux_tva=a.get("taux_tva", 20),
             ))
 
-    # Regénérer plan de facturation
-    if any(k in data for k in ["date_debut", "date_fin", "montant_annuel_ht"]):
+    # Regénérer plan de facturation — sauf DIVERS (aucun plan)
+    if not is_divers and any(k in data for k in ["date_debut", "date_fin", "montant_annuel_ht"]):
         from app.services.contrat_service import generer_plan_facturation
         db.query(PlanFacturation).filter(PlanFacturation.contrat_id == contrat.id).delete()
         from decimal import Decimal
@@ -447,8 +497,12 @@ def renouveler_contrat(
     - SPONTANE : prolonge la date de fin, continue la facturation
     - NOUVEAU_CONTRAT : crée un nouveau contrat, archive l'ancien, fusionne les avenants
     - FIN : termine le contrat sans suite
+
+    Famille DIVERS : reconduction des dates anniversaire (durée identique) et du
+    montant tels quels, sans prorata, sans regroupement année civile, sans plan.
     """
     contrat = _get_or_404(contrat_id, db)
+    is_divers = (contrat.famille_contrat == "DIVERS")
 
     if action.type_renouvellement == "FIN":
         contrat.statut = "TERMINE"
@@ -458,6 +512,19 @@ def renouveler_contrat(
         return {"message": "Contrat terminé", "type": "FIN"}
 
     elif action.type_renouvellement == "SPONTANE":
+        if is_divers:
+            # Reconduction anniversaire SUR PLACE : on décale début ET fin de la
+            # même durée, montant inchangé, aucun prorata, aucune ligne de plan.
+            from datetime import timedelta
+            duree = contrat.date_fin - contrat.date_debut          # timedelta, calculé AVANT réassignation
+            contrat.date_debut = contrat.date_fin + timedelta(days=1)
+            contrat.date_fin = contrat.date_debut + duree
+            contrat.nombre_annees = calculer_nombre_annees(contrat.date_debut, contrat.date_fin, "DIVERS")
+            contrat.statut = "EN_COURS"
+            contrat.date_statut_change = date.today()
+            db.commit()
+            return {"message": f"Contrat DIVERS reconduit jusqu'au {contrat.date_fin}", "type": "SPONTANE"}
+
         # Prolonger d'une année
         from dateutil.relativedelta import relativedelta
         nouvelle_fin = contrat.date_fin + relativedelta(years=1)
@@ -482,6 +549,66 @@ def renouveler_contrat(
         return {"message": f"Contrat prolongé jusqu'au {nouvelle_fin}", "type": "SPONTANE"}
 
     elif action.type_renouvellement == "NOUVEAU_CONTRAT":
+        if is_divers:
+            # Nouveau contrat lié, dates reconduites (durée identique), montant
+            # inchangé, sans prorata, sans plan de facturation.
+            if not action.nouveau_numero:
+                raise HTTPException(400, "Le numero du nouveau contrat est obligatoire")
+            from datetime import timedelta
+
+            # 1. Archiver l'ancien
+            contrat.statut = "TERMINE"
+            contrat.date_statut_change = date.today()
+            contrat.motif_fin = "Remplacé par nouveau contrat"
+
+            # 2. Calcul des nouvelles dates (durée identique par défaut)
+            nouvelle_date_debut = action.nouvelle_date_debut or (contrat.date_fin + timedelta(days=1))
+            duree = contrat.date_fin - contrat.date_debut
+            nouvelle_date_fin = action.nouvelle_date_fin or (nouvelle_date_debut + duree)
+
+            # 3. Créer le nouveau contrat (RENOUVELLEMENT, BROUILLON)
+            nouveau = Contrat(
+                numero_contrat=action.nouveau_numero,
+                client_karlia_id=contrat.client_karlia_id,
+                client_nom=contrat.client_nom,
+                client_numero=contrat.client_numero,
+                famille_contrat=contrat.famille_contrat,
+                date_debut=nouvelle_date_debut,
+                date_fin=nouvelle_date_fin,
+                nombre_annees=calculer_nombre_annees(nouvelle_date_debut, nouvelle_date_fin, "DIVERS"),
+                montant_annuel_ht=contrat.montant_annuel_ht,
+                prorate_annee1=False,
+                prorate_montant_ht=contrat.montant_annuel_ht,
+                prorate_validated=True,
+                type_contrat="RENOUVELLEMENT",
+                contrat_parent_id=contrat.id,
+                statut="BROUILLON",
+            )
+            db.add(nouveau)
+            db.flush()
+
+            # 4. Copier les articles du contrat principal (aucun plan de facturation)
+            for art in contrat.articles:
+                db.add(ContratArticle(
+                    contrat_id=nouveau.id,
+                    rang=art.rang,
+                    designation=art.designation,
+                    article_karlia_id=art.article_karlia_id,
+                    reference=art.reference,
+                    prix_unitaire_ht=art.prix_unitaire_ht,
+                    quantite=art.quantite,
+                    unite=art.unite,
+                    taux_tva=art.taux_tva,
+                ))
+
+            db.commit()
+            return {
+                "message": f"Nouveau contrat DIVERS {action.nouveau_numero} créé",
+                "type": "NOUVEAU_CONTRAT",
+                "nouveau_contrat_id": str(nouveau.id),
+                "avenants_fusionnes": 0,
+            }
+
         # 1. Archiver l'ancien
         contrat.statut = "TERMINE"
         contrat.date_statut_change = date.today()
@@ -610,6 +737,7 @@ def _contrat_to_dict(c: Contrat) -> dict:
         "prorate_nb_mois": float(c.prorate_nb_mois) if c.prorate_nb_mois else None,
         "prorate_montant_ht": float(c.prorate_montant_ht) if c.prorate_montant_ht else None,
         "prorate_validated": c.prorate_validated,
+        "famille_contrat": c.famille_contrat,
         "type_contrat": c.type_contrat,
         "numero_avenant": c.numero_avenant,
         "contrat_parent_id": str(c.contrat_parent_id) if c.contrat_parent_id else None,
@@ -634,6 +762,9 @@ def renouveler_lot(
     """
     Renouvelle plusieurs contrats d'un coup.
     Seuls SPONTANE et FIN sont supportés en mode lot.
+
+    Famille DIVERS en SPONTANE : reconduction anniversaire sur place (décalage
+    début + fin, recalcul durée DIVERS, aucune ligne de plan).
     """
     if action.type_renouvellement not in ("SPONTANE", "FIN"):
         raise HTTPException(400, "Mode lot : seuls SPONTANE et FIN sont supportés")
@@ -656,6 +787,19 @@ def renouveler_lot(
                 resultats.append({"id": contrat_id, "numero": contrat.numero_contrat, "ok": True})
 
             elif action.type_renouvellement == "SPONTANE":
+                if contrat.famille_contrat == "DIVERS":
+                    # Reconduction anniversaire SUR PLACE (identique à renouveler_contrat).
+                    from datetime import timedelta
+                    duree = contrat.date_fin - contrat.date_debut
+                    contrat.date_debut = contrat.date_fin + timedelta(days=1)
+                    contrat.date_fin = contrat.date_debut + duree
+                    contrat.nombre_annees = calculer_nombre_annees(contrat.date_debut, contrat.date_fin, "DIVERS")
+                    contrat.statut = "EN_COURS"
+                    contrat.date_statut_change = date.today()
+                    db.commit()
+                    resultats.append({"id": contrat_id, "numero": contrat.numero_contrat, "ok": True})
+                    continue
+
                 from dateutil.relativedelta import relativedelta
                 nouvelle_fin = contrat.date_fin + relativedelta(years=1)
                 contrat.date_fin = nouvelle_fin
@@ -685,4 +829,72 @@ def renouveler_lot(
         "erreurs": len(erreurs),
         "resultats": resultats,
         "detail_erreurs": erreurs,
+    }
+
+
+@router.post("/{contrat_id}/facturer-brouillon")
+async def facturer_brouillon(
+    contrat_id: str,
+    db: Session = Depends(get_db),
+    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE")),
+):
+    """
+    Génère une facture BROUILLON dans Karlia directement depuis un contrat DIVERS.
+
+    Aucune révision, aucun prorata : les prix et quantités sont envoyés TELS QUE
+    saisis sur le contrat. La facture est créée en brouillon côté Karlia
+    (id_status=0, id_type=4 — gérés par karlia.creer_facture), éditable et
+    supprimable là-bas. Aucune persistance en base pour ce lot.
+    """
+    contrat = _get_or_404(contrat_id, db)
+
+    # ── Gardes métier (avant tout appel Karlia) ──
+    if contrat.famille_contrat != "DIVERS":
+        raise HTTPException(400, "Génération de facture brouillon réservée aux contrats DIVERS")
+    if contrat.statut != "EN_COURS":
+        raise HTTPException(400, "Le contrat doit être EN_COURS pour générer une facture brouillon")
+    if not contrat.client_karlia_id:
+        raise HTTPException(400, "Client Karlia manquant sur ce contrat")
+
+    # ── Construction des lignes (prix tels que saisis, aucune révision) ──
+    articles_contrat = sorted(contrat.articles, key=lambda a: a.rang)
+    if articles_contrat:
+        lignes = [
+            {
+                "id_product": art.article_karlia_id or None,
+                "description": art.designation or "",
+                "unit_price": float(art.prix_unitaire_ht or 0),
+                "quantity": float(art.quantite or 1),
+                "vat_rate": float(art.taux_tva or 20.0),
+            }
+            for art in articles_contrat
+        ]
+    else:
+        # Fallback : aucun article → ligne unique au montant du contrat
+        lignes = [{
+            "description": f"Contrat {contrat.numero_contrat}",
+            "unit_price": float(contrat.montant_annuel_ht),
+            "quantity": 1,
+            "vat_rate": 20.0,
+        }]
+
+    # ── Appel Karlia (brouillon : id_status=0 / id_type=4 gérés par creer_facture) ──
+    try:
+        res = await karlia.creer_facture(
+            client_karlia_id=contrat.client_karlia_id,
+            lignes=lignes,
+            reference_contrat=contrat.numero_contrat,
+            date_echeance=contrat.date_fin,          # date_end Karlia = fin du contrat
+            montant_ht=float(contrat.montant_annuel_ht),
+            description=f"Contrat {contrat.numero_contrat}",
+            id_opportunity=contrat.karlia_opportunity_id,
+        )
+    except KarliaError as e:
+        raise HTTPException(502, f"Erreur Karlia : {e}")
+
+    return {
+        "ok": True,
+        "karlia_doc_id": res.get("id"),
+        "karlia_doc_ref": res.get("reference"),
+        "numero_contrat": contrat.numero_contrat,
     }

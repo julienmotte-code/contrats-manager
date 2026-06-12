@@ -89,7 +89,7 @@ export default function NouveauContrat() {
   const [demiMois, setDemiMois] = useState(false);
   const [showNouveauClient, setShowNouveauClient] = useState(false);
   const [nouveauClient, setNouveauClient] = useState({ nom: '', email: '', telephone: '', adresse_ligne1: '', code_postal: '', ville: '', siret: '' });
-  const [form, setForm] = useState({ numero_contrat: '', date_debut: '', date_fin: '', montant_annuel_ht: '', indice_reference_id: '', prorate_validated: false, prorate_note: '', type_contrat: 'CONTRAT', articles: [{ rang: 0, article_karlia_id: '', designation: '', reference: '', prix_unitaire_ht: '', quantite: 1, taux_tva: 20 }] });
+  const [form, setForm] = useState({ numero_contrat: '', famille_contrat: 'COSOLUCE', date_debut: '', date_fin: '', montant_annuel_ht: '', indice_reference_id: '', prorate_validated: false, prorate_note: '', type_contrat: 'CONTRAT', articles: [{ rang: 0, article_karlia_id: '', designation: '', reference: '', prix_unitaire_ht: '', quantite: 1, taux_tva: 20 }] });
   useEffect(() => {
     produitsAPI.liste({ limit: 1000 })
       .then(r => {
@@ -165,6 +165,17 @@ export default function NouveauContrat() {
     if (!dateDebut || !dateFin) return null;
     const debut = new Date(dateDebut);
     const fin = new Date(dateFin);
+    if (famille === 'DIVERS') {
+      // DIVERS : durée réelle anniversaire, plancher à 1 (miroir backend).
+      const finPlusUn = new Date(fin);
+      finPlusUn.setDate(finPlusUn.getDate() + 1);  // date_fin inclusive
+      let annees = finPlusUn.getFullYear() - debut.getFullYear();
+      if (finPlusUn.getMonth() < debut.getMonth() ||
+          (finPlusUn.getMonth() === debut.getMonth() && finPlusUn.getDate() < debut.getDate())) {
+        annees -= 1;
+      }
+      return Math.max(1, annees);
+    }
     if (famille === 'AUTRE') {
       const finPlusUn = new Date(fin);
       finPlusUn.setDate(finPlusUn.getDate() + 1);  // date_fin inclusive
@@ -177,6 +188,7 @@ export default function NouveauContrat() {
     }
     return fin.getFullYear() - debut.getFullYear() + 1;  // Syntec, inchangé
   };
+  const isDivers = form.famille_contrat === 'DIVERS';
   const nbAnnees = calculerNbAnnees(form.date_debut, form.date_fin, form.famille_contrat);
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -262,7 +274,7 @@ export default function NouveauContrat() {
             <div><label className="label">Montant annuel HT *</label><div className="relative"><input className="input pr-8" type="number" step="0.01" min="0" required value={form.montant_annuel_ht} onChange={e => setForm(f => ({ ...f, montant_annuel_ht: e.target.value }))} /><span className="absolute right-3 top-2 text-gray-400 text-sm">€</span></div></div>
             
           </div>
-          {prorata && prorata.prorate && (
+          {!isDivers && prorata && prorata.prorate && (
             <div className="bg-orange-50 border border-orange-200 rounded-lg p-4 space-y-3">
               <div className="font-medium text-orange-900">⚠️ Prorata première année</div>
               <div className="text-sm text-orange-800">{prorata.detail}</div>
@@ -279,13 +291,18 @@ export default function NouveauContrat() {
               <label className="flex items-center gap-2 text-sm cursor-pointer"><input type="checkbox" checked={form.prorate_validated} onChange={e => setForm(f => ({ ...f, prorate_validated: e.target.checked }))} /><span>Je valide ce montant proratisé</span></label>
             </div>
           )}
-          {prorata && !prorata.prorate && (
+          {!isDivers && prorata && !prorata.prorate && (
             <div className="space-y-2">
               <div className="bg-green-50 border border-green-200 rounded-lg px-4 py-2 text-sm text-green-800">✅ {prorata.detail}</div>
               <label className="flex items-center gap-2 text-sm cursor-pointer bg-orange-50 rounded-lg px-3 py-2 border border-orange-200">
                 <input type="checkbox" checked={demiMois} onChange={e => setDemiMois(e.target.checked)} />
                 <span>Ajouter ½ mois supplémentaire (+{form.montant_annuel_ht ? (parseFloat(form.montant_annuel_ht)/24).toLocaleString('fr-FR', { minimumFractionDigits: 2 }) : '0'} €) — 1/24ème du montant annuel</span>
               </label>
+            </div>
+          )}
+          {isDivers && (
+            <div className="bg-gray-50 border border-gray-200 rounded-lg px-4 py-2 text-sm text-gray-600">
+              Famille Divers — dates et montant libres, aucun prorata, aucune révision.
             </div>
           )}
         </div>

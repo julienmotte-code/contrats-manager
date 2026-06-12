@@ -28,6 +28,7 @@ export const contratsAPI = {
   renouveler: (id, data) => api.post(`/api/contrats/${id}/renouveler`, data),
   renouvelerLot: (data) => api.post('/api/contrats/renouveler-lot', data),
   renouvellements: (params) => api.get('/api/contrats/renouvellements', { params }),
+  facturerBrouillon: (id) => api.post(`/api/contrats/${id}/facturer-brouillon`),
 };
 export const produitsAPI = { liste: (params) => api.get('/api/produits', { params }) };
 export const indicesAPI = {

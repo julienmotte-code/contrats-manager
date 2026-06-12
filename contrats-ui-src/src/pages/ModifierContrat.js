@@ -128,6 +128,17 @@ export default function ModifierContrat() {
     if (!dateDebut || !dateFin) return null;
     const debut = new Date(dateDebut);
     const fin = new Date(dateFin);
+    if (famille === 'DIVERS') {
+      // DIVERS : durée réelle anniversaire, plancher à 1 (miroir backend).
+      const finPlusUn = new Date(fin);
+      finPlusUn.setDate(finPlusUn.getDate() + 1);  // date_fin inclusive
+      let annees = finPlusUn.getFullYear() - debut.getFullYear();
+      if (finPlusUn.getMonth() < debut.getMonth() ||
+          (finPlusUn.getMonth() === debut.getMonth() && finPlusUn.getDate() < debut.getDate())) {
+        annees -= 1;
+      }
+      return Math.max(1, annees);
+    }
     if (famille === 'AUTRE') {
       const finPlusUn = new Date(fin);
       finPlusUn.setDate(finPlusUn.getDate() + 1);  // date_fin inclusive
@@ -140,6 +151,7 @@ export default function ModifierContrat() {
     }
     return fin.getFullYear() - debut.getFullYear() + 1;
   };
+  const isDivers = form.famille_contrat === 'DIVERS';
   const nbAnnees = calculerNbAnnees(form.date_debut, form.date_fin, form.famille_contrat);
 
   return (
@@ -191,7 +203,7 @@ export default function ModifierContrat() {
             <div><label className="label">Montant annuel HT *</label><div className="relative"><input className="input pr-8" type="number" step="0.01" min="0" required value={form.montant_annuel_ht} onChange={e => setForm(f => ({ ...f, montant_annuel_ht: e.target.value }))} /><span className="absolute right-3 top-2 text-gray-400 text-sm">€</span></div></div>
             
           </div>
-          {prorata && prorata.prorate && (
+          {!isDivers && prorata && prorata.prorate && (
             <div className="bg-orange-50 border border-orange-200 rounded-lg p-4 space-y-2">
               <div className="font-medium text-orange-900">⚠️ Prorata première année</div>
               <div className="text-sm text-orange-800">{prorata.detail}</div>
@@ -206,7 +218,12 @@ export default function ModifierContrat() {
               </label>
             </div>
           )}
-          {prorata && !prorata.prorate && <div className="bg-green-50 border border-green-200 rounded-lg px-4 py-2 text-sm text-green-800">✅ {prorata.detail}</div>}
+          {!isDivers && prorata && !prorata.prorate && <div className="bg-green-50 border border-green-200 rounded-lg px-4 py-2 text-sm text-green-800">✅ {prorata.detail}</div>}
+          {isDivers && (
+            <div className="bg-gray-50 border border-gray-200 rounded-lg px-4 py-2 text-sm text-gray-600">
+              Famille Divers — dates et montant libres, aucun prorata, aucune révision.
+            </div>
+          )}
         </div>
         <div className="card space-y-4">
           <h2 className="font-semibold text-gray-900 text-lg border-b pb-2">⑤ Articles</h2>
