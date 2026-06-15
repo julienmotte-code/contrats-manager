@@ -622,3 +622,22 @@ class FactureFournisseurPointage(Base):
             name='uq_factures_fournisseurs_pointage_bl_ligne',
         ),
     )
+
+
+class FactureHistorique(Base):
+    __tablename__ = "factures_historiques"
+
+    id = Column(Integer, primary_key=True, index=True)
+    numero_facture = Column(Integer, unique=True, nullable=False, index=True)
+    date_facture = Column(Date, nullable=False, index=True)
+    exercice = Column(Integer, nullable=False, index=True)
+    client_nom = Column(String, nullable=False)
+    adresse = Column(String, nullable=True)
+    code_postal = Column(String(5), nullable=True)
+    ville = Column(String, nullable=True)
+    montant_ht = Column(Numeric(15, 2), nullable=False)
+    montant_tva = Column(Numeric(15, 2), nullable=False)
+    montant_ttc = Column(Numeric(15, 2), nullable=False)
+    taux_tva = Column(Numeric(5, 2), nullable=False, server_default="20.00")
+    source = Column(String, nullable=False, server_default="export_factura")
+    created_at = Column(DateTime, server_default=func.now())
