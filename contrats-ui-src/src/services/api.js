@@ -46,6 +46,7 @@ export const dashboardAPI = {
 };
 export const caAPI = {
   comparatif: (params) => api.get('/api/ca/comparatif', { params }),
+  comparatifRefresh: (params) => api.get('/api/ca/comparatif-refresh', { params }),
   rafraichirKarlia: () => api.post('/api/ca/rafraichir-karlia'),
 };
 export const facturesFournisseursAPI = {

@@ -2,9 +2,8 @@ import React, { useState, useEffect, useCallback } from 'react';
 import {
   Box, Paper, Typography, TextField, Button, Stack, Alert,
   Table, TableHead, TableBody, TableRow, TableCell, TableContainer,
-  CircularProgress, Chip, Divider, Tooltip,
+  CircularProgress, Chip, Divider,
 } from '@mui/material';
-import RefreshIcon from '@mui/icons-material/Refresh';
 import { caAPI } from '../services/api';
 
 const eur = (n) =>
@@ -29,48 +28,36 @@ export default function ChiffreAffaires() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [refreshing, setRefreshing] = useState(false);
   const [refreshInfo, setRefreshInfo] = useState('');
 
-  const charger = useCallback(async () => {
+  const calculer = useCallback(async () => {
     if (dateFin < dateDebut) {
       setError('La date de fin est antérieure à la date de début.');
       return;
     }
     setError('');
+    setRefreshInfo('');
     setLoading(true);
     try {
-      const { data } = await caAPI.comparatif({ date_debut: dateDebut, date_fin: dateFin, n: 5 });
+      const { data } = await caAPI.comparatifRefresh({ date_debut: dateDebut, date_fin: dateFin, n: 5 });
       setData(data);
+      if (data.refresh) {
+        setRefreshInfo(
+          `Miroir Karlia rafraîchi : ${data.refresh.nb_retenues} facture(s) retenue(s)` +
+          `, ${data.refresh.nb_annulees} annulée(s) exclue(s).`
+        );
+      }
     } catch (e) {
-      setError(e?.response?.data?.detail || 'Erreur lors du calcul du chiffre d’affaires.');
+      setError(e?.response?.data?.detail || 'Erreur lors du rafraîchissement / calcul du chiffre d’affaires.');
     } finally {
       setLoading(false);
     }
   }, [dateDebut, dateFin]);
 
   useEffect(() => {
-    charger();
+    calculer();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  const rafraichirKarlia = async () => {
-    setRefreshing(true);
-    setRefreshInfo('');
-    setError('');
-    try {
-      const { data } = await caAPI.rafraichirKarlia();
-      setRefreshInfo(
-        `Miroir Karlia rafraîchi : ${data.nb_retenues} factures retenues ` +
-        `(${data.nb_annulees} annulée(s) exclue(s)).`
-      );
-      await charger();
-    } catch (e) {
-      setError(e?.response?.data?.detail || 'Échec du rafraîchissement Karlia.');
-    } finally {
-      setRefreshing(false);
-    }
-  };
 
   const lignes = data?.comparatif || [];
   const maxTotal = lignes.reduce((m, l) => Math.max(m, l.ca_total || 0), 0) || 1;
@@ -81,6 +68,7 @@ export default function ChiffreAffaires() {
       <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
         Comparatif sur une fenêtre de dates et les 5 exercices précédents (même période calendaire).
         Sources : factures historiques (n° ≤ 8900) et ventes Karlia (n° 8901+, hors annulées).
+        Le calcul rafraîchit automatiquement les ventes Karlia.
       </Typography>
 
       <Paper sx={{ p: 2, mb: 3 }}>
@@ -89,19 +77,11 @@ export default function ChiffreAffaires() {
             onChange={(e) => setDateDebut(e.target.value)} InputLabelProps={{ shrink: true }} />
           <TextField label="Date de fin" type="date" size="small" value={dateFin}
             onChange={(e) => setDateFin(e.target.value)} InputLabelProps={{ shrink: true }} />
-          <Button variant="contained" onClick={charger} disabled={loading}>
-            {loading ? <CircularProgress size={22} /> : 'Calculer'}
+          <Button variant="contained" onClick={calculer} disabled={loading} sx={{ minWidth: 230 }}>
+            {loading
+              ? <><CircularProgress size={20} sx={{ mr: 1 }} />Rafraîchissement Karlia puis calcul…</>
+              : 'Calculer'}
           </Button>
-          <Box sx={{ flexGrow: 1 }} />
-          <Tooltip title="Interroge Karlia et met à jour le miroir local des ventes">
-            <span>
-              <Button variant="outlined"
-                startIcon={refreshing ? <CircularProgress size={18} /> : <RefreshIcon />}
-                onClick={rafraichirKarlia} disabled={refreshing}>
-                Rafraîchir le CA Karlia
-              </Button>
-            </span>
-          </Tooltip>
         </Stack>
         {data?.karlia_last_refresh && (
           <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
