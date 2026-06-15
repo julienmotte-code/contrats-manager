@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime, date
 from sqlalchemy import (
     Column, String, Integer, SmallInteger, Numeric, Boolean, Date, DateTime, Time,
-    Text, LargeBinary, ForeignKey, CheckConstraint, UniqueConstraint, JSON
+    Text, LargeBinary, ForeignKey, CheckConstraint, UniqueConstraint, JSON, text
 )
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship
@@ -641,3 +641,20 @@ class FactureHistorique(Base):
     taux_tva = Column(Numeric(5, 2), nullable=False, server_default="20.00")
     source = Column(String, nullable=False, server_default="export_factura")
     created_at = Column(DateTime, server_default=func.now())
+
+
+class KarliaCaFactures(Base):
+    __tablename__ = "karlia_ca_factures"
+
+    id = Column(Integer, primary_key=True, index=True)
+    karlia_document_id = Column(String, unique=True, nullable=False, index=True)
+    numero = Column(String, nullable=True)
+    numero_int = Column(Integer, nullable=True, index=True)
+    date_facture = Column(Date, nullable=False, index=True)
+    exercice = Column(Integer, nullable=False, index=True)
+    montant_ht = Column(Numeric(15, 2), nullable=False)
+    montant_ttc = Column(Numeric(15, 2), nullable=True)
+    canceled = Column(Boolean, nullable=False, server_default=text("false"))
+    client_nom = Column(String, nullable=True)
+    id_opportunity = Column(String, nullable=True)
+    refreshed_at = Column(DateTime, nullable=False, server_default=func.now())
