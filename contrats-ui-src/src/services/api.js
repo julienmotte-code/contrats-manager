@@ -44,6 +44,11 @@ export const facturationAPI = {
 export const dashboardAPI = {
   stats: () => api.get('/api/dashboard/stats'),
 };
+export const caAPI = {
+  comparatif: (params) => api.get('/api/ca/comparatif', { params }),
+  comparatifRefresh: (params) => api.get('/api/ca/comparatif-refresh', { params }),
+  rafraichirKarlia: () => api.post('/api/ca/rafraichir-karlia'),
+};
 export const facturesFournisseursAPI = {
   facturables: (params) => api.get('/api/factures-fournisseurs/facturables', { params }),
   liste: (params) => api.get('/api/factures-fournisseurs', { params }),
