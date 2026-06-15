@@ -32,3 +32,22 @@ def rafraichir_karlia(
         return ca_service.rafraichir_karlia(db)
     except RuntimeError as e:
         raise HTTPException(status_code=502, detail=str(e))
+
+
+@router.get("/comparatif-refresh")
+def comparatif_refresh(
+    date_debut: date = Query(...),
+    date_fin: date = Query(...),
+    n: int = Query(5, ge=1, le=15),
+    db: Session = Depends(get_db),
+    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE")),
+):
+    if date_fin < date_debut:
+        raise HTTPException(status_code=400, detail="date_fin anterieure a date_debut")
+    try:
+        refresh = ca_service.rafraichir_karlia(db)
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    resultat = ca_service.calculer_comparatif(db, date_debut, date_fin, n)
+    resultat["refresh"] = refresh
+    return resultat
