@@ -31,6 +31,7 @@ import TransfertSage from './pages/TransfertSage';
 import FacturesFournisseurs from './pages/FacturesFournisseurs';
 import FactureFournisseurSelection from './pages/FactureFournisseurSelection';
 import FactureFournisseurEdition from './pages/FactureFournisseurEdition';
+import ChiffreAffaires from './pages/ChiffreAffaires';
 
 function PrivateRoute({ children }) {
   const { user, loading } = useAuth();
@@ -85,6 +86,7 @@ function AppRoutes() {
       <Route path="/factures-fournisseurs/nouvelle" element={<PrivateRoute><FactureFournisseurSelection /></PrivateRoute>} />
       <Route path="/factures-fournisseurs/:id" element={<PrivateRoute><FactureFournisseurEdition /></PrivateRoute>} />
       <Route path="/comptabilite/transfert-sage" element={<PrivateRoute><TransfertSage /></PrivateRoute>} />
+      <Route path="/chiffre-affaires" element={<PrivateRoute><ChiffreAffaires /></PrivateRoute>} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );

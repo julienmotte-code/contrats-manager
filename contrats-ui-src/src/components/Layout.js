@@ -23,6 +23,7 @@ const MENU_COMPLET = [
   { path: '/chorus-pro', label: 'Chorus Pro', icon: '📤', droit: 'facturation' },
   { type: 'separator', label: 'Comptabilite' },
   { path: '/comptabilite/transfert-sage', label: 'Transfert Sage', icon: '🔁', droit: null, allowedRoles: ['ADMIN', 'GESTIONNAIRE'] },
+  { path: '/chiffre-affaires', label: "Chiffre d'affaires", icon: '📊', droit: null, allowedRoles: ['ADMIN', 'GESTIONNAIRE'] },
   { type: 'separator', label: 'Administration' },
   { path: '/parametres', label: 'Paramètres', icon: '⚙️', droit: 'parametres' },
   { path: '/formateurs', label: 'Formateurs', icon: '👨‍🏫', droit: 'utilisateurs' },
