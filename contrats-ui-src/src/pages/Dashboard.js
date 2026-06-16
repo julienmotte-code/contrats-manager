@@ -128,6 +128,7 @@ function BanniereSiret({ titre, intro, items, couleur, renduLigne }) {
 export default function Dashboard() {
   const { user } = useAuth();
   const peutSynchro = ['ADMIN', 'GESTIONNAIRE'].includes(user?.role);
+  const peutModifier = ['ADMIN', 'GESTIONNAIRE'].includes(user?.role);
 
   const [stats, setStats] = useState(null);
   const [indice, setIndice] = useState(null);
@@ -218,8 +219,8 @@ export default function Dashboard() {
 
   return (
     <div className="space-y-6">
-      {/* Bannière anomalies SIRET (dernière synchro Karlia) */}
-      {stats?.siret_errors?.length > 0 && (() => {
+      {/* Bannière anomalies SIRET (dernière synchro Karlia) — masquée pour la Direction */}
+      {peutSynchro && stats?.siret_errors?.length > 0 && (() => {
         const malformed = stats.siret_errors.filter(e => e.type === 'malformed');
         const missing = stats.siret_errors.filter(e => e.type === 'missing');
         return (
@@ -254,10 +255,12 @@ export default function Dashboard() {
           <h1 className="text-2xl font-bold text-gray-900">Tableau de bord</h1>
           <p className="text-gray-500 text-sm mt-1">{format(new Date(), "EEEE d MMMM yyyy", { locale: fr })}</p>
         </div>
-        <div className="flex gap-3">
-          <Link to="/contrats/tunnel?mode=nouveau" className="btn-primary">➕ Nouveau contrat</Link>
-          <Link to="/indices" className="btn-secondary">📈 Saisir un indice</Link>
-        </div>
+        {peutModifier && (
+          <div className="flex gap-3">
+            <Link to="/contrats/tunnel?mode=nouveau" className="btn-primary">➕ Nouveau contrat</Link>
+            <Link to="/indices" className="btn-secondary">📈 Saisir un indice</Link>
+          </div>
+        )}
       </div>
 
       {/* Bandeau synchro */}

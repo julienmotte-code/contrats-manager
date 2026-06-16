@@ -46,6 +46,16 @@ const MENU_TECHNICIEN = [
   { path: '/contrats', label: 'Contrats techniques', icon: '📄', droit: null },
 ];
 
+// Menu direction : consultation (lecture seule). droit:null car la source de menu
+// fait déjà le gating par rôle (pas d'allowedRoles ici).
+const MENU_DIRECTION = [
+  { path: '/', label: 'Tableau de bord', icon: '🏠', droit: null },
+  { path: '/contrats', label: 'Liste des contrats', icon: '📄', droit: null },
+  { path: '/renouvellements', label: 'Renouvellements', icon: '🔄', droit: null },
+  { path: '/clients', label: 'Clients', icon: '🏢', droit: null },
+  { path: '/chiffre-affaires', label: "Chiffre d'affaires", icon: '📊', droit: null },
+];
+
 export default function Layout({ children }) {
   const { user, droits, logout } = useAuth();
   const location = useLocation();
@@ -56,6 +66,8 @@ export default function Layout({ children }) {
     menuSource = MENU_FORMATEUR;
   } else if (user?.role === 'TECHNICIEN') {
     menuSource = MENU_TECHNICIEN;
+  } else if (user?.role === 'DIRECTION') {
+    menuSource = MENU_DIRECTION;
   } else {
     menuSource = MENU_COMPLET;
   }

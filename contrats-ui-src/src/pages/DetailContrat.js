@@ -4,6 +4,7 @@ import { contratsAPI } from '../services/api';
 import api from '../services/api';
 import { format } from 'date-fns';
 import toast from 'react-hot-toast';
+import { useAuth } from '../context/AuthContext';
 
 function StatutBadge({ statut }) {
   const map = { EN_COURS: <span className="badge-green">En cours</span>, A_RENOUVELER: <span className="badge-orange">À renouveler</span>, TERMINE: <span className="badge-gray">Terminé</span>, BROUILLON: <span className="badge-blue">Brouillon</span> };
@@ -13,6 +14,8 @@ function StatutBadge({ statut }) {
 export default function DetailContrat() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const { user } = useAuth();
+  const peutModifier = ['ADMIN', 'GESTIONNAIRE'].includes(user?.role);
   const [contrat, setContrat] = useState(null);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
@@ -129,8 +132,8 @@ export default function DetailContrat() {
         </div>
         <div className="flex gap-2">
           <Link to="/contrats" className="btn-secondary text-sm">← Retour</Link>
-          {contrat.statut === 'BROUILLON' && <Link to={`/contrats/${id}/modifier`} className="btn-secondary text-sm">✏️ Modifier</Link>}
-          {contrat.statut === 'BROUILLON' && (<>
+          {peutModifier && contrat.statut === 'BROUILLON' && <Link to={`/contrats/${id}/modifier`} className="btn-secondary text-sm">✏️ Modifier</Link>}
+          {peutModifier && contrat.statut === 'BROUILLON' && (<>
             <button onClick={supprimer} disabled={actionLoading} className="btn-danger text-sm">🗑️ Supprimer</button>
             {contrat.prorate_annee1 && !contrat.prorate_validated && (
               <button onClick={validerProrata} disabled={prorataValidating} className="btn-secondary text-sm">✅ Valider le prorata</button>
@@ -140,7 +143,7 @@ export default function DetailContrat() {
               ✅ Valider le contrat
             </button>
           </>)}
-          {contrat.statut === 'EN_COURS' && (<>
+          {peutModifier && contrat.statut === 'EN_COURS' && (<>
             {contrat.famille_contrat === 'DIVERS' && (
               <button onClick={genererBrouillon} disabled={generationEnCours} className="btn-primary text-sm disabled:opacity-50">
                 {generationEnCours ? '⟳ Génération...' : '🧾 Générer facture brouillon Karlia'}
@@ -212,7 +215,7 @@ export default function DetailContrat() {
       <div className="card space-y-4">
         <div className="flex items-center justify-between border-b pb-2">
           <h2 className="font-semibold text-gray-900">📄 Contrat papier</h2>
-          {contrat.famille_contrat !== 'DIVERS' && (
+          {peutModifier && contrat.famille_contrat !== 'DIVERS' && (
             <button onClick={genererDocument} disabled={generatingDoc} className="btn-primary text-sm disabled:opacity-50">
               {generatingDoc ? '⟳ Génération...' : '📄 Générer le contrat Word'}
             </button>
@@ -240,7 +243,7 @@ export default function DetailContrat() {
         )}
       </div>
 
-      {showTerminer && (
+      {peutModifier && showTerminer && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
           <div className="bg-white rounded-xl p-6 w-full max-w-md space-y-4">
             <h3 className="font-bold text-gray-900 text-lg">🚫 Terminer le contrat</h3>
@@ -251,7 +254,7 @@ export default function DetailContrat() {
         </div>
       )}
 
-      {showRenouveler && (
+      {peutModifier && showRenouveler && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
           <div className="bg-white rounded-xl p-6 w-full max-w-md space-y-4">
             <h3 className="font-bold text-gray-900 text-lg">🔄 Renouveler le contrat</h3>

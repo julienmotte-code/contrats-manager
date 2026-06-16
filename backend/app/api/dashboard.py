@@ -42,7 +42,7 @@ def _label_famille(code: str) -> str:
 @router.get("/stats")
 def dashboard_stats(
     db: Session = Depends(get_db),
-    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE")),
+    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE", "DIRECTION")),
 ):
     """
     Retourne l'ensemble des statistiques pour la page d'accueil.

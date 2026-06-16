@@ -16,7 +16,7 @@ def comparatif(
     date_fin: date = Query(...),
     n: int = Query(5, ge=1, le=15),
     db: Session = Depends(get_db),
-    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE")),
+    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE", "DIRECTION")),
 ):
     if date_fin < date_debut:
         raise HTTPException(status_code=400, detail="date_fin anterieure a date_debut")
@@ -26,7 +26,7 @@ def comparatif(
 @router.post("/rafraichir-karlia")
 def rafraichir_karlia(
     db: Session = Depends(get_db),
-    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE")),
+    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE", "DIRECTION")),
 ):
     try:
         return ca_service.rafraichir_karlia(db)
@@ -40,7 +40,7 @@ def comparatif_refresh(
     date_fin: date = Query(...),
     n: int = Query(5, ge=1, le=15),
     db: Session = Depends(get_db),
-    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE")),
+    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE", "DIRECTION")),
 ):
     if date_fin < date_debut:
         raise HTTPException(status_code=400, detail="date_fin anterieure a date_debut")
