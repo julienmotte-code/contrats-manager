@@ -11,6 +11,7 @@ import logging
 from app.core.database import get_db
 from app.core.security import require_role
 from app.models.models import Contrat, Commande
+from app.services import ca_service
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -50,7 +51,7 @@ def dashboard_stats(
     Forme de la réponse :
     {
       "total_contrats": int,
-      "ca_annuel_ht": float,
+      "ca_annuel_ht": float,   # CA facturé réel 01/01 → aujourd'hui (historique + miroir Karlia)
       "a_renouveler_ce_mois": int,
       "contrats_par_famille": [
         { "code": str, "label": str, "total": int, "montant_annuel_ht": float }
@@ -61,7 +62,9 @@ def dashboard_stats(
         "a_planifier": int,
         "planifiees": int,
         "facturees": int
-      }
+      },
+      "ca_karlia_refreshed_at": str|None,  # ISO du dernier rafraîchissement du miroir Karlia
+      "ca_karlia_stale": bool              # True si Karlia indisponible et miroir non rafraîchi
     }
     """
     aujourd_hui = date.today()
@@ -71,13 +74,6 @@ def dashboard_stats(
     # ── KPI globaux : contrats EN_COURS ─────────────────────
     total_contrats = (
         db.query(func.count(Contrat.id))
-        .filter(Contrat.statut == "EN_COURS")
-        .scalar()
-        or 0
-    )
-
-    ca_annuel_ht = (
-        db.query(func.coalesce(func.sum(Contrat.montant_annuel_ht), 0))
         .filter(Contrat.statut == "EN_COURS")
         .scalar()
         or 0
@@ -139,10 +135,18 @@ def dashboard_stats(
         "facturees": int(commandes_rows.get("facturee", 0)),
     }
 
+    # ── CA facturé réel (année en cours) via miroir Karlia + historique ─
+    # Rafraîchissement paresseux : on ne sollicite Karlia que si le miroir
+    # est périmé ; sinon repli silencieux sur le dernier total connu.
+    refresh_etat = ca_service.rafraichir_si_perime(db)
+    ca = ca_service.ca_annee_en_cours(db)
+
     return {
         "total_contrats": int(total_contrats),
-        "ca_annuel_ht": float(ca_annuel_ht),
+        "ca_annuel_ht": float(ca["ca_total"]),
         "a_renouveler_ce_mois": int(a_renouveler),
         "contrats_par_famille": contrats_par_famille,
         "commandes_par_statut": commandes_par_statut,
+        "ca_karlia_refreshed_at": refresh_etat["refreshed_at"],
+        "ca_karlia_stale": refresh_etat["stale"],
     }
