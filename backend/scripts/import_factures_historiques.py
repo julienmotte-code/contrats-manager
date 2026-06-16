@@ -47,7 +47,7 @@ def main():
             FactureHistorique.source == SOURCE
         ).one()
         print(f"\nCONTRÔLE DB : {n} lignes | CA HT total = {ca}")
-        print("(attendu : 8838 lignes | 16122432.21)")
+        print("(attendu : 8900 lignes | 16241162.99)")
         rows = db.query(
             FactureHistorique.exercice, F.count(FactureHistorique.id), F.sum(FactureHistorique.montant_ht)
         ).filter(FactureHistorique.source == SOURCE).group_by(
