@@ -226,3 +226,32 @@ Avant le chantier 1.4 (mai 2026), toutes les évolutions de schéma se faisaient
 à la main, ce qui a produit 8 divergences `models.py` ↔ DB (cf. `AUDIT_REFONTE.md`
 § 2.19). Alembic versionne désormais chaque changement et permet un rollback
 sûr en cas d'incident.
+
+---
+
+## 13. RÔLES — 4 COPIES À SYNCHRONISER
+
+### Règle absolue
+La notion de rôle est dupliquée à **4 endroits**. Tout ajout ou modification d'un rôle doit être répercuté dans les 4 — un seul oubli provoque une incohérence silencieuse (le rôle existe mais ne fonctionne qu'à moitié).
+
+1. `backend/app/core/security.py` → tuple `ROLES`.
+   ⚠️ Si on appelle `require_role("NOUVEAU", …)` sans avoir ajouté le rôle ici, le backend **ne démarre plus** (ValueError levée à l'import).
+2. `backend/app/api/utilisateurs.py` → **DEUX** déclarations dans le même fichier :
+   - liste `ROLES` (validation create/update user + champ `roles_disponibles` de l'API) ;
+   - matrice `DROITS` (ajouter une entrée pour le nouveau rôle).
+   Oublier `DROITS` → fallback "FORMATEUR" côté API.
+3. `contrats-ui-src/src/context/AuthContext.js` → `getDroitsByRole(role)`.
+   C'est CE switch qui pilote réellement l'UI (il n'appelle PAS l'endpoint `/droits`). Rôle absent → tous droits `false` par défaut.
+4. `contrats-ui-src/src/pages/Utilisateurs.js` → constante `ROLES` en dur.
+   Alimente le `<select>` de création d'utilisateur ET le badge coloré (`roleInfo`, fallback `ROLES[3]`). Oublier ici = le rôle **n'apparaît pas dans la déroulante** (cas vécu chantier DIRECTION) et un user déjà en base s'affiche avec le mauvais badge.
+
+### Pas de migration Alembic
+`utilisateurs.role` = `String(30)` libre, aucun CheckConstraint, aucun Enum. La contrainte sur les valeurs de rôle est **purement applicative** (les 4 copies ci-dessus). Ajouter un rôle ne nécessite donc AUCUNE migration.
+
+### Rôle consultatif (lecture seule)
+Pour un rôle de consultation : dans `DROITS` et `getDroitsByRole`, tout à `false` SAUF les clés de lecture réellement consommées par ses écrans (ne pas activer un flag « au cas où » — ex. `toutes_prestations` élargit une visibilité non voulue). Côté front, masquer les boutons d'écriture avec le pattern :
+`const peutModifier = ['ADMIN','GESTIONNAIRE'].includes(user?.role);` puis `{peutModifier && (…)}`.
+Côté backend, NE PAS étendre les `require_role` des routes POST/PUT/DELETE à ce rôle — la barrière 403 reste la vraie sécurité.
+
+### Par ailleurs (lié, mais hors des 4 copies)
+Un rôle à **menu dédié** (comme DIRECTION) nécessite aussi une branche dans `contrats-ui-src/src/components/Layout.js` : une constante `MENU_<RÔLE>` + un aiguillage par rôle. Ce n'est pas une copie de la matrice de rôles, mais à ne pas oublier pour que le menu reflète le périmètre voulu.
