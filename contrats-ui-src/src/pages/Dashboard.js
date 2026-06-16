@@ -40,6 +40,10 @@ function KPI({ label, value, icon, color }) {
 function FamilleCard({ famille }) {
   const meta = FAMILLE_META[famille.code] || FAMILLE_DEFAULT;
   const montant = (famille.montant_annuel_ht || 0).toLocaleString('fr-FR', { maximumFractionDigits: 0 });
+  // Un avenant = numéro de contrat commençant par "AV". Le gros chiffre
+  // affiche les contrats HORS avenants ; les avenants sont en mention secondaire.
+  const nbContrats = famille.nb_contrats != null ? famille.nb_contrats : famille.total;
+  const nbAvenants = famille.nb_avenants || 0;
   return (
     <Link
       to={`/contrats?famille=${encodeURIComponent(famille.code)}`}
@@ -47,10 +51,17 @@ function FamilleCard({ famille }) {
     >
       <div className="flex items-center justify-between mb-2">
         <span className="text-2xl">{meta.icon}</span>
-        <span className="text-2xl font-bold">{famille.total}</span>
+        <span className="text-2xl font-bold">{nbContrats}</span>
       </div>
       <div className="text-sm font-medium truncate">{famille.label}</div>
-      <div className="text-xs opacity-75 mt-1">{montant} € HT/an</div>
+      <div className="flex items-center justify-between gap-2 mt-1">
+        <span className="text-xs opacity-75">{montant} € HT/an</span>
+        {nbAvenants > 0 && (
+          <span className="text-xs font-medium opacity-90 whitespace-nowrap">
+            + {nbAvenants} avenant{nbAvenants > 1 ? 's' : ''}
+          </span>
+        )}
+      </div>
     </Link>
   );
 }

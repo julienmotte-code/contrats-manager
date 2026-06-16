@@ -55,7 +55,8 @@ def dashboard_stats(
       "ca_annuel_ht": float,   # CA facturé réel 01/01 → aujourd'hui (historique + miroir Karlia)
       "a_renouveler_ce_mois": int,
       "contrats_par_famille": [
-        { "code": str, "label": str, "total": int, "montant_annuel_ht": float }
+        { "code": str, "label": str, "total": int,
+          "nb_contrats": int, "nb_avenants": int, "montant_annuel_ht": float }
       ],
       "commandes_par_statut": {
         "total": int,
@@ -111,15 +112,31 @@ def dashboard_stats(
         .all()
     )
 
-    contrats_par_famille = [
-        {
+    # Avenants par famille : numero_contrat commençant par "AV" (insensible
+    # à la casse). Requête séparée pour rester compatible toutes versions
+    # SQLAlchemy (pas de case()).
+    avenants_par_famille = dict(
+        db.query(Contrat.famille_contrat, func.count(Contrat.id))
+        .filter(
+            Contrat.statut == "EN_COURS",
+            Contrat.numero_contrat.ilike("AV%"),
+        )
+        .group_by(Contrat.famille_contrat)
+        .all()
+    )
+
+    contrats_par_famille = []
+    for code, total, montant in familles_rows:
+        nb_avenants = int(avenants_par_famille.get(code, 0))
+        total_int = int(total)
+        contrats_par_famille.append({
             "code": code or "NON_CLASSE",
             "label": _label_famille(code),
-            "total": int(total),
+            "total": total_int,
+            "nb_avenants": nb_avenants,
+            "nb_contrats": total_int - nb_avenants,
             "montant_annuel_ht": float(montant or 0),
-        }
-        for code, total, montant in familles_rows
-    ]
+        })
 
     # ── Commandes par statut ────────────────────────────────
     commandes_rows = dict(
