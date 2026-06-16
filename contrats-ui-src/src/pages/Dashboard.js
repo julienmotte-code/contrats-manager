@@ -83,6 +83,36 @@ function Etape({ label, etat }) {
   );
 }
 
+// ─── Bannière SIRET repliable (intitulé + 3 lignes max) ──────
+const LIMITE_SIRET = 3;
+
+function BanniereSiret({ titre, intro, items, couleur, renduLigne }) {
+  const [ouvert, setOuvert] = useState(false);
+  const palette = couleur === 'red'
+    ? { border: 'border-red-300', bg: 'bg-red-50', text: 'text-red-700' }
+    : { border: 'border-amber-300', bg: 'bg-amber-50', text: 'text-amber-700' };
+  const visibles = ouvert ? items : items.slice(0, LIMITE_SIRET);
+  const reste = items.length - LIMITE_SIRET;
+  return (
+    <div className={`rounded-lg border ${palette.border} ${palette.bg} p-4`}>
+      <p className={`font-semibold ${palette.text} mb-1`}>{titre}</p>
+      {intro && <p className={`text-sm ${palette.text} mb-1`}>{intro}</p>}
+      <ul className={`list-disc pl-5 space-y-0.5 text-sm ${palette.text}`}>
+        {visibles.map((e, i) => <li key={i}>{renduLigne(e)}</li>)}
+      </ul>
+      {reste > 0 && (
+        <button
+          type="button"
+          onClick={() => setOuvert(!ouvert)}
+          className={`mt-2 text-sm font-medium underline ${palette.text}`}
+        >
+          {ouvert ? 'Afficher moins' : `Afficher plus (${reste} de plus)`}
+        </button>
+      )}
+    </div>
+  );
+}
+
 // ─── Page Dashboard ──────────────────────────────────────────
 export default function Dashboard() {
   const { user } = useAuth();
@@ -177,6 +207,36 @@ export default function Dashboard() {
 
   return (
     <div className="space-y-6">
+      {/* Bannière anomalies SIRET (dernière synchro Karlia) */}
+      {stats?.siret_errors?.length > 0 && (() => {
+        const malformed = stats.siret_errors.filter(e => e.type === 'malformed');
+        const missing = stats.siret_errors.filter(e => e.type === 'missing');
+        return (
+          <div className="mb-4 space-y-3">
+            {malformed.length > 0 && (
+              <BanniereSiret
+                couleur="red"
+                titre={`SIRET mal formaté dans Karlia : ${malformed.length} client(s) non synchronisé(s)`}
+                items={malformed}
+                renduLigne={(e) => (
+                  <>Le SIRET « {e.siret} » du client {e.nom} est mal formaté dans Karlia : sa fiche n'est plus
+                  synchronisée. Corriger dans Karlia puis relancer la synchronisation.</>
+                )}
+              />
+            )}
+            {missing.length > 0 && (
+              <BanniereSiret
+                couleur="amber"
+                titre={`SIRET manquant dans Karlia : ${missing.length} client(s) à compléter`}
+                intro="Ces fiches sont synchronisées mais sans SIRET. À renseigner dans Karlia pour la facturation / Chorus Pro :"
+                items={missing}
+                renduLigne={(e) => e.nom}
+              />
+            )}
+          </div>
+        );
+      })()}
+
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>

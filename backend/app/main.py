@@ -12,9 +12,20 @@ from app.core.config import settings
 from app.core.database import engine, Base, SessionLocal
 from app.core.security import require_authenticated, require_role
 from app.services.karlia_service import karlia
+from app.services import synchro_state
 from app.models.models import ClientCache, ArticleCache, Parametre
 
 Base.metadata.create_all(bind=engine)
+
+
+def _siret_valide(siret_brut):
+    """SIRET valide = exactement 14 chiffres TELS QUE RECUS (aucun espace, aucun nettoyage).
+    Retourne True/False uniquement. La valeur stockee est le SIRET brut (deja propre par definition).
+    """
+    if siret_brut is None:
+        return False
+    s = str(siret_brut)
+    return len(s) == 14 and s.isdigit()
 
 app = FastAPI(
     title="Module Gestion Contrats",
@@ -65,6 +76,8 @@ async def synchro_karlia():
         return
 
     print(f"[SYNCHRO] Démarrage synchro Karlia — {datetime.now().strftime('%d/%m/%Y %H:%M')}")
+    # Réinitialise l'état mémoire (liste des SIRET rejetés) au début de chaque synchro.
+    synchro_state.reset_synchro()
     db = SessionLocal()
     total_clients = 0
     total_articles = 0
@@ -82,26 +95,49 @@ async def synchro_karlia():
                 numero = str(c.get("client_number", "") or "").strip()
                 if not numero:
                     numero = f"K{karlia_id}"
+                nom = c.get("title") or c.get("name") or "(sans nom)"
+                siret_brut = c.get("siret")
+                siret_vide = siret_brut in (None, "")
+
+                if siret_vide:
+                    # SIRET absent : on signale MAIS on synchronise la fiche (siret=None).
+                    synchro_state.ajouter_siret_errone(nom, "(vide)", type_erreur="missing")
+                    siret_a_ecrire = None
+                elif _siret_valide(siret_brut):
+                    siret_a_ecrire = siret_brut          # 14 chiffres, stockes tels quels
+                else:
+                    # SIRET present mais mal formate : on signale ET on GELE la fiche (aucune ecriture).
+                    synchro_state.ajouter_siret_errone(nom, siret_brut, type_erreur="malformed")
+                    continue
+
                 addr = next((a for a in c.get("address_list", []) if a.get("type") == "main"), {})
                 existing = db.query(ClientCache).filter(ClientCache.karlia_id == karlia_id).first()
                 data = dict(
                     karlia_id=karlia_id, numero_client=numero,
-                    nom=c.get("title", c.get("name", "")),
+                    nom=nom,
                     adresse_ligne1=addr.get("address"), code_postal=addr.get("zip_code"),
                     ville=addr.get("city"), pays=addr.get("country", "France"),
                     email=c.get("email"), telephone=c.get("phone"), mobile=c.get("mobile"),
-                    siret=c.get("siret"), tva_intracom=c.get("vat_number"),
+                    siret=siret_a_ecrire, tva_intracom=c.get("vat_number"),
                     forme_juridique=c.get("legal_form"),
                 )
-                if existing:
-                    for k, v in data.items():
-                        setattr(existing, k, v)
-                else:
-                    num_exists = db.query(ClientCache).filter(ClientCache.numero_client == numero).first()
-                    if num_exists:
-                        data["numero_client"] = f"K{karlia_id}"
-                    db.add(ClientCache(**data))
-                total_clients += 1
+                try:
+                    with db.begin_nested():   # SAVEPOINT : filet pour tout AUTRE rejet de ligne (colonne)
+                        if existing:
+                            for k, v in data.items():
+                                setattr(existing, k, v)
+                        else:
+                            num_exists = db.query(ClientCache).filter(ClientCache.numero_client == numero).first()
+                            if num_exists:
+                                data["numero_client"] = f"K{karlia_id}"
+                            db.add(ClientCache(**data))
+                    total_clients += 1
+                except Exception as e:
+                    # Filet : tout autre rejet ligne. begin_nested() a deja fait ROLLBACK TO SAVEPOINT ; pas de
+                    # db.rollback() global (jetterait les clients sains de la page).
+                    synchro_state.ajouter_siret_errone(nom, siret_brut or "(vide)", type_erreur="malformed")
+                    print(f"[SYNCHRO] Client skippe (rejet ligne) : {nom} — {e}")
+                    continue
             db.commit()
             if len(clients_data) < limit:
                 break

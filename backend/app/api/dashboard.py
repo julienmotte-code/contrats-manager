@@ -12,6 +12,7 @@ from app.core.database import get_db
 from app.core.security import require_role
 from app.models.models import Contrat, Commande
 from app.services import ca_service
+from app.services import synchro_state
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -149,4 +150,5 @@ def dashboard_stats(
         "commandes_par_statut": commandes_par_statut,
         "ca_karlia_refreshed_at": refresh_etat["refreshed_at"],
         "ca_karlia_stale": refresh_etat["stale"],
+        "siret_errors": synchro_state.get_synchro_state()["siret_errors"],
     }
