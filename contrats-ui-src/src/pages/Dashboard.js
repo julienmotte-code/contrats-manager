@@ -222,7 +222,7 @@ export default function Dashboard() {
           color="bg-blue-50"
         />
         <KPI
-          label="CA annuel HT"
+          label="CA facturé HT (année en cours)"
           value={`${caAnnuel.toLocaleString('fr-FR', { maximumFractionDigits: 0 })} €`}
           icon="💶"
           color="bg-green-50"
@@ -234,6 +234,14 @@ export default function Dashboard() {
           color="bg-orange-50"
         />
       </div>
+
+      {stats?.ca_karlia_refreshed_at && (
+        <p className="text-xs text-gray-400 mt-1">
+          CA facturé (année en cours) — données Karlia du{' '}
+          {new Date(stats.ca_karlia_refreshed_at).toLocaleString('fr-FR')}
+          {stats.ca_karlia_stale && ' (non rafraîchi — Karlia indisponible)'}
+        </p>
+      )}
 
       {/* Contrats par famille */}
       <div className="card">
