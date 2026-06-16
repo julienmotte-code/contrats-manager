@@ -19,7 +19,7 @@ historique.
 """
 import re
 import time
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 
 import httpx
@@ -180,4 +180,57 @@ def calculer_comparatif(db: Session, date_debut: date, date_fin: date, n_exercic
         "reference": lignes[0],
         "comparatif": lignes,  # [0] = exercice de reference, puis anterieurs
         "karlia_last_refresh": last.isoformat() if last else None,
+    }
+
+
+DEFAUT_INTERVALLE_HEURES = 2
+
+
+def _intervalle_refresh_heures(db: Session) -> float:
+    p = db.query(Parametre).filter(Parametre.cle == "ca_refresh_interval_heures").first()
+    if p and p.valeur:
+        try:
+            return max(0.0, float(str(p.valeur).replace(",", ".")))
+        except ValueError:
+            pass
+    return float(DEFAUT_INTERVALLE_HEURES)
+
+
+def rafraichir_si_perime(db: Session) -> dict:
+    """Rafraichit le miroir Karlia uniquement s'il est plus vieux que l'intervalle configure.
+    Ne leve jamais : en cas d'echec Karlia, on conserve le dernier miroir connu (repli silencieux).
+    Retourne l'etat : {refreshed: bool, stale: bool, refreshed_at: iso|None, raison: str}.
+    """
+    dernier = db.query(func.max(KarliaCaFactures.refreshed_at)).scalar()
+    intervalle = _intervalle_refresh_heures(db)
+    perime = (dernier is None) or (datetime.utcnow() - dernier >= timedelta(hours=intervalle))
+
+    if not perime:
+        return {"refreshed": False, "stale": False,
+                "refreshed_at": dernier.isoformat() if dernier else None, "raison": "cache_frais"}
+
+    try:
+        rafraichir_karlia(db)
+        nouveau = db.query(func.max(KarliaCaFactures.refreshed_at)).scalar()
+        return {"refreshed": True, "stale": False,
+                "refreshed_at": nouveau.isoformat() if nouveau else None, "raison": "rafraichi"}
+    except Exception as e:
+        # Repli silencieux : on garde le dernier miroir. stale=True seulement s'il existait deja des donnees.
+        return {"refreshed": False, "stale": dernier is not None,
+                "refreshed_at": dernier.isoformat() if dernier else None,
+                "raison": f"echec_karlia:{type(e).__name__}"}
+
+
+def ca_annee_en_cours(db: Session) -> dict:
+    """CA facture reel du 1er janvier de l'annee courante a aujourd'hui (= reference du comparatif)."""
+    today = date.today()
+    res = calculer_comparatif(db, date(today.year, 1, 1), today, n_exercices=0)
+    ref = res["reference"]
+    return {
+        "ca_total": ref["ca_total"],
+        "ca_historique": ref["ca_historique"],
+        "ca_karlia": ref["ca_karlia"],
+        "exercice": today.year,
+        "date_debut": res["comparatif"][0]["date_debut"],
+        "date_fin": res["comparatif"][0]["date_fin"],
     }
