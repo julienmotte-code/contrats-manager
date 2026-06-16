@@ -40,6 +40,7 @@ export default function Contrats() {
   const limit = 20;
 
   const isTechnicien = user?.role === 'TECHNICIEN';
+  const peutModifier = ['ADMIN', 'GESTIONNAIRE'].includes(user?.role);
 
   // Lire le filtre famille depuis l'URL ou le state
   const [filtreFamille, setFiltreFamille] = useState(searchParams.get('famille') || '');
@@ -156,7 +157,7 @@ export default function Contrats() {
             {isTechnicien && ' — Maintenance, Digitech, Kiwi Backup'}
           </p>
         </div>
-        {!isTechnicien && (
+        {peutModifier && (
           <Link to="/contrats/nouveau" className="btn-primary">➕ Nouveau contrat</Link>
         )}
       </div>

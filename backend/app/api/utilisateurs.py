@@ -12,11 +12,12 @@ router = APIRouter()
 def get_password_hash(password: str) -> str:
     return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
 
-ROLES = ["ADMIN", "GESTIONNAIRE", "FORMATEUR", "TECHNICIEN"]
+ROLES = ["ADMIN", "GESTIONNAIRE", "FORMATEUR", "TECHNICIEN", "DIRECTION"]
 
 DROITS = {
     "ADMIN":        {"contrats_ecriture": True,  "contrats_lecture": True,  "facturation": True,  "indices": True,  "commandes": True,  "parametres": True,  "utilisateurs": True,  "formateurs": True,  "toutes_prestations": True},
     "GESTIONNAIRE": {"contrats_ecriture": True,  "contrats_lecture": True,  "facturation": True,  "indices": True,  "commandes": True,  "parametres": False, "utilisateurs": False, "formateurs": True,  "toutes_prestations": True},
+    "DIRECTION":    {"contrats_ecriture": False, "contrats_lecture": True,  "facturation": False, "indices": False, "commandes": False, "parametres": False, "utilisateurs": False, "formateurs": False, "toutes_prestations": False},
     "FORMATEUR":    {"contrats_ecriture": False, "contrats_lecture": False, "facturation": False, "indices": False, "commandes": False, "parametres": False, "utilisateurs": False, "formateurs": False, "toutes_prestations": False},
     "TECHNICIEN":   {"contrats_ecriture": False, "contrats_lecture": True,  "facturation": False, "indices": False, "commandes": False, "parametres": False, "utilisateurs": False, "formateurs": False, "toutes_prestations": False},
 }

@@ -29,7 +29,7 @@ from app.api.auth import get_current_user
 from app.models.models import Utilisateur
 
 
-ROLES = ("ADMIN", "GESTIONNAIRE", "FORMATEUR", "TECHNICIEN")
+ROLES = ("ADMIN", "GESTIONNAIRE", "FORMATEUR", "TECHNICIEN", "DIRECTION")
 
 
 def require_authenticated(

@@ -126,7 +126,7 @@ def contrats_a_renouveler(
     annee: Optional[int] = Query(None, description="Année, défaut = année en cours"),
     famille: Optional[str] = Query(None, description="Famille de contrat (ex: COSOLUCE)"),
     db: Session = Depends(get_db),
-    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE")),
+    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE", "DIRECTION")),
 ):
     """Liste les contrats dont la date de fin est dans le mois spécifié."""
     aujourd_hui = date.today()

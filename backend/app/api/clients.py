@@ -53,7 +53,7 @@ async def lister_clients(
     offset: int = Query(0),
     source: str = Query("cache", description="'cache' ou 'karlia'"),
     db: Session = Depends(get_db),
-    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE")),
+    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE", "DIRECTION")),
 ):
     """
     Liste les clients.
@@ -92,7 +92,7 @@ async def lister_clients(
 def rechercher_clients_cache(
     q: str = Query(..., min_length=2, description="Terme de recherche"),
     db: Session = Depends(get_db),
-    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE")),
+    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE", "DIRECTION")),
 ):
     """Recherche dans le cache local en mode contient — nom, numéro, ville, SIRET, email."""
     termes = q.strip().split()
@@ -242,7 +242,7 @@ async def creer_client(
 def fiche_client(
     karlia_id: str,
     db: Session = Depends(get_db),
-    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE")),
+    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE", "DIRECTION")),
 ):
     """
     Fiche complete d'un client : coordonnees + contrats actifs + historique termines.
@@ -322,7 +322,7 @@ def fiche_client(
 async def obtenir_client(
     karlia_id: str,
     db: Session = Depends(get_db),
-    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE")),
+    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE", "DIRECTION")),
 ):
     """Retourne le détail d'un client (cache local en priorité)."""
     client = db.query(ClientCache).filter(ClientCache.karlia_id == karlia_id).first()

@@ -3,10 +3,13 @@ import { Link, useNavigate } from 'react-router-dom';
 import api, { contratsAPI } from '../services/api';
 import { format } from 'date-fns';
 import toast from 'react-hot-toast';
+import { useAuth } from '../context/AuthContext';
 
 const moisNoms = ['Janvier','Février','Mars','Avril','Mai','Juin','Juillet','Août','Septembre','Octobre','Novembre','Décembre'];
 
 export default function Renouvellements() {
+  const { user } = useAuth();
+  const peutModifier = ['ADMIN', 'GESTIONNAIRE'].includes(user?.role);
   const [contrats, setContrats] = useState([]);
   const [loading, setLoading] = useState(true);
   const [mois, setMois] = useState(new Date().getMonth() + 1);
@@ -153,7 +156,7 @@ export default function Renouvellements() {
         </div>
       </div>
 
-      {!filtreFamille && famillesPresentes.length > 1 && (
+      {peutModifier && !filtreFamille && famillesPresentes.length > 1 && (
         <div className="flex flex-wrap gap-2 items-center">
           <span className="text-sm text-gray-500">Sélectionner par famille :</span>
           {famillesPresentes.map(code => {
@@ -171,7 +174,7 @@ export default function Renouvellements() {
         </div>
       )}
 
-      {selection.size > 0 && (
+      {peutModifier && selection.size > 0 && (
         <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 flex flex-wrap items-center gap-4">
           <div className="flex items-center gap-2 text-blue-900 font-semibold">
             <span className="inline-flex items-center justify-center w-7 h-7 rounded-full bg-blue-600 text-white text-sm font-bold">
@@ -199,14 +202,16 @@ export default function Renouvellements() {
           <thead className="bg-gray-50 border-b border-gray-200">
             <tr>
               <th className="px-4 py-3 w-10">
-                <input
-                  type="checkbox"
-                  checked={tousCoches}
-                  ref={el => { if (el) el.indeterminate = partiellementCoches; }}
-                  onChange={toutSelectionner}
-                  className="w-4 h-4 rounded border-gray-300 text-blue-600 cursor-pointer"
-                  title="Tout sélectionner"
-                />
+                {peutModifier && (
+                  <input
+                    type="checkbox"
+                    checked={tousCoches}
+                    ref={el => { if (el) el.indeterminate = partiellementCoches; }}
+                    onChange={toutSelectionner}
+                    className="w-4 h-4 rounded border-gray-300 text-blue-600 cursor-pointer"
+                    title="Tout sélectionner"
+                  />
+                )}
               </th>
               <th className="text-left px-4 py-3 font-medium text-gray-600">Contrat</th>
               <th className="text-left px-4 py-3 font-medium text-gray-600">Client</th>
@@ -227,12 +232,14 @@ export default function Renouvellements() {
                 <React.Fragment key={c.id}>
                   <tr className={`hover:bg-gray-50 transition-colors ${selection.has(c.id) ? 'bg-blue-50' : ''}`}>
                     <td className="px-4 py-3">
-                      <input
-                        type="checkbox"
-                        checked={selection.has(c.id)}
-                        onChange={() => toggleSelection(c.id)}
-                        className="w-4 h-4 rounded border-gray-300 text-blue-600 cursor-pointer"
-                      />
+                      {peutModifier && (
+                        <input
+                          type="checkbox"
+                          checked={selection.has(c.id)}
+                          onChange={() => toggleSelection(c.id)}
+                          className="w-4 h-4 rounded border-gray-300 text-blue-600 cursor-pointer"
+                        />
+                      )}
                     </td>
                     <td className="px-4 py-3 font-medium text-blue-700">
                       <Link to={`/contrats/${c.id}`} className="hover:underline">{c.numero_contrat}</Link>
@@ -248,15 +255,19 @@ export default function Renouvellements() {
                       {c.date_fin ? format(new Date(c.date_fin + 'T12:00:00'), 'dd/MM/yyyy') : '-'}
                     </td>
                     <td className="px-4 py-3 text-center">
-                      <button
-                        onClick={() => setActionId(actionId === c.id ? null : c.id)}
-                        className="btn-secondary text-xs px-3 py-1"
-                      >
-                        {actionId === c.id ? 'Fermer' : 'Traiter'}
-                      </button>
+                      {peutModifier ? (
+                        <button
+                          onClick={() => setActionId(actionId === c.id ? null : c.id)}
+                          className="btn-secondary text-xs px-3 py-1"
+                        >
+                          {actionId === c.id ? 'Fermer' : 'Traiter'}
+                        </button>
+                      ) : (
+                        <span className="text-gray-300 text-xs">—</span>
+                      )}
                     </td>
                   </tr>
-                  {actionId === c.id && (
+                  {peutModifier && actionId === c.id && (
                     <tr className="bg-orange-50">
                       <td colSpan={7} className="px-6 py-4">
                         <div className="flex flex-wrap items-center gap-4">

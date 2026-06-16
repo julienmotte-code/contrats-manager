@@ -16,6 +16,11 @@ const getDroitsByRole = (role) => {
         contrats_ecriture: true, contrats_lecture: true, facturation: true, indices: true, commandes: true,
         parametres: false, utilisateurs: false, formateurs: true, toutes_prestations: true
       };
+    case 'DIRECTION':
+      return {
+        contrats_ecriture: false, contrats_lecture: true, facturation: false, indices: false, commandes: false,
+        parametres: false, utilisateurs: false, formateurs: false, toutes_prestations: false
+      };
     case 'TECHNICIEN':
       return {
         contrats_ecriture: false, contrats_lecture: true, facturation: false, indices: false, commandes: false,

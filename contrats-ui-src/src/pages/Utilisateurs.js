@@ -7,6 +7,7 @@ const ROLES = [
   { value: 'GESTIONNAIRE', label: 'Gestionnaire', color: 'bg-blue-100 text-blue-800', description: 'Contrats + facturation + commandes' },
   { value: 'FORMATEUR', label: 'Formateur', color: 'bg-green-100 text-green-800', description: 'Accès limité à ses prestations' },
   { value: 'TECHNICIEN', label: 'Technicien', color: 'bg-purple-100 text-purple-800', description: 'Prestations + contrats techniques' },
+  { value: 'DIRECTION', label: 'Direction', color: 'bg-indigo-100 text-indigo-800', description: 'Consultation seule (contrats, renouvellements, clients, CA)' },
 ];
 
 const roleInfo = (role) => ROLES.find(r => r.value === role) || ROLES[3];
