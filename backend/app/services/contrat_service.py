@@ -8,14 +8,16 @@ from typing import List, Dict
 from dateutil.relativedelta import relativedelta
 
 
-def calculer_prorata(date_debut: date, montant_annuel_ht: Decimal, demi_mois: bool = False) -> Dict:
+def calculer_prorata(date_debut: date, montant_annuel_ht: Decimal, demi_mois: bool = False, demi_mois_moins: bool = False) -> Dict:
     """
     Calcule le prorata de la première année :
     - 1 au 15 : facturation dès ce mois
     - 16 à fin du mois : facturation dès le mois suivant
     - Option demi_mois : ajoute 1/24ème du montant annuel
+    - Option demi_mois_moins : retranche 1/24ème du montant annuel
+    Les deux options sont mutuellement exclusives.
     """
-    if date_debut.month == 1 and date_debut.day == 1 and not demi_mois:
+    if date_debut.month == 1 and date_debut.day == 1 and not demi_mois and not demi_mois_moins:
         return {
             "prorate": False,
             "nb_mois": Decimal("12"),
@@ -29,16 +31,32 @@ def calculer_prorata(date_debut: date, montant_annuel_ht: Decimal, demi_mois: bo
         mois_debut = date_debut.month + 1
         detail = f"Début le {date_debut.day}/{date_debut.month} (>15) : facturation dès le mois suivant"
     nb_mois = Decimal(str(13 - mois_debut))
-    bonus = (montant_annuel_ht / Decimal("24")).quantize(Decimal("0.01")) if demi_mois else Decimal("0")
+    demi = (montant_annuel_ht / Decimal("24")).quantize(Decimal("0.01"))
+    if demi_mois and demi_mois_moins:
+        # incohérence : ne doit jamais arriver (garde aussi côté route).
+        # Par sécurité, on neutralise l'ajustement.
+        ajustement = Decimal("0")
+    elif demi_mois:
+        ajustement = demi
+    elif demi_mois_moins:
+        ajustement = -demi
+    else:
+        ajustement = Decimal("0")
     montant_prorate = (montant_annuel_ht * nb_mois / Decimal("12")).quantize(
         Decimal("0.01"), rounding=ROUND_HALF_UP
-    ) + bonus
-    detail_final = detail + (f" + ½ mois ({bonus} €)" if demi_mois else "")
+    ) + ajustement
+    if ajustement > 0:
+        detail_final = detail + f" + ½ mois ({demi} €)"
+    elif ajustement < 0:
+        detail_final = detail + f" − ½ mois ({demi} €)"
+    else:
+        detail_final = detail
     return {
         "prorate": True,
         "nb_mois": nb_mois,
         "demi_mois": demi_mois,
-        "bonus_demi_mois": float(bonus),
+        "demi_mois_moins": demi_mois_moins,
+        "bonus_demi_mois": float(ajustement),
         "montant_ht": montant_prorate,
         "detail": detail_final,
     }

@@ -61,6 +61,8 @@ class ContratCreate(BaseModel):
     # Prorata
     prorate_validated: bool = False
     prorate_note: Optional[str] = None
+    prorate_demi_mois: bool = False
+    prorate_demi_mois_moins: bool = False
     # Hiérarchie
     type_contrat: str = "CONTRAT"
     contrat_parent_id: Optional[str] = None
@@ -178,6 +180,11 @@ def creer_contrat(
     if data.date_fin <= data.date_debut:
         raise HTTPException(400, "La date de fin doit être postérieure à la date de début")
 
+    # Garde mutuelle : les deux options demi-mois sont exclusives.
+    if data.prorate_demi_mois and data.prorate_demi_mois_moins:
+        raise HTTPException(status_code=400,
+            detail="prorate_demi_mois et prorate_demi_mois_moins ne peuvent être vrais simultanément")
+
     # Calculs
     montant_ht = Decimal(str(data.montant_annuel_ht))
     is_divers = (data.famille_contrat == "DIVERS")
@@ -190,7 +197,9 @@ def creer_contrat(
             "detail": "Famille DIVERS — dates et montant libres, aucun prorata",
         }
     else:
-        prorata = calculer_prorata(data.date_debut, montant_ht)
+        prorata = calculer_prorata(data.date_debut, montant_ht,
+                                   demi_mois=data.prorate_demi_mois,
+                                   demi_mois_moins=data.prorate_demi_mois_moins)
     nombre_annees = calculer_nombre_annees(data.date_debut, data.date_fin, data.famille_contrat)
 
     # Créer le contrat
@@ -211,6 +220,8 @@ def creer_contrat(
         # DIVERS : jamais de blocage de validation par le prorata.
         prorate_validated=True if is_divers else data.prorate_validated,
         prorate_note=data.prorate_note,
+        prorate_demi_mois=data.prorate_demi_mois,
+        prorate_demi_mois_moins=data.prorate_demi_mois_moins,
         type_contrat=data.type_contrat,
         contrat_parent_id=uuid.UUID(data.contrat_parent_id) if data.contrat_parent_id else None,
         karlia_opportunity_id=data.karlia_opportunity_id,
@@ -385,6 +396,7 @@ def modifier_contrat(
     # Champs simples
     champs = ["numero_contrat", "type_contrat", "client_karlia_id", "client_nom", "client_numero",
               "montant_annuel_ht", "prorate_validated", "prorate_note", "prorate_demi_mois",
+              "prorate_demi_mois_moins",
               "indice_reference_id", "notes_internes"]
     for champ in champs:
         if champ in data:
@@ -416,10 +428,16 @@ def modifier_contrat(
         if "date_debut" in data or "montant_annuel_ht" in data:
             from app.services.contrat_service import calculer_prorata
             from decimal import Decimal
+            plus_resolu = data.get("prorate_demi_mois", contrat.prorate_demi_mois or False)
+            moins_resolu = data.get("prorate_demi_mois_moins", contrat.prorate_demi_mois_moins or False)
+            if plus_resolu and moins_resolu:
+                raise HTTPException(status_code=400,
+                    detail="prorate_demi_mois et prorate_demi_mois_moins ne peuvent être vrais simultanément")
             prorata = calculer_prorata(
                 contrat.date_debut,
                 Decimal(str(contrat.montant_annuel_ht)),
-                data.get("prorate_demi_mois", contrat.prorate_demi_mois or False)
+                demi_mois=plus_resolu,
+                demi_mois_moins=moins_resolu,
             )
             contrat.prorate_annee1 = prorata["prorate"]
             if prorata["prorate"]:

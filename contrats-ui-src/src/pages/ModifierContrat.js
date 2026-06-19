@@ -4,19 +4,23 @@ import { contratsAPI, clientsAPI, produitsAPI, indicesAPI } from '../services/ap
 import api from '../services/api';
 import toast from 'react-hot-toast';
 
-function calculerProrata(dateDebut, montantAnnuel, demiMois) {
+function calculerProrata(dateDebut, montantAnnuel, demiMois, demiMoisMoins) {
   if (!dateDebut || !montantAnnuel) return null;
   const d = new Date(dateDebut);
   const jour = d.getDate(); const mois = d.getMonth() + 1;
-  if (mois === 1 && jour === 1 && !demiMois) return { prorate: false, nbMois: 12, montant: montantAnnuel, detail: "Début au 1er janvier — année complète" };
+  if (mois === 1 && jour === 1 && !demiMois && !demiMoisMoins) return { prorate: false, nbMois: 12, montant: montantAnnuel, detail: "Début au 1er janvier — année complète" };
   let moisDebut, regle;
   if (jour <= 15) { moisDebut = mois; regle = `Début le ${jour}/${mois} (≤15) : facturation dès ce mois`; }
   else { moisDebut = mois + 1; regle = `Début le ${jour}/${mois} (>15) : facturation dès le mois suivant`; }
   let nbMois = 13 - moisDebut;
   const montantBase = Math.round((montantAnnuel * nbMois / 12) * 100) / 100;
-  const bonusDemiMois = demiMois ? Math.round((montantAnnuel / 24) * 100) / 100 : 0;
-  const montantTotal = Math.round((montantBase + bonusDemiMois) * 100) / 100;
-  return { prorate: true, nbMois, demiMois, bonusDemiMois, montant: montantTotal, montantBase, detail: regle };
+  const ajustement =
+    demiMois && demiMoisMoins ? 0
+    : demiMois      ?  Math.round((montantAnnuel / 24) * 100) / 100
+    : demiMoisMoins ? -Math.round((montantAnnuel / 24) * 100) / 100
+    : 0;
+  const montantTotal = Math.round((montantBase + ajustement) * 100) / 100;
+  return { prorate: true, nbMois, demiMois, demiMoisMoins, ajustement, montant: montantTotal, montantBase, detail: regle };
 }
 
 export default function ModifierContrat() {
@@ -32,6 +36,7 @@ export default function ModifierContrat() {
   const [familles, setFamilles] = useState([]);
   const [prorata, setProrata] = useState(null);
   const [demiMois, setDemiMois] = useState(false);
+  const [demiMoisMoins, setDemiMoisMoins] = useState(false);
   const [form, setForm] = useState(null);
 
   useEffect(() => {
@@ -45,6 +50,7 @@ export default function ModifierContrat() {
       const c = contratRes.data;
       setClientSelectionne({ karlia_id: c.client_karlia_id, nom: c.client_nom, numero_client: c.client_numero });
       setDemiMois(c.prorate_demi_mois || false);
+      setDemiMoisMoins(c.prorate_demi_mois_moins || false);
       setForm({
         numero_contrat: c.numero_contrat || '',
         type_contrat: c.type_contrat || 'CONTRAT',
@@ -71,8 +77,8 @@ export default function ModifierContrat() {
 
   useEffect(() => {
     if (form?.date_debut && form?.montant_annuel_ht)
-      setProrata(calculerProrata(form.date_debut, parseFloat(form.montant_annuel_ht), demiMois));
-  }, [form?.date_debut, form?.montant_annuel_ht, demiMois]);
+      setProrata(calculerProrata(form.date_debut, parseFloat(form.montant_annuel_ht), demiMois, demiMoisMoins));
+  }, [form?.date_debut, form?.montant_annuel_ht, demiMois, demiMoisMoins]);
 
   const rechercherClients = async (q) => {
     if (q.length < 2) { setClientsResultats([]); return; }
@@ -107,6 +113,7 @@ export default function ModifierContrat() {
         montant_annuel_ht: parseFloat(form.montant_annuel_ht),
         indice_reference_id: form.indice_reference_id || null,
         prorate_demi_mois: demiMois,
+        prorate_demi_mois_moins: demiMoisMoins,
         articles: form.articles.filter(a => a.designation).map(a => ({
           ...a,
           prix_unitaire_ht: a.prix_unitaire_ht ? parseFloat(a.prix_unitaire_ht) : null,
@@ -209,8 +216,12 @@ export default function ModifierContrat() {
               <div className="text-sm text-orange-800">{prorata.detail}</div>
               <div className="text-orange-900"><span className="font-medium">{prorata.nbMois} mois</span> → <span className="font-bold text-lg">{prorata.montant?.toLocaleString('fr-FR', { minimumFractionDigits: 2 })} € HT</span></div>
               <label className="flex items-center gap-2 text-sm cursor-pointer bg-orange-100 rounded-lg px-3 py-2 border border-orange-300">
-                <input type="checkbox" checked={demiMois} onChange={e => setDemiMois(e.target.checked)} />
+                <input type="checkbox" checked={demiMois} onChange={e => { const v = e.target.checked; setDemiMois(v); if (v) setDemiMoisMoins(false); }} />
                 <span>Ajouter ½ mois (+{form.montant_annuel_ht ? (parseFloat(form.montant_annuel_ht)/24).toLocaleString('fr-FR', { minimumFractionDigits: 2 }) : '0'} €)</span>
+              </label>
+              <label className="flex items-center gap-2 text-sm cursor-pointer bg-orange-100 rounded-lg px-3 py-2 border border-orange-300">
+                <input type="checkbox" checked={demiMoisMoins} onChange={e => { const v = e.target.checked; setDemiMoisMoins(v); if (v) setDemiMois(false); }} />
+                <span>Retrancher ½ mois (−{form.montant_annuel_ht ? (parseFloat(form.montant_annuel_ht)/24).toLocaleString('fr-FR', { minimumFractionDigits: 2 }) : '0'} €)</span>
               </label>
               <label className="flex items-center gap-2 text-sm cursor-pointer">
                 <input type="checkbox" checked={form.prorate_validated} onChange={e => setForm(f => ({ ...f, prorate_validated: e.target.checked }))} />
