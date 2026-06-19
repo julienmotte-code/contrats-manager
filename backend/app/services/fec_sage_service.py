@@ -177,7 +177,7 @@ def convertir_fec_vers_sage(contenu_xlsx: bytes,
         b[1] = _to_ddmmyy(de)
         b[2] = _to_ddmmyy(cell(row, "PieceDate"))
         b[3] = str(cell(row, "EcritureNum")).strip()
-        b[4] = _sans_tiret_initial(cell(row, "PieceRef"))
+        b[4] = _sans_tiret_initial(cell(row, "PieceRef")).replace(" ", "")  # Sage refuse les espaces dans la reference
         b[6] = cmpt
         b[8] = aux
         b[10] = _sans_tiret_initial(cell(row, "EcritureLib"))[:LIBELLE_MAX]
