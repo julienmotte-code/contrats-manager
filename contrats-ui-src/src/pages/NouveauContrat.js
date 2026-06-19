@@ -2,22 +2,26 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import api, { contratsAPI, clientsAPI, produitsAPI, indicesAPI } from '../services/api';
 import toast from 'react-hot-toast';
-function calculerProrata(dateDebut, montantAnnuel, demiMois) {
+function calculerProrata(dateDebut, montantAnnuel, demiMois, demiMoisMoins) {
   if (!dateDebut || !montantAnnuel) return null;
   const d = new Date(dateDebut);
   const jour = d.getDate(); const mois = d.getMonth() + 1;
-  if (mois === 1 && jour === 1 && !demiMois) return { prorate: false, nbMois: 12, montant: montantAnnuel, detail: "Début au 1er janvier — année complète" };
+  if (mois === 1 && jour === 1 && !demiMois && !demiMoisMoins) return { prorate: false, nbMois: 12, montant: montantAnnuel, detail: "Début au 1er janvier — année complète" };
   // Calcul du nombre de mois facturés
   let moisDebut, regle;
   if (jour <= 15) { moisDebut = mois; regle = `Début le ${jour}/${mois} (≤15) : facturation dès ce mois`; }
   else { moisDebut = mois + 1; regle = `Début le ${jour}/${mois} (>15) : facturation dès le mois suivant`; }
   let nbMois = 13 - moisDebut; // mois restants dans l'année
   const montantBase = Math.round((montantAnnuel * nbMois / 12) * 100) / 100;
-  // Option demi-mois : ajouter 1/24ème du montant annuel
-  const bonusDemiMois = demiMois ? Math.round((montantAnnuel / 24) * 100) / 100 : 0;
-  const montantTotal = Math.round((montantBase + bonusDemiMois) * 100) / 100;
-  const detailDemi = demiMois ? ` + ½ mois (${bonusDemiMois} €)` : '';
-  return { prorate: true, nbMois, demiMois, bonusDemiMois, montant: montantTotal, montantBase, detail: regle + detailDemi };
+  // Option demi-mois : ajouter ou retrancher 1/24ème du montant annuel (exclusif)
+  const ajustement =
+    demiMois && demiMoisMoins ? 0
+    : demiMois      ?  Math.round((montantAnnuel / 24) * 100) / 100
+    : demiMoisMoins ? -Math.round((montantAnnuel / 24) * 100) / 100
+    : 0;
+  const montantTotal = Math.round((montantBase + ajustement) * 100) / 100;
+  const detailDemi = ajustement > 0 ? ` + ½ mois (${ajustement} €)` : ajustement < 0 ? ` − ½ mois (${Math.abs(ajustement)} €)` : '';
+  return { prorate: true, nbMois, demiMois, demiMoisMoins, ajustement, montant: montantTotal, montantBase, detail: regle + detailDemi };
 }
 function ArticleSearchInputNC({ art, produits, onSelect, onClear }) {
   const [recherche, setRecherche] = useState('');
@@ -87,6 +91,7 @@ export default function NouveauContrat() {
   const [familles, setFamilles] = useState([]);
   const [prorata, setProrata] = useState(null);
   const [demiMois, setDemiMois] = useState(false);
+  const [demiMoisMoins, setDemiMoisMoins] = useState(false);
   const [showNouveauClient, setShowNouveauClient] = useState(false);
   const [nouveauClient, setNouveauClient] = useState({ nom: '', email: '', telephone: '', adresse_ligne1: '', code_postal: '', ville: '', siret: '' });
   const [form, setForm] = useState({ numero_contrat: '', famille_contrat: 'COSOLUCE', date_debut: '', date_fin: '', montant_annuel_ht: '', indice_reference_id: '', prorate_validated: false, prorate_note: '', type_contrat: 'CONTRAT', articles: [{ rang: 0, article_karlia_id: '', designation: '', reference: '', prix_unitaire_ht: '', quantite: 1, taux_tva: 20 }] });
@@ -105,8 +110,8 @@ export default function NouveauContrat() {
     api.get('/api/indices/familles').then(r => setFamilles(r.data.data || []));
   }, []);
   useEffect(() => {
-    if (form.date_debut && form.montant_annuel_ht) setProrata(calculerProrata(form.date_debut, parseFloat(form.montant_annuel_ht), demiMois));
-  }, [form.date_debut, form.montant_annuel_ht, demiMois]);
+    if (form.date_debut && form.montant_annuel_ht) setProrata(calculerProrata(form.date_debut, parseFloat(form.montant_annuel_ht), demiMois, demiMoisMoins));
+  }, [form.date_debut, form.montant_annuel_ht, demiMois, demiMoisMoins]);
   const rechercherClients = async (q) => {
     if (q.length < 2) { setClientsResultats([]); return; }
     try { const r = await clientsAPI.recherche(q); setClientsResultats(r.data.data || []); } catch { setClientsResultats([]); }
@@ -197,7 +202,7 @@ export default function NouveauContrat() {
     setLoading(true);
     try {
       const r = await contratsAPI.creer({ ...form, client_karlia_id: clientSelectionne.karlia_id, client_nom: clientSelectionne.nom, client_numero: clientSelectionne.numero_client, montant_annuel_ht: parseFloat(form.montant_annuel_ht),
-        prorate_demi_mois: demiMois, indice_reference_id: form.indice_reference_id || null, karlia_opportunity_id: stateData.karlia_opportunity_id ?? null, articles: form.articles.filter(a => a.designation).map(a => ({ ...a, prix_unitaire_ht: a.prix_unitaire_ht ? parseFloat(a.prix_unitaire_ht) : null, quantite: parseFloat(a.quantite) })) });
+        prorate_demi_mois: demiMois, prorate_demi_mois_moins: demiMoisMoins, indice_reference_id: form.indice_reference_id || null, karlia_opportunity_id: stateData.karlia_opportunity_id ?? null, articles: form.articles.filter(a => a.designation).map(a => ({ ...a, prix_unitaire_ht: a.prix_unitaire_ht ? parseFloat(a.prix_unitaire_ht) : null, quantite: parseFloat(a.quantite) })) });
       toast.success('Contrat créé avec succès');
       navigate(`/contrats/${r.data.id}`);
     } catch (e) { toast.error(e.response?.data?.detail || 'Erreur lors de la création'); }
@@ -280,13 +285,18 @@ export default function NouveauContrat() {
               <div className="text-sm text-orange-800">{prorata.detail}</div>
               <div className="text-orange-900">
                 <span className="font-medium">{prorata.nbMois} mois facturés</span>
-                {prorata.demiMois && <span className="ml-1 text-orange-700"> + ½ mois ({prorata.bonusDemiMois?.toLocaleString('fr-FR', { minimumFractionDigits: 2 })} €)</span>}
+                {prorata.ajustement > 0 && <span className="ml-1 text-orange-700"> + ½ mois ({prorata.ajustement?.toLocaleString('fr-FR', { minimumFractionDigits: 2 })} €)</span>}
+                {prorata.ajustement < 0 && <span className="ml-1 text-orange-700"> − ½ mois ({Math.abs(prorata.ajustement)?.toLocaleString('fr-FR', { minimumFractionDigits: 2 })} €)</span>}
                 <span className="mx-2">→</span>
                 <span className="font-bold text-lg">{prorata.montant?.toLocaleString('fr-FR', { minimumFractionDigits: 2 })} € HT</span>
               </div>
               <label className="flex items-center gap-2 text-sm cursor-pointer bg-orange-100 rounded-lg px-3 py-2 border border-orange-300">
-                <input type="checkbox" checked={demiMois} onChange={e => setDemiMois(e.target.checked)} />
+                <input type="checkbox" checked={demiMois} onChange={e => { const v = e.target.checked; setDemiMois(v); if (v) setDemiMoisMoins(false); }} />
                 <span className="font-medium">Ajouter ½ mois supplémentaire (+{form.montant_annuel_ht ? (parseFloat(form.montant_annuel_ht)/24).toLocaleString('fr-FR', { minimumFractionDigits: 2 }) : '0'} €) — 1/24ème du montant annuel</span>
+              </label>
+              <label className="flex items-center gap-2 text-sm cursor-pointer bg-orange-100 rounded-lg px-3 py-2 border border-orange-300">
+                <input type="checkbox" checked={demiMoisMoins} onChange={e => { const v = e.target.checked; setDemiMoisMoins(v); if (v) setDemiMois(false); }} />
+                <span className="font-medium">Retrancher ½ mois (−{form.montant_annuel_ht ? (parseFloat(form.montant_annuel_ht)/24).toLocaleString('fr-FR', { minimumFractionDigits: 2 }) : '0'} €) — 1/24ème du montant annuel</span>
               </label>
               <label className="flex items-center gap-2 text-sm cursor-pointer"><input type="checkbox" checked={form.prorate_validated} onChange={e => setForm(f => ({ ...f, prorate_validated: e.target.checked }))} /><span>Je valide ce montant proratisé</span></label>
             </div>
@@ -295,8 +305,12 @@ export default function NouveauContrat() {
             <div className="space-y-2">
               <div className="bg-green-50 border border-green-200 rounded-lg px-4 py-2 text-sm text-green-800">✅ {prorata.detail}</div>
               <label className="flex items-center gap-2 text-sm cursor-pointer bg-orange-50 rounded-lg px-3 py-2 border border-orange-200">
-                <input type="checkbox" checked={demiMois} onChange={e => setDemiMois(e.target.checked)} />
+                <input type="checkbox" checked={demiMois} onChange={e => { const v = e.target.checked; setDemiMois(v); if (v) setDemiMoisMoins(false); }} />
                 <span>Ajouter ½ mois supplémentaire (+{form.montant_annuel_ht ? (parseFloat(form.montant_annuel_ht)/24).toLocaleString('fr-FR', { minimumFractionDigits: 2 }) : '0'} €) — 1/24ème du montant annuel</span>
+              </label>
+              <label className="flex items-center gap-2 text-sm cursor-pointer bg-orange-50 rounded-lg px-3 py-2 border border-orange-200">
+                <input type="checkbox" checked={demiMoisMoins} onChange={e => { const v = e.target.checked; setDemiMoisMoins(v); if (v) setDemiMois(false); }} />
+                <span>Retrancher ½ mois (−{form.montant_annuel_ht ? (parseFloat(form.montant_annuel_ht)/24).toLocaleString('fr-FR', { minimumFractionDigits: 2 }) : '0'} €) — 1/24ème du montant annuel</span>
               </label>
             </div>
           )}

@@ -115,6 +115,7 @@ class Contrat(Base):
     prorate_validated     = Column(Boolean, default=False)
     prorate_note          = Column(Text)
     prorate_demi_mois     = Column(Boolean, default=False)
+    prorate_demi_mois_moins = Column(Boolean, default=False)
     notes_internes        = Column(Text)
 
     # Famille de contrat (détermine la règle de révision)
