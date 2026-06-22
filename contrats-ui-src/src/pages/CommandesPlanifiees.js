@@ -7,14 +7,16 @@ import {
 } from '@mui/material';
 import {
   Search as SearchIcon, Visibility as ViewIcon, CheckCircle as DoneIcon,
-  PictureAsPdf as PdfIcon, EventAvailable as EventIcon
+  PictureAsPdf as PdfIcon, EventAvailable as EventIcon, Group as GroupIcon
 } from '@mui/icons-material';
+import { useNavigate } from 'react-router-dom';
 import { format, isPast, parseISO } from 'date-fns';
 import { fr } from 'date-fns/locale';
 import api from '../services/api';
 import { openPdfWithAuth } from '../services/pdfFetch';
 
 export default function CommandesPlanifiees() {
+  const navigate = useNavigate();
   const [commandes, setCommandes] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -118,6 +120,14 @@ export default function CommandesPlanifiees() {
 
   const handleDownloadPdf = (commande) => {
     openPdfWithAuth(`/api/commandes/${commande.id}/pdf`);
+  };
+
+  // Accès à l'écran d'affectation par prestation (même cible que
+  // CommandesAPlanifier). Une commande 'planifiee' reste affectable : le
+  // backend affecter-formateurs accepte a_planifier ET planifiee. C'est le
+  // point d'entrée qui manquait pour les commandes déjà planifiées.
+  const handleAllerAffectation = (commande) => {
+    navigate(`/commandes/${commande.id}/affectation`);
   };
 
   const formatDate = (dateStr) => {
@@ -227,6 +237,11 @@ export default function CommandesPlanifiees() {
                     <Tooltip title="Voir détail">
                       <IconButton size="small" onClick={() => openDetail(cmd)}>
                         <ViewIcon />
+                      </IconButton>
+                    </Tooltip>
+                    <Tooltip title="Affecter par prestation (répartition fine)">
+                      <IconButton size="small" color="primary" onClick={() => handleAllerAffectation(cmd)}>
+                        <GroupIcon />
                       </IconButton>
                     </Tooltip>
                     {cmd.pdf_disponible && (

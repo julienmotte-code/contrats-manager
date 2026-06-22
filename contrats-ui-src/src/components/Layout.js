@@ -35,6 +35,8 @@ const MENU_FORMATEUR = [
   { path: '/', label: 'Tableau de bord', icon: '🏠', droit: null },
   { type: 'separator', label: 'Mes activités' },
   { path: '/mes-prestations', label: 'Mes prestations', icon: '📋', droit: null },
+  { path: '/commandes/a-planifier', label: 'À planifier', icon: '📅', droit: null },
+  { path: '/commandes/planifiees', label: 'Planifiées', icon: '✅', droit: null },
 ];
 
 // Menu technicien : prestations + contrats techniques
@@ -42,6 +44,8 @@ const MENU_TECHNICIEN = [
   { path: '/', label: 'Tableau de bord', icon: '🏠', droit: null },
   { type: 'separator', label: 'Mes activités' },
   { path: '/mes-prestations', label: 'Mes prestations', icon: '📋', droit: null },
+  { path: '/commandes/a-planifier', label: 'À planifier', icon: '📅', droit: null },
+  { path: '/commandes/planifiees', label: 'Planifiées', icon: '✅', droit: null },
   { type: 'separator', label: 'Contrats' },
   { path: '/contrats', label: 'Contrats techniques', icon: '📄', droit: null },
 ];

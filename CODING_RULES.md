@@ -255,3 +255,55 @@ Côté backend, NE PAS étendre les `require_role` des routes POST/PUT/DELETE à
 
 ### Par ailleurs (lié, mais hors des 4 copies)
 Un rôle à **menu dédié** (comme DIRECTION) nécessite aussi une branche dans `contrats-ui-src/src/components/Layout.js` : une constante `MENU_<RÔLE>` + un aiguillage par rôle. Ce n'est pas une copie de la matrice de rôles, mais à ne pas oublier pour que le menu reflète le périmètre voulu.
+
+---
+
+## 14. ATTRIBUTION DES PRESTATIONS PAR FORMATEUR / TECHNICIEN (« owner-scoped »)
+
+Chantier *attribution owner-scoped* : un FORMATEUR ou un TECHNICIEN peut désormais
+s'attribuer/réattribuer des prestations depuis les écrans « À planifier » et
+« Planifiées », sans passer par un ADMIN/GESTIONNAIRE. Les deux rôles partagent le
+même modèle d'ownership (`current_user.formateur_id`).
+
+### 14.1 Visibilité — `GET /api/prestations?include_unassigned=true`
+Paramètre optionnel (défaut `False`). Il **n'élargit la visibilité** que si **toutes**
+ces conditions sont réunies :
+- `include_unassigned=true` **ET** `commande_id` fourni **ET** rôle ∈ {FORMATEUR, TECHNICIEN}
+  **ET** `current_user.formateur_id` non nul.
+
+Dans ce cas, la requête est **bornée à la commande** et renvoie : mes prestations
+(`formateur_id == moi` ou `agenda_formateur_id == moi`) **+** les prestations
+**non affectées** (`formateur_id IS NULL`) de cette commande. **Jamais** les
+prestations affectées à un autre intervenant. Hors de ces conditions (pas de
+`commande_id`, rôle ADMIN/GESTIO, etc.) le filtre `filter_prestations_for_user`
+standard s'applique → **aucune fuite** des NULL en liste globale.
+Raison d'être : sans ça, le filtre d'ownership masquerait les prestations NULL et
+le self-assign serait impossible depuis l'écran d'affectation.
+
+### 14.2 Attribution — `POST /api/commandes/{id}/affecter-formateurs`
+Route ouverte à `ADMIN, GESTIONNAIRE, FORMATEUR, TECHNICIEN`. Pour un rôle
+owner-scoped, la **validation d'ownership est faite par prestation**, AVANT tout
+side-effect :
+- prestation **non affectée** (NULL) → attribuable **uniquement à soi-même** ;
+- prestation **à soi** → réattribuable à un formateur actif **ou** libérable (NULL) ;
+- prestation **à un autre intervenant** → **403** ;
+- ligne no-op (valeur inchangée) → ignorée silencieusement (le front « envoie tout l'état »).
+ADMIN/GESTIONNAIRE : comportement **strictement inchangé** (applique tout le payload).
+Les raccourcis `from-commande` et `reattribuer-commande` restent **ADMIN/GESTIONNAIRE**.
+
+### 14.3 DETTE ASSUMÉE — visibilité financière des listes
+Pour donner aux rôles owner-scoped un point d'entrée vers l'écran d'affectation,
+**3 routes GET ont été ouvertes à FORMATEUR/TECHNICIEN SANS filtre** :
+`GET /api/commandes/a-planifier`, `GET /api/commandes/planifiees`,
+`GET /api/commandes/{id}`. → Ces rôles voient **toutes** ces commandes, **noms
+clients et montants inclus**. Choix **explicite et assumé** ; il **aggrave la fuite
+financière déjà notée HIGH**. À revisiter si un filtrage des listes par ownership
+(ex. ne montrer que les commandes ayant une prestation NULL ou m'appartenant)
+devient souhaitable.
+
+### 14.4 NOTE OUVERTE (à investiguer dans un chantier dédié)
+Une commande au statut `a_planifier` est *censée* contenir des prestations à
+planifier. Or **7 commandes** `a_planifier`/`planifiee` existent **sans aucune
+prestation** (lignes uniquement `contrat` / `facturation_directe` / `intitule`).
+Constaté **légitime** à ce stade (rien à éclater en prestation), mais à **confirmer
+formellement** ou à traiter comme anomalie de validation dans un chantier ultérieur.
