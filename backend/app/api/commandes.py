@@ -555,7 +555,7 @@ async def get_commandes_a_planifier(
     page_size: int = Query(20, ge=1, le=100),
     search: Optional[str] = None,
     db: Session = Depends(get_db),
-    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE")),
+    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE", "FORMATEUR", "TECHNICIEN")),
 ):
     """Liste des commandes à planifier."""
     return _get_commandes_by_statut(db, "a_planifier", page, page_size, search)
@@ -567,7 +567,7 @@ async def get_commandes_planifiees(
     page_size: int = Query(20, ge=1, le=100),
     search: Optional[str] = None,
     db: Session = Depends(get_db),
-    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE")),
+    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE", "FORMATEUR", "TECHNICIEN")),
 ):
     """Liste des commandes planifiées."""
     return _get_commandes_by_statut(db, "planifiee", page, page_size, search)
@@ -905,7 +905,7 @@ async def facturer_lignes(
 async def get_commande(
     commande_id: int,
     db: Session = Depends(get_db),
-    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE")),
+    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE", "FORMATEUR", "TECHNICIEN")),
 ):
     """Récupère les détails d'une commande."""
     commande = db.query(Commande).filter(Commande.id == commande_id).first()
@@ -1137,7 +1137,7 @@ async def affecter_formateurs(
     commande_id: int,
     payload: AffectationFormateursPayload,
     db: Session = Depends(get_db),
-    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE")),
+    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE", "FORMATEUR", "TECHNICIEN")),
 ):
     """
     Affecte un formateur PAR PRESTATION sur une commande.
@@ -1216,10 +1216,60 @@ async def affecter_formateurs(
                 ),
             )
 
+    # Périmètre d'ownership pour les rôles "owner-scoped" (FORMATEUR /
+    # TECHNICIEN, pilotés par le même current_user.formateur_id). ADMIN /
+    # GESTIONNAIRE conservent un comportement strictement inchangé : ils
+    # appliquent l'intégralité de payload.affectations.
+    is_owner_scoped = current_user.role in ("FORMATEUR", "TECHNICIEN")
+    if is_owner_scoped and not current_user.formateur_id:
+        raise HTTPException(
+            status_code=403,
+            detail="Aucun formateur_id associé à votre compte",
+        )
+
+    # Pour un rôle owner-scoped : on ne retient QUE les lignes qui changent
+    # réellement l'affectation ET qui respectent l'ownership. Les lignes
+    # inchangées (no-op) sont ignorées silencieusement (Option A tolérante :
+    # le front "envoie tout l'état" de l'écran).
+    if is_owner_scoped:
+        affectations_a_appliquer = []
+        for item in payload.affectations:
+            prestation = prestations_par_id.get(item.prestation_id)
+            if prestation is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Prestation {item.prestation_id} absente de cette commande",
+                )
+            actuelle = prestation.formateur_id
+            nouvelle = item.formateur_id
+            if nouvelle == actuelle:
+                continue  # no-op : on ne touche pas
+            # Changement réel → contrôle ownership
+            if actuelle is None:
+                # Prestation non affectée : self-assign UNIQUEMENT
+                if nouvelle != current_user.formateur_id:
+                    raise HTTPException(
+                        status_code=403,
+                        detail="Une prestation non affectée ne peut être attribuée qu'à vous-même",
+                    )
+            elif actuelle == current_user.formateur_id:
+                # SA prestation : réattribuer à un formateur actif (déjà validé
+                # via formateurs_actifs) ou libérer (None) → OK
+                pass
+            else:
+                # Prestation d'un autre intervenant → interdit
+                raise HTTPException(
+                    status_code=403,
+                    detail="Vous ne pouvez pas modifier une prestation affectée à un autre intervenant",
+                )
+            affectations_a_appliquer.append(item)
+    else:
+        affectations_a_appliquer = list(payload.affectations)
+
     # Application dans une seule transaction.
     try:
         avertissements: List[int] = []
-        for item in payload.affectations:
+        for item in affectations_a_appliquer:
             prestation = prestations_par_id[item.prestation_id]
             # Avertissement si la prestation est déjà engagée dans le flow
             # de planification (statut planifiee ou date posée). On applique

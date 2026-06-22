@@ -17,6 +17,7 @@ import { AdapterDateFns } from '@mui/x-date-pickers/AdapterDateFns';
 import { format, parseISO } from 'date-fns';
 import { fr } from 'date-fns/locale';
 import api from '../services/api';
+import { useAuth } from '../context/AuthContext';
 
 // Valeur sentinelle pour "non affecté" dans le Select MUI : un MenuItem ne peut
 // pas porter `value={null}` proprement (MUI traite null comme "rien de
@@ -46,6 +47,11 @@ const parseHeure = (h) => (h ? parseISO(`2000-01-01T${h}`) : null);
 export default function AffectationFormateurs() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const { user } = useAuth();
+  // FORMATEUR / TECHNICIEN : on demande au backend d'inclure aussi les
+  // prestations NON affectées de cette commande (include_unassigned), sinon
+  // le filtre de visibilité standard les masquerait → self-assign impossible.
+  const isOwnerScoped = user?.role === 'FORMATEUR' || user?.role === 'TECHNICIEN';
 
   const [commande, setCommande] = useState(null);
   const [prestations, setPrestations] = useState([]);
@@ -76,7 +82,14 @@ export default function AffectationFormateurs() {
     try {
       const [cmdRes, prestRes, formRes] = await Promise.all([
         api.get(`/api/commandes/${id}`),
-        api.get('/api/prestations', { params: { commande_id: id } }),
+        api.get('/api/prestations', {
+          params: {
+            commande_id: id,
+            // owner-scoped uniquement : ADMIN/GESTIO voient déjà tout, le param
+            // serait sans effet côté backend de toute façon.
+            ...(isOwnerScoped ? { include_unassigned: true } : {}),
+          },
+        }),
         api.get('/api/formateurs', { params: { actif_only: true } }),
       ]);
       setCommande(cmdRes.data);
@@ -124,7 +137,7 @@ export default function AffectationFormateurs() {
     } finally {
       setLoading(false);
     }
-  }, [id]);
+  }, [id, isOwnerScoped]);
 
   useEffect(() => { fetchAll(); }, [fetchAll]);
 

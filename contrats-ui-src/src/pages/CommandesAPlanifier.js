@@ -15,10 +15,16 @@ import { format } from 'date-fns';
 import { fr } from 'date-fns/locale';
 import api from '../services/api';
 import { openPdfWithAuth } from '../services/pdfFetch';
+import { useAuth } from '../context/AuthContext';
 
 export default function CommandesAPlanifier() {
   const navigate = useNavigate();
   const location = useLocation();
+  const { user } = useAuth();
+  // FORMATEUR / TECHNICIEN : périmètre self-attribution. Le raccourci "tout à
+  // un formateur" (from-commande / reattribuer-commande, réservé ADMIN/GESTIO)
+  // est masqué pour eux — sinon bouton mort en 403.
+  const isOwnerScoped = user?.role === 'FORMATEUR' || user?.role === 'TECHNICIEN';
 
   const [commandes, setCommandes] = useState([]);
   const [formateurs, setFormateurs] = useState([]);
@@ -289,11 +295,13 @@ export default function CommandesAPlanifier() {
                         <GroupIcon />
                       </IconButton>
                     </Tooltip>
-                    <Tooltip title="Tout attribuer à un formateur (raccourci)">
-                      <IconButton size="small" onClick={() => openAttribution(cmd)}>
-                        <AssignIcon />
-                      </IconButton>
-                    </Tooltip>
+                    {!isOwnerScoped && (
+                      <Tooltip title="Tout attribuer à un formateur (raccourci)">
+                        <IconButton size="small" onClick={() => openAttribution(cmd)}>
+                          <AssignIcon />
+                        </IconButton>
+                      </Tooltip>
+                    )}
                   </TableCell>
                 </TableRow>
               ))
