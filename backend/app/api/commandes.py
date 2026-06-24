@@ -1216,10 +1216,17 @@ async def affecter_formateurs(
                 ),
             )
 
-    # Périmètre d'ownership pour les rôles "owner-scoped" (FORMATEUR /
-    # TECHNICIEN, pilotés par le même current_user.formateur_id). ADMIN /
-    # GESTIONNAIRE conservent un comportement strictement inchangé : ils
-    # appliquent l'intégralité de payload.affectations.
+    # Écriture UNIFIÉE pour les 4 rôles autorisés (affectation libre, option B).
+    # FORMATEUR / TECHNICIEN appliquent désormais l'INTÉGRALITÉ de
+    # payload.affectations EXACTEMENT comme ADMIN / GESTIONNAIRE : toute
+    # prestation de la commande (non affectée OU attribuée à un autre
+    # intervenant) peut être réaffectée vers tout formateur actif, ou libérée
+    # (None). Les anciennes restrictions per-ligne owner-scoped (self-assign
+    # uniquement / interdit de toucher la prestation d'autrui) sont retirées.
+    #
+    # La garde "formateur_id requis" est conservée pour les rôles owner-scoped
+    # (sans effet en pratique — ces comptes en ont toujours un — mais on limite
+    # la surface de modification en la laissant en place).
     is_owner_scoped = current_user.role in ("FORMATEUR", "TECHNICIEN")
     if is_owner_scoped and not current_user.formateur_id:
         raise HTTPException(
@@ -1227,44 +1234,7 @@ async def affecter_formateurs(
             detail="Aucun formateur_id associé à votre compte",
         )
 
-    # Pour un rôle owner-scoped : on ne retient QUE les lignes qui changent
-    # réellement l'affectation ET qui respectent l'ownership. Les lignes
-    # inchangées (no-op) sont ignorées silencieusement (Option A tolérante :
-    # le front "envoie tout l'état" de l'écran).
-    if is_owner_scoped:
-        affectations_a_appliquer = []
-        for item in payload.affectations:
-            prestation = prestations_par_id.get(item.prestation_id)
-            if prestation is None:
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"Prestation {item.prestation_id} absente de cette commande",
-                )
-            actuelle = prestation.formateur_id
-            nouvelle = item.formateur_id
-            if nouvelle == actuelle:
-                continue  # no-op : on ne touche pas
-            # Changement réel → contrôle ownership
-            if actuelle is None:
-                # Prestation non affectée : self-assign UNIQUEMENT
-                if nouvelle != current_user.formateur_id:
-                    raise HTTPException(
-                        status_code=403,
-                        detail="Une prestation non affectée ne peut être attribuée qu'à vous-même",
-                    )
-            elif actuelle == current_user.formateur_id:
-                # SA prestation : réattribuer à un formateur actif (déjà validé
-                # via formateurs_actifs) ou libérer (None) → OK
-                pass
-            else:
-                # Prestation d'un autre intervenant → interdit
-                raise HTTPException(
-                    status_code=403,
-                    detail="Vous ne pouvez pas modifier une prestation affectée à un autre intervenant",
-                )
-            affectations_a_appliquer.append(item)
-    else:
-        affectations_a_appliquer = list(payload.affectations)
+    affectations_a_appliquer = list(payload.affectations)
 
     # Application dans une seule transaction.
     try:

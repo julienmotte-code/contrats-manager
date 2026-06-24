@@ -4,7 +4,6 @@ API de gestion des prestations.
 from typing import List, Optional
 from datetime import datetime, date, time
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import or_
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 
@@ -126,26 +125,25 @@ async def list_prestations(
 
     # Visibilité : par défaut, filtrage métier standard (ownership pour
     # FORMATEUR/TECHNICIEN, visibilité totale pour ADMIN/GESTIONNAIRE).
-    # Exception BORNÉE (include_unassigned) : un rôle owner-scoped consultant
-    # UNE commande précise peut voir EN PLUS les prestations NON affectées de
-    # CETTE commande (pour pouvoir se les attribuer via l'écran d'affectation).
-    # Jamais les prestations d'un autre intervenant ; jamais en liste globale
-    # (sans commande_id) → aucune fuite des NULL du système.
-    visibilite_elargie = (
+    #
+    # Exception PER-COMMANDE (affectation libre, option B) : un rôle
+    # owner-scoped (FORMATEUR/TECHNICIEN) consultant UNE commande précise, en
+    # demandant include_unassigned, voit TOUTES les prestations de CETTE
+    # commande — y compris non affectées OU attribuées à un autre intervenant.
+    # C'est le pendant lecture de l'affectation libre (cf. affecter_formateurs),
+    # qui autorise désormais ces rôles à réaffecter n'importe quelle prestation
+    # de la commande. Le périmètre reste STRICTEMENT borné à la commande
+    # ouverte : le listing global (commande_id absent) applique TOUJOURS
+    # filter_prestations_for_user aux owner-scoped → aucune fuite hors du
+    # contexte d'une commande consultée.
+    visibilite_commande_complete = (
         include_unassigned
         and commande_id is not None
         and current_user.role in ("FORMATEUR", "TECHNICIEN")
         and current_user.formateur_id is not None
     )
-    if visibilite_elargie:
+    if visibilite_commande_complete:
         query = query.filter(Prestation.commande_id == commande_id)
-        query = query.filter(
-            or_(
-                Prestation.formateur_id == current_user.formateur_id,
-                Prestation.agenda_formateur_id == current_user.formateur_id,
-                Prestation.formateur_id.is_(None),
-            )
-        )
     else:
         query = filter_prestations_for_user(query, current_user)
 
