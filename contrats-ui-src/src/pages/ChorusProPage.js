@@ -16,7 +16,8 @@ import {
   HourglassEmpty as PendingIcon,
   Info as InfoIcon,
   Edit as EditIcon,
-  Sync as SyncStatusIcon
+  Sync as SyncStatusIcon,
+  Block as BlockIcon
 } from '@mui/icons-material';
 import { format } from 'date-fns';
 import { fr } from 'date-fns/locale';
@@ -217,6 +218,27 @@ export default function ChorusProPage() {
         const next = new Set(prev);
         next.delete(facture.id);
         return next;
+      });
+    }
+  };
+
+  // Marque une facture client privé (non B2G) comme « hors Chorus » : le backend
+  // réutilise le statut TRANSMISE (aucune migration). Elle sort alors de la
+  // worklist NON_TRANSMISE et /transmettre la bloque déjà.
+  const marquerHorsChorus = async (facture) => {
+    if (!window.confirm('Marquer cette facture comme hors Chorus ? Elle ne sera pas transmise.')) {
+      return;
+    }
+    try {
+      await api.post(`/api/chorus/factures/${facture.id}/marquer-hors-chorus`);
+      setSnackbar({ open: true, message: 'Facture marquée hors Chorus', severity: 'success' });
+      chargerFactures();
+      chargerStats();
+    } catch (error) {
+      setSnackbar({
+        open: true,
+        message: error.response?.data?.detail || 'Erreur lors du marquage hors Chorus',
+        severity: 'error'
       });
     }
   };
@@ -512,6 +534,13 @@ export default function ChorusProPage() {
                           <Tooltip title="Modifier SIRET">
                             <IconButton size="small" onClick={() => ouvrirEditSiret(facture)}>
                               <EditIcon fontSize="small" />
+                            </IconButton>
+                          </Tooltip>
+                        )}
+                        {isTransmissible && (
+                          <Tooltip title="Marquer hors Chorus (client privé)">
+                            <IconButton size="small" onClick={() => marquerHorsChorus(facture)}>
+                              <BlockIcon fontSize="small" />
                             </IconButton>
                           </Tooltip>
                         )}

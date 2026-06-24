@@ -434,6 +434,51 @@ async def mettre_a_jour_siret(
     return {"message": "SIRET mis à jour", "siret": siret, "code_service": code_service}
 
 
+@router.post("/factures/{facture_id}/marquer-hors-chorus")
+async def marquer_hors_chorus(
+    facture_id: str,
+    db: Session = Depends(get_db),
+    current_user = Depends(require_role("ADMIN", "GESTIONNAIRE"))
+):
+    """Marque une facture comme « hors Chorus » (client privé, non B2G).
+
+    Réutilise le statut existant TRANSMISE (aucune migration, aucune modif de
+    ck_statut_chorus) : la facture sort de la worklist NON_TRANSMISE et
+    /transmettre la bloque déjà (garde TRANSMISE/ACCEPTEE). On trace l'action
+    dans TransmissionChorus (statut ANNULE) pour garder qui/quand à l'audit.
+    """
+    facture = db.query(FactureKarlia).filter(FactureKarlia.id == facture_id).first()
+    if not facture:
+        raise HTTPException(status_code=404, detail="Facture non trouvée")
+
+    if facture.statut_chorus not in ("NON_TRANSMISE", "ERREUR", "REJETEE"):
+        raise HTTPException(
+            status_code=400,
+            detail="Seule une facture non transmise peut être marquée hors Chorus"
+        )
+
+    # Trace d'audit : action manuelle, pas une vraie transmission Chorus.
+    transmission = TransmissionChorus(
+        facture_id=facture.id,
+        statut="ANNULE",
+        message_retour="HORS_CHORUS_MANUEL — client privé",
+        transmis_par=current_user.login,
+        transmis_at=datetime.now(),
+        is_test=False,
+    )
+    db.add(transmission)
+
+    facture.statut_chorus = "TRANSMISE"
+    facture.updated_at = datetime.now()
+    db.commit()
+
+    return {
+        "message": "Facture marquée hors Chorus",
+        "facture_id": str(facture.id),
+        "statut_chorus": "TRANSMISE",
+    }
+
+
 @router.post("/transmettre")
 async def transmettre_factures(
     request: TransmettreRequest,
