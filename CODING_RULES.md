@@ -307,3 +307,92 @@ planifier. Or **7 commandes** `a_planifier`/`planifiee` existent **sans aucune
 prestation** (lignes uniquement `contrat` / `facturation_directe` / `intitule`).
 Constaté **légitime** à ce stade (rien à éclater en prestation), mais à **confirmer
 formellement** ou à traiter comme anomalie de validation dans un chantier ultérieur.
+
+
+## 15. KARLIA — DÉTAIL FACTURE & MARGE (CA par type de prestation)
+
+### Le listing ne porte PAS les lignes
+`GET /documents?type=4` ne renvoie que des **en-têtes** de factures. Les lignes ne
+figurent **que dans le détail** `GET /documents/{id}`, sous la clé **`products_list`**.
+→ Pour toute analyse au niveau ligne (CA/marge par catégorie) : **fetch N+1**
+(un détail par facture), **délai 0,8 s** entre appels, et **snapshot persistant
+obligatoire** (table `karlia_ca_lignes`, alimentée par `ca_marges_service`). Ne jamais
+recalculer ça en live derrière une requête HTTP utilisateur.
+
+### Dimension « type de prestation » = `product_category`
+Résolue via `id_product` → article (`id_product_category` + libellé `product_category`).
+Axe métier propre (33 catégories stables avec id). `chart_of_account` (axe comptable)
+est plus bruité → secondaire. Index articles bâti en **une seule passe `/products`**
+(limit 1000), pas d'appel par id.
+
+### Axe de l'écran « CA par prestation » = `chart_of_account_code` (FAMILLES)
+Décision (chantier 2b) : l'écran agrège par **famille comptable** = `chart_of_account_code`
+(≈8 familles, **alignées sur l'Excel historique**), et **non** par `product_category`
+(33 = trop fin). Règles d'agrégation (`ca_marges_service.agreger_marges`) :
+- **Grouper par CODE**, jamais par libellé : les codes `70701900` et `70601000` portent
+  **plusieurs libellés** dans la donnée Karlia. Libellé de famille = override
+  `CANONICAL_LABELS` pour ces codes, sinon **libellé modal** (le plus fréquent) du code.
+- Code `NULL`/vide/**`"?"`** (marqueur Karlia « pas de compte ») → famille `(non rattaché)`
+  (≈0 € : lignes libres/remises).
+- Familles **pilotées par la donnée** (présentes pour l'exercice, variables : 7 en 2025,
+  8 en 2026…) — **jamais d'énumération figée**.
+- La réponse expose la clé **`familles`** (`{code, famille, ca_ht, cout, marge, taux_marge,
+  part_ca_pct, cout_disponible_pct}`), triée par `ca_ht` desc. `rafraichir_lignes` et le
+  bloc async ne changent pas : **seul le regroupement** diffère.
+
+### Coût ligne → marge
+- `total_cost` porté par la ligne si présent (>0) : **à privilégier** (`cout_source='ligne'`).
+- repli : `cost_without_tax` (sinon `weighted_average_cost`) de l'article × quantité
+  (`cout_source='article'`).
+- sinon coût indisponible (`cout_source='absent'`, `cout_disponible=False`) : prestations
+  internes SGI (formation, technique) sans coût d'achat → traitées en **marge 100 %**.
+  ~35 % du CA est dans ce cas : décision produit (laisser à 100 % vs saisir un coût
+  main-d'œuvre côté module).
+
+### `chart_of_account` présent à 100 % des lignes
+Filet de rattachement pour les lignes **sans `id_product`** (lignes libres/remises),
+qui sinon tombent en `(non catégorisé)` (`categorie_id=NULL`).
+
+### Réconciliation de cohérence
+`SUM(karlia_ca_lignes.montant_ht WHERE canceled<>'1')` par exercice doit être
+**proche** de `SUM(karlia_ca_factures.montant_ht WHERE canceled<>'1')`. Écarts
+résiduels possibles = remises/acomptes **au niveau document** (non répercutés ligne à
+ligne) ; ce n'est pas un bug du miroir lignes.
+
+### Recap marges FUSIONNÉ (Excel + prolongement Karlia) — borne 9002
+L'écran « récap marge brute » (familles × 12 mois) est servi par
+`recap_marges_service.get_recap_fusionne`, qui combine **deux sources sans recouvrement** :
+- **Excel** (`ca_recap_excel`) : factures **≤ 9002** (déjà importées) ;
+- **Karlia** (`karlia_ca_lignes`) : factures **`numero_int > 9002` STRICT**, marge ligne =
+  **`montant_ht − cout` (PV − PA)**, ventilée au mois via `date_facture`, regroupée par
+  `chart_of_account_code`.
+
+**`BORNE_RECAP_KARLIA = 9002`** est la **garde anti-doublon** : les lignes Karlia
+8903‑9002 sont **déjà dans l'Excel 2026**, on ne prolonge donc qu'au‑delà. Fusion **par
+code** (libellé canonique via `ca_marges_service.CANONICAL_LABELS` / `_famille_label`) :
+code déjà présent dans l'Excel → on **additionne** au mois ; code nouveau → **nouvelle
+ligne** famille. **Marge négative conservée** (vente à perte = donnée réelle, jamais
+plafonnée à 0). Bruit exclu : `title` contenant `TEST`, code vide/`'?'`/NULL.
+
+À partir de **2027** : plus d'Excel → le recap devient **Karlia seul** (tout est > 9002).
+Les marges de prestations **internes** (sans coût d'achat) restent **incomplètes** =
+choix assumé (marge théorique 100 %).
+
+### Refresh ASYNCHRONE obligatoire (timeout 524 Cloudflare)
+Le fetch détail N+1 dure **~72 s** (≈90 factures × 0,8 s). Derrière Cloudflare
+(**timeout 524 à 120 s**), un refresh **synchrone** est intenable → le rafraîchissement
+du miroir lignes se fait en **tâche de fond** :
+- `POST /api/ca/marges-par-prestation/rafraichir` lance un **thread daemon** (idempotent)
+  et répond **202** immédiatement ; `GET …/refresh-status` expose l'avancement
+  (`idle|en_cours|termine|erreur` + `traitees`/`total`) pour le **polling** front (3 s).
+- `GET /api/ca/marges-par-prestation` lit l'**agrégat cache** (instantané) et ne
+  **déclenche JAMAIS** de fetch synchrone : si le miroir est vide/périmé il **démarre le
+  refresh de fond** (fire-and-forget) et renvoie son état dans `refresh`.
+- Le thread crée sa **propre session** `SessionLocal()` (jamais celle d'une requête) ;
+  `rafraichir_lignes` accumule en mémoire et ne fait `DELETE`+`bulk_insert` **qu'à la fin**
+  (fenêtre table-vide minimale).
+
+**Limitation MONO-PROCESS** : le state vit en mémoire du worker (`_refresh_state` +
+`threading.Lock`), même nature que `synchro_state` dans `main.py`. Valable car uvicorn
+tourne **1 worker**. Pour GCP/multi-worker, **à redessiner en state DB** (sinon le polling
+peut taper un worker qui ignore la tâche d'un autre).

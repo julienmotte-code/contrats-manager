@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime, date
 from sqlalchemy import (
     Column, String, Integer, SmallInteger, Numeric, Boolean, Date, DateTime, Time,
-    Text, LargeBinary, ForeignKey, CheckConstraint, UniqueConstraint, JSON, text
+    Text, LargeBinary, ForeignKey, CheckConstraint, UniqueConstraint, Index, JSON, text
 )
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship
@@ -659,3 +659,73 @@ class KarliaCaFactures(Base):
     client_nom = Column(String, nullable=True)
     id_opportunity = Column(String, nullable=True)
     refreshed_at = Column(DateTime, nullable=False, server_default=func.now())
+
+
+class KarliaCaLignes(Base):
+    """Miroir niveau LIGNE des ventes Karlia, pour l'analyse CA & marge par type de
+    prestation. Complement de KarliaCaFactures (qui n'agrege qu'au niveau facture).
+
+    Alimente par fetch detail documents/{id} (cle products_list, absente du listing).
+    Snapshot complet (DELETE + bulk insert), cf. app.services.ca_marges_service.
+    Types alignes sur KarliaCaFactures (canceled/exercice/montant_ht/numero_int).
+    `source` anticipe un futur import Excel (valeurs autres que 'karlia')."""
+    __tablename__ = "karlia_ca_lignes"
+
+    id = Column(Integer, primary_key=True, index=True)
+    source = Column(String, nullable=False, server_default=text("'karlia'"), index=True)
+    karlia_document_id = Column(String, nullable=True, index=True)
+    numero = Column(String, nullable=True)
+    numero_int = Column(Integer, nullable=True, index=True)
+    date_facture = Column(Date, nullable=True)
+    exercice = Column(Integer, nullable=True, index=True)
+    canceled = Column(Boolean, nullable=False, server_default=text("false"))
+    id_product = Column(String, nullable=True)
+    categorie_id = Column(Integer, nullable=True, index=True)
+    categorie_nom = Column(String, nullable=True)
+    chart_of_account_code = Column(String, nullable=True)
+    chart_of_account_label = Column(String, nullable=True)
+    title = Column(String, nullable=True)
+    quantity = Column(Numeric(15, 4), nullable=True)
+    montant_ht = Column(Numeric(15, 2), nullable=False, server_default=text("0"))
+    cout = Column(Numeric(15, 2), nullable=True)
+    cout_source = Column(String, nullable=True)          # 'ligne' | 'article' | 'absent'
+    cout_disponible = Column(Boolean, nullable=False, server_default=text("false"))
+    refreshed_at = Column(DateTime, nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        Index("ix_karlia_ca_lignes_exercice_categorie", "exercice", "categorie_id"),
+    )
+
+
+class CaRecapExcel(Base):
+    """Recapitulatif de marge brute importe des Excel historiques (onglet 'recapitulatif'
+    de "CALCUL MARGE BRUTE <annee>.xlsx"). Une ligne = une famille pour une annee :
+    12 mois (m01..m12) + total. Reproduit le tableau TEL QUEL, sans recalcul metier.
+
+    Cle metier = (annee, ordre) et NON (annee, code) : un meme code_compte peut porter
+    deux familles distinctes la meme annee (ex. 70701900 marchandises ET logiciels en
+    2025) -> on conserve l'ordre des lignes du recap, jamais de fusion sur le code."""
+    __tablename__ = "ca_recap_excel"
+
+    id = Column(Integer, primary_key=True, index=True)
+    annee = Column(Integer, nullable=False, index=True)
+    ordre = Column(Integer, nullable=False, server_default=text("0"))
+    code_compte = Column(String(20), nullable=True)
+    famille_libelle = Column(String(255), nullable=False)
+    m01 = Column(Numeric(14, 2), nullable=True)
+    m02 = Column(Numeric(14, 2), nullable=True)
+    m03 = Column(Numeric(14, 2), nullable=True)
+    m04 = Column(Numeric(14, 2), nullable=True)
+    m05 = Column(Numeric(14, 2), nullable=True)
+    m06 = Column(Numeric(14, 2), nullable=True)
+    m07 = Column(Numeric(14, 2), nullable=True)
+    m08 = Column(Numeric(14, 2), nullable=True)
+    m09 = Column(Numeric(14, 2), nullable=True)
+    m10 = Column(Numeric(14, 2), nullable=True)
+    m11 = Column(Numeric(14, 2), nullable=True)
+    m12 = Column(Numeric(14, 2), nullable=True)
+    total_ht = Column(Numeric(14, 2), nullable=False, server_default=text("0"))
+
+    __table_args__ = (
+        Index("ix_ca_recap_excel_annee_ordre", "annee", "ordre"),
+    )
