@@ -48,6 +48,11 @@ export const caAPI = {
   comparatif: (params) => api.get('/api/ca/comparatif', { params }),
   comparatifRefresh: (params) => api.get('/api/ca/comparatif-refresh', { params }),
   rafraichirKarlia: () => api.post('/api/ca/rafraichir-karlia'),
+  margesParPrestation: (exercice) => api.get('/api/ca/marges-par-prestation', { params: { exercice } }),
+  margesParPrestationRafraichir: (exercice) => api.post('/api/ca/marges-par-prestation/rafraichir', null, { params: { exercice } }),
+  recurrentParFamille: (annee) => api.get('/api/ca/recurrent-par-famille', { params: { annee } }),
+  recapExcelAnnees: () => api.get('/api/ca/recap-excel/annees'),
+  recapExcel: (annee) => api.get('/api/ca/recap-excel', { params: { annee } }),
 };
 export const facturesFournisseursAPI = {
   facturables: (params) => api.get('/api/factures-fournisseurs/facturables', { params }),

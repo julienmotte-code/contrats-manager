@@ -24,6 +24,7 @@ const MENU_COMPLET = [
   { type: 'separator', label: 'Comptabilite' },
   { path: '/comptabilite/transfert-sage', label: 'Transfert Sage', icon: '🔁', droit: null, allowedRoles: ['ADMIN', 'GESTIONNAIRE'] },
   { path: '/chiffre-affaires', label: "Chiffre d'affaires", icon: '📊', droit: null, allowedRoles: ['ADMIN', 'GESTIONNAIRE'] },
+  { path: '/ca-detaille', label: 'CA détaillé', icon: '📋', droit: null, allowedRoles: ['ADMIN', 'GESTIONNAIRE'] },
   { type: 'separator', label: 'Administration' },
   { path: '/parametres', label: 'Paramètres', icon: '⚙️', droit: 'parametres' },
   { path: '/formateurs', label: 'Formateurs', icon: '👨‍🏫', droit: 'utilisateurs' },
@@ -58,6 +59,7 @@ const MENU_DIRECTION = [
   { path: '/renouvellements', label: 'Renouvellements', icon: '🔄', droit: null },
   { path: '/clients', label: 'Clients', icon: '🏢', droit: null },
   { path: '/chiffre-affaires', label: "Chiffre d'affaires", icon: '📊', droit: null },
+  { path: '/ca-detaille', label: 'CA détaillé', icon: '📋', droit: null },
 ];
 
 export default function Layout({ children }) {
